@@ -30,8 +30,10 @@ if uploaded_files:
                     {
                         "type": "text",
                         "text": """
-                        你是一个数据提取工具。请直接分析图片，提取所有旅游团信息，并【仅输出】一个合法的 JSON 数组（以 [ 开头，以 ] 结尾）。绝对不要输出任何思考过程、不要写 <think> 标签、不要写任何多余的解释文字。
-                        格式严格如下：
+                        请仔细分析图片中的所有旅游团宣传信息。
+                        【绝对重要规则】：你必须直接输出一个合法的 JSON 数组，严禁输出任何 <think> 标签，严禁输出任何思考过程，严禁输出任何多余的解释或前后缀说明文字，首尾必须是 [ 和 ]。
+                        
+                        格式严格参考：
                         [
                           {
                             "destination": "海南岛",
@@ -82,11 +84,13 @@ if uploaded_files:
                 res_json = response.json()
                 response_text = res_json['choices'][0]['message']['content'].strip()
                 
-                # 强力清理：如果含有 <think> 标签，直接把它和里面的内容全部切掉
-                if "<think>" in response_text and "</think>" in response_text:
+                # 双重清洗：剥离任何可能残留的思考标签
+                if "</think>" in response_text:
                     response_text = response_text.split("</think>")[-1].strip()
                 
-                # 提取 JSON 数组部分
+                response_text = re.sub(r'<think>.*?</think>', '', response_text, flags=re.DOTALL).strip()
+                
+                # 提取纯 JSON 数组
                 json_match = re.search(r'(\[.*\])', response_text, re.DOTALL)
                 if json_match:
                     clean_json_str = json_match.group(1)
