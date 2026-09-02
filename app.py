@@ -64,7 +64,7 @@ def analyze_single_image(file):
         ],
         "temperature": 0.0,
         "max_tokens": 4096,
-        "reasoning_effort": "none"  # 彻底关闭思考模型，不输出多余废话
+        "reasoning_effort": "none"
     }
     
     response = requests.post(url, headers=headers, data=json.dumps(payload))
@@ -92,8 +92,6 @@ def analyze_single_image(file):
     return items
 
 def generate_image_long(df):
-    """使用 Matplotlib 动态生成一张支持中文的高清长图清单 (PNG)"""
-    # 查找可用中文字体
     chinese_fonts = [f.name for f in fm.fontManager.ttflist if any(kw in f.name.lower() for kw in ['cjk', 'hei', 'song', 'sans', 'droid', 'sim'])]
     font_family = chinese_fonts[0] if chinese_fonts else 'sans-serif'
     
@@ -104,20 +102,18 @@ def generate_image_long(df):
     ax.set_facecolor('#f8fafc')
     ax.axis('off')
     
-    # 绘制头部
     ax.text(0.5, 0.98, "✈️ 旅游团筛选清单", fontsize=18, weight='bold', ha='center', va='top', color='#0f172a', fontfamily=font_family)
     ax.text(0.5, 0.94, f"共筛选出 {len(df)} 个旅游团行程", fontsize=11, ha='center', va='top', color='#64748b', fontfamily=font_family)
     
     y_start = 0.88
     step = 0.86 / row_count
     
-    for i, (_, row in df.reset_index().iterrows()):
+    # 修复了这里的语法错误
+    for i, row in df.reset_index().iterrows():
         y_pos = y_start - i * step
-        # 卡片背景
         rect = plt.Rectangle((0.02, y_pos - step * 0.9), 0.96, step * 0.85, facecolor='white', edgecolor='#e2e8f0', linewidth=1.2, transform=ax.transAxes, zorder=1)
         ax.add_patch(rect)
         
-        # 卡片内容
         dest = str(row.get('destination', ''))
         code = str(row.get('tour_code', ''))
         price = str(row.get('price_text', ''))
@@ -252,7 +248,6 @@ if st.session_state.travel_data:
         (filtered_df['price_numeric'] <= price_range[1])
     ]
     
-    # 导出专区
     st.markdown("### 📥 导出筛选结果")
     col1, col2, col3 = st.columns(3)
     
