@@ -80,23 +80,61 @@ def compress_image(uploaded_file, max_size=650, quality=55):
     img.save(buffer, format="JPEG", quality=quality)
     return base64.b64encode(buffer.getvalue()).decode("utf-8")
 
+def extract_partial_items(content):
+    """强化容错：从任意断裂、未闭合或残缺的文本中抽取出所有旅游团对象"""
+    items = []
+    # 匹配每一个独立的 JSON object
+    blocks = re.findall(r'\{[^{}]*\}', content)
+    for b in blocks:
+        try:
+            it = json.loads(b)
+            # 只要包含目的地或团号任意一个，即为有效卡片
+            if "destination" in it or "tour_code" in it or "title" in it:
+                dest = str(it.get("destination", "精选目的地")).strip()
+                code = str(it.get("tour_code", "")).strip()
+                title = str(it.get("title", f"{dest}游")).strip()
+                loc = str(it.get("departure_location", "详见海报")).strip()
+                dates = str(it.get("departure_dates", "见海报")).strip()
+                
+                # 价格抽取与转换
+                p_raw = it.get("price_numeric", 0)
+                try:
+                    p_val = int(re.sub(r'[^\d]', '', str(p_raw)))
+                except Exception:
+                    p_val = 0
+                
+                p_text = str(it.get("price_text", f"RM {p_val}" if p_val > 0 else "详见海报")).strip()
+                
+                items.append({
+                    "destination": dest if dest else "精选目的地",
+                    "tour_code": code,
+                    "title": title,
+                    "departure_location": loc if loc else "详见海报",
+                    "departure_dates": dates,
+                    "price_numeric": p_val,
+                    "price_text": p_text
+                })
+        except Exception:
+            continue
+    return items
+
 def analyze_single_image(file_bytes, file_name, task_dict):
     encoded_string = compress_image(BytesIO(file_bytes))
     
     prompt = """
-    分析图片，提取所有旅游团项目，返回合法的 JSON 数组，绝不要返回任何多余文字。
-    格式必须完全如下：
+    分析图片，提取所有旅游团项目，返回 JSON 数组：
     [
       {
         "destination": "目的地（如：武汉、青岛、内蒙古、岘港、沙坝、北京、桂林、九寨沟、江西、云南、厦门、韩国、海南）",
         "departure_location": "起飞城市（如：吉隆坡出发、槟城出发、新山出发、新加坡出发）",
         "tour_code": "SP开头的团号（如 SP002740）",
         "title": "行程名称或路线描述",
-        "departure_dates": "海报中的出发日期",
+        "departure_dates": "出发日期",
         "price_numeric": 3199,
         "price_text": "RM 3199"
       }
     ]
+    注意：只输出合法的 JSON 数组，不要任何多余解释。
     """
 
     url = "https://api.groq.com/openai/v1/chat/completions"
@@ -123,46 +161,77 @@ def analyze_single_image(file_bytes, file_name, task_dict):
     last_error = ""
     for attempt in range(4):
         try:
-            # 延长单次网络超时时间至 180 秒，避免长文本生成被强行掐断
             response = requests.post(url, headers=headers, data=json.dumps(payload), timeout=180)
         except requests.exceptions.Timeout:
-            last_error = "网络连接超时 (超过180秒)"
+            last_error = "请求超时(180s)，可能当前并发较高"
             time.sleep(3)
             continue
         except Exception as e:
-            last_error = f"网络连接异常: {str(e)}"
+            last_error = f"网络异常: {str(e)}"
             time.sleep(3)
             continue
             
         if response.status_code == 200:
             content = response.json()['choices'][0]['message']['content'].strip()
             
-            # 清除思考和代码框残留
             if "</think>" in content:
                 content = content.split("</think>")[-1].strip()
             content = re.sub(r'```(?:json)?', '', content).strip()
             
+            # 1. 尝试直接整段 JSON 数组解析
             json_match = re.search(r'\[\s*\{.*\}\s*\]', content, re.DOTALL)
             if json_match:
                 try:
-                    return json.loads(json_match.group(0))
+                    parsed = json.loads(json_match.group(0))
+                    if isinstance(parsed, list) and len(parsed) > 0:
+                        # 规整字段
+                        std_list = []
+                        for it in parsed:
+                            p_val = it.get("price_numeric", 0)
+                            try:
+                                p_val = int(re.sub(r'[^\d]', '', str(p_val)))
+                            except Exception:
+                                p_val = 0
+                            std_list.append({
+                                "destination": str(it.get("destination", "精选目的地")).strip(),
+                                "tour_code": str(it.get("tour_code", "")).strip(),
+                                "title": str(it.get("title", "")).strip(),
+                                "departure_location": str(it.get("departure_location", "详见海报")).strip(),
+                                "departure_dates": str(it.get("departure_dates", "见海报")).strip(),
+                                "price_numeric": p_val,
+                                "price_text": str(it.get("price_text", f"RM {p_val}")).strip()
+                            })
+                        return std_list
                 except Exception:
                     pass
-                    
-            items = []
-            for b in re.findall(r'\{[^{}]*\}', content):
-                try:
-                    item = json.loads(b)
-                    if "destination" in item and "tour_code" in item:
-                        items.append(item)
-                except Exception:
-                    continue
-            if items:
-                return items
-            last_error = f"返回内容无法解析为JSON (片段: {content[:100]})"
+            
+            # 2. 如果整段解析失败（常见于末尾被截断），使用容错抽取器抢救每一个独立的团对象
+            rescued_items = extract_partial_items(content)
+            if rescued_items:
+                return rescued_items
+                
+            # 3. 如果以上还是空，尝试用正则兜底抽取文字行
+            fallback_items = []
+            for line in content.split('\n'):
+                sp = re.search(r'(SP\d{4,7})', line)
+                if sp:
+                    p = re.search(r'RM\s*(\d+)', line)
+                    p_val = int(p.group(1)) if p else 0
+                    fallback_items.append({
+                        "destination": "精选目的地",
+                        "tour_code": sp.group(1),
+                        "title": line.strip("- *#"),
+                        "departure_location": "详见海报",
+                        "departure_dates": "见海报",
+                        "price_numeric": p_val,
+                        "price_text": f"RM {p_val}" if p_val > 0 else "详见海报"
+                    })
+            if fallback_items:
+                return fallback_items
+                
+            last_error = f"未能识别出旅游团格式，AI 返回片段：{content[:120]}"
             
         elif response.status_code == 429:
-            # 读取官方限制时间并友好倒计时
             wait_seconds = 25
             match = re.search(r'try again in ([\d\.]+)s', response.text)
             if match:
@@ -173,10 +242,10 @@ def analyze_single_image(file_bytes, file_name, task_dict):
                 time.sleep(1)
             continue
         else:
-            last_error = f"API 报错 ({response.status_code}): {response.text[:200]}"
+            last_error = f"API 返回错误码 {response.status_code}: {response.text[:150]}"
             time.sleep(3)
             
-    raise Exception(last_error if last_error else "多次尝试仍未能获取有效结果")
+    raise Exception(last_error if last_error else "多次尝试仍未能获取有效数据")
 
 def background_worker(files_data, task_dict):
     total = len(files_data)
@@ -192,8 +261,9 @@ def background_worker(files_data, task_dict):
             task_dict["errors"].append(f"{f_name}: {str(err)}")
             
         task_dict["progress"] = (idx + 1) / total
+        # 多图之间增加 3 秒间隔，平滑 Token 消耗曲线
         if idx + 1 < total:
-            time.sleep(2.0)
+            time.sleep(3.0)
             
     task_dict["running"] = False
     task_dict["finished"] = True
@@ -284,176 +354,4 @@ def create_html_report(df):
             .card-header {{
                 display: flex;
                 justify-content: space-between;
-                align-items: center;
-                border-bottom: 1px solid #e2e8f0;
-                padding-bottom: 8px;
-                margin-bottom: 8px;
-            }}
-            .dest {{ font-size: 17px; font-weight: bold; color: #1e293b; }}
-            .price {{ font-size: 18px; font-weight: bold; color: #e11d48; }}
-            .card-body {{ font-size: 13.5px; line-height: 1.6; }}
-            .meta-row {{ display: flex; justify-content: space-between; margin-bottom: 4px; }}
-            .badge {{ color: #0284c7; font-weight: 600; }}
-            .dates {{ color: #334155; margin-bottom: 4px; }}
-            .route {{ color: #475569; }}
-            @media print {{
-                .toolbar {{ display: none; }}
-                body {{ background: #fff; padding: 0; }}
-                #capture-area {{ box-shadow: none; padding: 0; }}
-            }}
-        </style>
-    </head>
-    <body>
-        <div class="toolbar">
-            <button class="btn btn-img" onclick="saveAsImage()">🖼️ 保存为手机长图</button>
-            <button class="btn btn-pdf" onclick="window.print()">📄 另存为 PDF 文件</button>
-        </div>
-        <div id="capture-area">
-            <div class="main-title">✈️ 旅游团筛选清单</div>
-            <div class="sub-title">共筛选出 {len(df)} 个精选行程</div>
-            {cards_html}
-        </div>
-        <script>
-            function saveAsImage() {{
-                const target = document.getElementById('capture-area');
-                html2canvas(target, {{ scale: 2, useCORS: true }}).then(canvas => {{
-                    const link = document.createElement('a');
-                    link.download = '旅游团清单长图.png';
-                    link.href = canvas.toDataURL('image/png');
-                    link.click();
-                }});
-            }}
-        </script>
-    </body>
-    </html>
-    """
-
-uploaded_files = st.file_uploader(
-    "批量上传宣传图 (支持 JPG/PNG，可多选)", 
-    type=["jpg", "jpeg", "png"],
-    accept_multiple_files=True
-)
-
-task = st.session_state.task_state
-
-if uploaded_files:
-    st.success(f"已选择 {len(uploaded_files)} 张图片")
-    
-    if not task["running"]:
-        if st.button("🚀 开始后台批量分析", type="primary"):
-            task["running"] = True
-            task["finished"] = False
-            task["notified"] = False
-            task["progress"] = 0.0
-            task["results"] = []
-            task["errors"] = []
-            task["status_msg"] = "正在启动独立工作线程..."
-            
-            files_data = [(f.name, f.getvalue()) for f in uploaded_files]
-            t = threading.Thread(target=background_worker, args=(files_data, task), daemon=True)
-            t.start()
-            st.rerun()
-
-# 轮询刷新：后台持续跑，前台不丢失状态
-if task["running"]:
-    st.info(task["status_msg"])
-    st.progress(task["progress"])
-    st.caption("💡 任务已在服务器独立后台运行中，可锁屏或切出手机，完成后会自动发送提醒。")
-    time.sleep(2)
-    st.rerun()
-
-elif task["finished"]:
-    if not task["notified"]:
-        trigger_notification()
-        task["notified"] = True
-
-    if task["results"]:
-        st.success(f"🎉 提取完成！共准确获取到 {len(task['results'])} 条旅游团信息！")
-    if task["errors"]:
-        for e in task["errors"]:
-            st.warning(f"⚠️ {e}")
-
-# 结果展示与筛选面板
-if task["results"]:
-    st.markdown("---")
-    df = pd.DataFrame(task["results"])
-    
-    if 'destination' in df.columns:
-        df['destination'] = df['destination'].astype(str).str.strip()
-    if 'departure_location' in df.columns:
-        df['departure_location'] = df['departure_location'].astype(str).str.strip()
-    if 'price_numeric' in df.columns:
-        df['price_numeric'] = pd.to_numeric(df['price_numeric'], errors='coerce').fillna(0).astype(int)
-        
-    st.header("🔍 旅游团智能筛选面板")
-    
-    st.sidebar.header("🎛️ 筛选条件")
-    dest_list = ["全部"] + sorted([d for d in df['destination'].unique() if d and d != "nan"])
-    selected_dest = st.sidebar.selectbox("选择目的地", dest_list)
-    
-    raw_locs = sorted([l for l in df['departure_location'].unique() if l and l != "nan"])
-    loc_list = ["全部", "🇲🇾 全马来西亚出发 (包含吉隆坡/新山/槟城)"] + raw_locs
-    selected_loc = st.sidebar.selectbox("选择起飞地点", loc_list)
-    
-    min_val = int(df['price_numeric'].min()) if not df.empty else 0
-    max_val = int(df['price_numeric'].max()) if not df.empty else 10000
-    if min_val >= max_val:
-        max_val = min_val + 1000
-    price_range = st.sidebar.slider("价格预算范围 (RM)", min_val, max_val, (min_val, max_val))
-    
-    filtered_df = df.copy()
-    if selected_dest != "全部":
-        filtered_df = filtered_df[filtered_df['destination'] == selected_dest]
-        
-    if selected_loc == "🇲🇾 全马来西亚出发 (包含吉隆坡/新山/槟城)":
-        malaysia_keywords = ["吉隆坡", "新山", "JB", "槟城", "柔佛", "KUL", "PEN", "JHB", "马来西亚"]
-        filtered_df = filtered_df[filtered_df['departure_location'].apply(
-            lambda loc: any(kw in loc for kw in malaysia_keywords)
-        )]
-    elif selected_loc != "全部":
-        filtered_df = filtered_df[filtered_df['departure_location'] == selected_loc]
-        
-    filtered_df = filtered_df[
-        (filtered_df['price_numeric'] >= price_range[0]) & 
-        (filtered_df['price_numeric'] <= price_range[1])
-    ]
-    
-    st.markdown("### 📥 导出筛选结果")
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        html_report = create_html_report(filtered_df)
-        st.download_button(
-            label="📄 下载长图 / PDF 报告文件 (HTML)",
-            data=html_report,
-            file_name="旅游团筛选清单.html",
-            mime="text/html",
-            type="primary"
-        )
-        
-    with col2:
-        csv_bytes = filtered_df.to_csv(index=False).encode('utf-8-sig')
-        st.download_button(
-            label="📊 下载 Excel / CSV 表格",
-            data=csv_bytes,
-            file_name="旅游团清单.csv",
-            mime="text/csv"
-        )
-        
-    st.markdown(f"### 符合条件的旅游团共 **{len(filtered_df)}** 个：")
-    
-    display_cols = [c for c in ['destination', 'tour_code', 'departure_location', 'departure_dates', 'price_text', 'title'] if c in filtered_df.columns]
-    st.dataframe(filtered_df[display_cols], use_container_width=True)
-    
-    for _, row in filtered_df.iterrows():
-        with st.container(border=True):
-            c1, c2, c3 = st.columns([3, 2, 2])
-            with c1:
-                st.markdown(f"### 📍 **{row.get('destination', '未知')}**")
-                st.write(f"**路线：** {row.get('title', '无')}")
-                st.write(f"**团号：** `{row.get('tour_code', '无')}`")
-            with c2:
-                st.markdown(f"🛫 **出发地：** `{row.get('departure_location', '详见海报')}`")
-                st.write(f"📅 **出发日期：** {row.get('departure_dates', '见海报')}")
-            with c3:
-                st.markdown(f"### 💰 **{row.get('price_text', '无')}**")
+                align-items
