@@ -17,7 +17,7 @@ st.markdown("批量上传宣传单，精准提取目的地、起飞地点（吉�
 
 GROQ_API_KEY = "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"
 
-def compress_image(uploaded_file, max_size=900, quality=70):
+def compress_image(uploaded_file, max_size=800, quality=65):
     img = Image.open(uploaded_file)
     if img.mode in ("RGBA", "P"):
         img = img.convert("RGB")
@@ -26,7 +26,7 @@ def compress_image(uploaded_file, max_size=900, quality=70):
     img.save(buffer, format="JPEG", quality=quality)
     return base64.b64encode(buffer.getvalue()).decode("utf-8")
 
-def analyze_single_image(file):
+def analyze_single_image(file, status_placeholder):
     encoded_string = compress_image(file)
     
     prompt = """
@@ -67,29 +67,42 @@ def analyze_single_image(file):
         "reasoning_effort": "none"
     }
     
-    response = requests.post(url, headers=headers, data=json.dumps(payload))
-    if response.status_code != 200:
-        raise Exception(f"API 请求失败: {response.text}")
-    
-    content = response.json()['choices'][0]['message']['content'].strip()
-    
-    json_match = re.search(r'\[\s*\{.*\}\s*\]', content, re.DOTALL)
-    if json_match:
-        try:
-            return json.loads(json_match.group(0))
-        except Exception:
-            pass
+    # 自动重试机制：遇 429 自动等待倒计时
+    for attempt in range(3):
+        response = requests.post(url, headers=headers, data=json.dumps(payload))
+        
+        if response.status_code == 200:
+            content = response.json()['choices'][0]['message']['content'].strip()
+            json_match = re.search(r'\[\s*\{.*\}\s*\]', content, re.DOTALL)
+            if json_match:
+                try:
+                    return json.loads(json_match.group(0))
+                except Exception:
+                    pass
+            items = []
+            for b in re.findall(r'\{[^{}]*\}', content):
+                try:
+                    item = json.loads(b)
+                    if "destination" in item and "tour_code" in item:
+                        items.append(item)
+                except Exception:
+                    continue
+            return items
             
-    items = []
-    blocks = re.findall(r'\{[^{}]*\}', content)
-    for b in blocks:
-        try:
-            item = json.loads(b)
-            if "destination" in item and "tour_code" in item:
-                items.append(item)
-        except Exception:
+        elif response.status_code == 429:
+            wait_seconds = 35
+            match = re.search(r'try again in ([\d\.]+)s', response.text)
+            if match:
+                wait_seconds = int(float(match.group(1))) + 2
+            
+            for remaining in range(wait_seconds, 0, -1):
+                status_placeholder.warning(f"⏳ 正在遵循 Groq 免费限流策略，等待 {remaining} 秒后自动解析第 {file.name} ...")
+                time.sleep(1)
             continue
-    return items
+        else:
+            raise Exception(f"API 请求失败 ({response.status_code}): {response.text}")
+            
+    raise Exception("速率限制等待超时，请稍后重试。")
 
 def generate_image_long(df):
     chinese_fonts = [f.name for f in fm.fontManager.ttflist if any(kw in f.name.lower() for kw in ['cjk', 'hei', 'song', 'sans', 'droid', 'sim'])]
@@ -108,7 +121,6 @@ def generate_image_long(df):
     y_start = 0.88
     step = 0.86 / row_count
     
-    # 修复了这里的语法错误
     for i, row in df.reset_index().iterrows():
         y_pos = y_start - i * step
         rect = plt.Rectangle((0.02, y_pos - step * 0.9), 0.96, step * 0.85, facecolor='white', edgecolor='#e2e8f0', linewidth=1.2, transform=ax.transAxes, zorder=1)
@@ -186,30 +198,33 @@ if uploaded_files:
     st.success(f"已选择 {len(uploaded_files)} 张图片")
     if st.button("🚀 开始让 AI 批量分析图片", type="primary"):
         all_results = []
+        errors = []
         progress_bar = st.progress(0)
         status_text = st.empty()
         
         for idx, file in enumerate(uploaded_files):
-            status_text.text(f"正在极速提取第 {idx + 1}/{len(uploaded_files)} 张: {file.name} ...")
+            status_text.info(f"正在精准提取第 {idx + 1}/{len(uploaded_files)} 张: {file.name} ...")
             try:
-                data = analyze_single_image(file)
+                data = analyze_single_image(file, status_text)
                 if data:
                     all_results.extend(data)
             except Exception as err:
-                st.warning(f"{file.name} 提示: {str(err)}")
+                errors.append(f"{file.name} 提示: {str(err)}")
             
             progress_bar.progress((idx + 1) / len(uploaded_files))
-            if idx + 1 < len(uploaded_files):
-                time.sleep(1.5)
                 
         status_text.empty()
         progress_bar.empty()
+        
+        if errors:
+            for e in errors:
+                st.warning(e)
         
         if all_results:
             st.session_state.travel_data = all_results
             st.success(f"🎉 提取完成！共准确获取到 {len(all_results)} 条旅游团信息！")
         else:
-            st.error("未能提取出有效旅游团数据，请检查网络后重试。")
+            st.error("未能提取出有效旅游团数据，请重试。")
 
 if st.session_state.travel_data:
     st.markdown("---")
