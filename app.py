@@ -30,7 +30,8 @@ if uploaded_files:
                     {
                         "type": "text",
                         "text": """
-                        分析这几张旅游宣传单图片。请提取所有图片中出现的所有旅游团信息，并【必须】以合法的 JSON 数组格式返回。例如：
+                        你是一个数据提取工具。请直接分析图片，提取所有旅游团信息，并【仅输出】一个合法的 JSON 数组（以 [ 开头，以 ] 结尾）。绝对不要输出任何思考过程、不要写 <think> 标签、不要写任何多余的解释文字。
+                        格式严格如下：
                         [
                           {
                             "destination": "海南岛",
@@ -42,7 +43,6 @@ if uploaded_files:
                             "price_text": "RM 1599 起"
                           }
                         ]
-                        注意：只需输出 JSON 列表，不要包含任何多余的解释或 markdown 符号。
                         """
                     }
                 ]
@@ -70,7 +70,8 @@ if uploaded_files:
                             "content": messages_content
                         }
                     ],
-                    "temperature": 0.1
+                    "temperature": 0.0,
+                    "max_tokens": 4096
                 }
 
                 response = requests.post(url, headers=headers, data=json.dumps(payload))
@@ -81,14 +82,18 @@ if uploaded_files:
                 res_json = response.json()
                 response_text = res_json['choices'][0]['message']['content'].strip()
                 
-                # 智能清洗：自动提取大括号或中括号包裹的 JSON 内容
-                json_match = re.search(r'(\[.*\]|\{.*\})', response_text, re.DOTALL)
+                # 强力清理：如果含有 <think> 标签，直接把它和里面的内容全部切掉
+                if "<think>" in response_text and "</think>" in response_text:
+                    response_text = response_text.split("</think>")[-1].strip()
+                
+                # 提取 JSON 数组部分
+                json_match = re.search(r'(\[.*\])', response_text, re.DOTALL)
                 if json_match:
                     clean_json_str = json_match.group(1)
                     st.session_state.travel_data = json.loads(clean_json_str)
                     st.success("🎉 批量分析完成！")
                 else:
-                    raise Exception(f"未能从 AI 回复中解析出有效 JSON，原始内容为: {response_text}")
+                    raise Exception(f"未能从 AI 回复中提取出 JSON 数组，原始内容为: {response_text}")
                 
             except Exception as e:
                 st.error(f"解析过程中出现错误: {e}")
