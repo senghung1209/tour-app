@@ -1,9 +1,8 @@
-import os
 import streamlit as st
 import pandas as pd
 import json
-from google import genai
-from google.genai import types
+import requests
+import base64
 
 st.set_page_config(page_title="AI 旅游团智能筛选助手", page_icon="✈️", layout="wide")
 
@@ -27,17 +26,11 @@ if uploaded_files:
     if st.button("🚀 开始让 AI 批量分析图片", type="primary"):
         with st.spinner("AI 正在努力批量识别图片中的文字、价格和起飞地点，请稍候..."):
             try:
-                # 显式传入 api_key 初始化客户端
-                client = genai.Client(api_key=API_KEY)
+                # 构造多模态请求体
+                contents_parts = []
                 
-                image_parts = []
-                for file in uploaded_files:
-                    image_parts.append(
-                        types.Part.from_bytes(data=file.getvalue(), mime_type=file.type)
-                    )
-
-                prompt = """
-                分析这几张旅游宣传单图片。请提取所有图片中出现的所有旅游团信息，并【必须】把它们合并成一个合法的 JSON 列表（List of Dicts）返回，不要包含任何 markdown 标记以外的多余文字：
+                prompt_text = """
+                分析这几张旅游宣传单图片。请提取所有图片中出现的所有旅游团信息，并【必须】把它们合并成一个合法的 JSON 列表返回，不要包含任何 markdown 标记之外的多余文字：
                 [
                   {
                     "destination": "目的地，例如：海南岛、哈尔滨、上海、大连、广州澳门、重庆、张家界、北疆、南疆",
@@ -50,13 +43,31 @@ if uploaded_files:
                   }
                 ]
                 """
-
-                response = client.models.generate_content(
-                    model='gemini-2.5-flash',
-                    contents=[prompt, *image_parts]
-                )
+                contents_parts.append({"text": prompt_text})
                 
-                response_text = response.text.strip()
+                for file in uploaded_files:
+                    encoded_string = base64.b64encode(file.getvalue()).decode('utf-8')
+                    contents_parts.append({
+                        "inline_data": {
+                            "mime_type": file.type,
+                            "data": encoded_string
+                        }
+                    })
+
+                url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={API_KEY}"
+                payload = {
+                    "contents": [{"parts": contents_parts}]
+                }
+                headers = {'Content-Type': 'application/json'}
+
+                response = requests.post(url, headers=headers, data=json.dumps(payload))
+                
+                if response.status_code != 200:
+                    raise Exception(f"API 请求失败: {response.text}")
+                
+                res_json = response.json()
+                response_text = res_json['candidates'][0]['content']['parts'][0]['text'].strip()
+                
                 if response_text.startswith("```json"):
                     response_text = response_text[7:-3].strip()
                 elif response_text.startswith("```"):
