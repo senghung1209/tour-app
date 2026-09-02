@@ -70,12 +70,10 @@ def analyze_single_image(file, status_placeholder):
         if response.status_code == 200:
             content = response.json()['choices'][0]['message']['content'].strip()
             
-            # 清理可能存在的思考标签或 markdown
             if "</think>" in content:
                 content = content.split("</think>")[-1].strip()
             content = re.sub(r'```(?:json)?', '', content).strip()
             
-            # 1. 尝试直接整段 JSON 数组匹配
             json_match = re.search(r'\[\s*\{.*\}\s*\]', content, re.DOTALL)
             if json_match:
                 try:
@@ -83,7 +81,6 @@ def analyze_single_image(file, status_placeholder):
                 except Exception:
                     pass
             
-            # 2. 尝试单个 JSON 块汇总
             items = []
             for b in re.findall(r'\{[^{}]*\}', content):
                 try:
@@ -98,7 +95,6 @@ def analyze_single_image(file, status_placeholder):
             raise Exception(f"模型未返回合规数据，返回内容片段：{content[:200]}")
             
         elif response.status_code == 429:
-            # 遭遇官方 8000 TPM 限流，读取等待时间
             wait_seconds = 20
             match = re.search(r'try again in ([\d\.]+)s', response.text)
             if match:
@@ -270,5 +266,54 @@ if uploaded_files:
                 errors.append(f"{file.name}: {str(err)}")
             
             progress_bar.progress((idx + 1) / len(uploaded_files))
-            # 正常无 429 时，仅需微小缓冲 1.5 秒
             if idx + 1 < len(uploaded_files):
+                time.sleep(1.5)
+                
+        status_text.empty()
+        progress_bar.empty()
+        cost_time = round(time.time() - start_time, 1)
+        
+        if errors:
+            for e in errors:
+                st.warning(f"⚠️ 解析提示: {e}")
+        
+        if all_results:
+            st.session_state.travel_data = all_results
+            st.success(f"🎉 批量分析完成！耗时 {cost_time} 秒，共提取出 {len(all_results)} 条旅游团信息！")
+        elif not errors:
+            st.error("未能提取出有效旅游团数据，请确认海报清晰度。")
+
+if st.session_state.travel_data:
+    st.markdown("---")
+    df = pd.DataFrame(st.session_state.travel_data)
+    
+    if 'destination' in df.columns:
+        df['destination'] = df['destination'].astype(str).str.strip()
+    if 'departure_location' in df.columns:
+        df['departure_location'] = df['departure_location'].astype(str).str.strip()
+    if 'price_numeric' in df.columns:
+        df['price_numeric'] = pd.to_numeric(df['price_numeric'], errors='coerce').fillna(0).astype(int)
+        
+    st.header("🔍 旅游团智能筛选面板")
+    
+    st.sidebar.header("🎛️ 筛选条件")
+    dest_list = ["全部"] + sorted([d for d in df['destination'].unique() if d and d != "nan"])
+    selected_dest = st.sidebar.selectbox("选择目的地", dest_list)
+    
+    raw_locs = sorted([l for l in df['departure_location'].unique() if l and l != "nan"])
+    loc_list = ["全部", "🇲🇾 全马来西亚出发 (包含吉隆坡/新山/槟城)"] + raw_locs
+    selected_loc = st.sidebar.selectbox("选择起飞地点", loc_list)
+    
+    min_val = int(df['price_numeric'].min()) if not df.empty else 0
+    max_val = int(df['price_numeric'].max()) if not df.empty else 10000
+    if min_val >= max_val:
+        max_val = min_val + 1000
+    price_range = st.sidebar.slider("价格预算范围 (RM)", min_val, max_val, (min_val, max_val))
+    
+    filtered_df = df.copy()
+    if selected_dest != "全部":
+        filtered_df = filtered_df[filtered_df['destination'] == selected_dest]
+        
+    if selected_loc == "🇲🇾 全马来西亚出发 (包含吉隆坡/新山/槟城)":
+        malaysia_keywords = ["吉隆坡", "新山", "JB", "槟城", "柔佛", "KUL", "PEN", "JHB", "马来西亚"]
+        filtered_df = filtered_df[filtered_df['departure_location'].
