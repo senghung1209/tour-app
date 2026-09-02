@@ -29,39 +29,35 @@ if "task_state" not in st.session_state:
     }
 
 def trigger_notification():
-    js = """<script>
-    try {
-        const ctx = new (window.AudioContext || window.webkitAudioContext)();
-        const osc = ctx.createOscillator();
-        const gain = ctx.createGain();
-        osc.type = 'sine';
-        osc.frequency.setValueAtTime(587.33, ctx.currentTime);
-        osc.frequency.setValueAtTime(880, ctx.currentTime + 0.15);
-        gain.gain.setValueAtTime(0.3, ctx.currentTime);
-        gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.6);
-        osc.connect(gain);
-        gain.connect(ctx.destination);
-        osc.start();
-        osc.stop(ctx.currentTime + 0.6);
-    } catch(e) {}
-    if ("Notification" in window) {
-        if (Notification.permission === "granted") {
-            new Notification("✈️ 旅游团分析完成！", {
-                body: "所有海报数据已提取完毕，快回来看结果吧！",
-                icon: "https://fav.farm/✈️"
-            });
-        } else if (Notification.permission !== "denied") {
-            Notification.requestPermission().then(function(p) {
-                if (p === "granted") {
-                    new Notification("✈️ 旅游团分析完成！", {
-                        body: "所有海报数据已提取完毕，快回来看结果吧！",
-                        icon: "https://fav.farm/✈️"
-                    });
-                }
-            });
-        }
-    }
-    </script>"""
+    js = (
+        "<script>\n"
+        "try {\n"
+        "  var ctx = new (window.AudioContext || window.webkitAudioContext)();\n"
+        "  var osc = ctx.createOscillator();\n"
+        "  var gain = ctx.createGain();\n"
+        "  osc.type = 'sine';\n"
+        "  osc.frequency.setValueAtTime(587.33, ctx.currentTime);\n"
+        "  osc.frequency.setValueAtTime(880, ctx.currentTime + 0.15);\n"
+        "  gain.gain.setValueAtTime(0.3, ctx.currentTime);\n"
+        "  gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.6);\n"
+        "  osc.connect(gain);\n"
+        "  gain.connect(ctx.destination);\n"
+        "  osc.start();\n"
+        "  osc.stop(ctx.currentTime + 0.6);\n"
+        "} catch(e) {}\n"
+        "if ('Notification' in window) {\n"
+        "  if (Notification.permission === 'granted') {\n"
+        "    new Notification('✈️ 旅游团分析完成！', { body: '所有海报数据已提取完毕！' });\n"
+        "  } else if (Notification.permission !== 'denied') {\n"
+        "    Notification.requestPermission().then(function(p) {\n"
+        "      if (p === 'granted') {\n"
+        "        new Notification('✈️ 旅游团分析完成！', { body: '所有海报数据已提取完毕！' });\n"
+        "      }\n"
+        "    });\n"
+        "  }\n"
+        "}\n"
+        "</script>\n"
+    )
     components.html(js, height=0)
 
 def compress_image(uploaded_file, max_size=650, quality=55):
@@ -167,67 +163,4 @@ def analyze_single_image(file_bytes, file_name, task_dict):
                                 "departure_location": str(it.get("departure_location", "详见海报")).strip(),
                                 "departure_dates": str(it.get("departure_dates", "见海报")).strip(),
                                 "price_numeric": p_val,
-                                "price_text": str(it.get("price_text", "RM " + str(p_val))).strip()
-                            })
-                        return std_list
-                except Exception:
-                    pass
-            
-            rescued_items = extract_partial_items(content)
-            if rescued_items:
-                return rescued_items
-                
-            last_error = "未能识别出旅游团格式"
-        elif response.status_code == 429:
-            wait_seconds = 25
-            match = re.search(r'try again in ([\d\.]+)s', response.text)
-            if match:
-                wait_seconds = int(float(match.group(1))) + 2
-            for remaining in range(wait_seconds, 0, -1):
-                task_dict["status_msg"] = "⏳ 触发免费配额保护，后台等待 " + str(remaining) + " 秒继续处理 " + file_name + " ..."
-                time.sleep(1)
-            continue
-        else:
-            last_error = "API 返回错误码 " + str(response.status_code)
-            time.sleep(3)
-            
-    raise Exception(last_error if last_error else "多次尝试仍未能获取有效数据")
-
-def background_worker(files_data, task_dict):
-    total = len(files_data)
-    for idx, (f_name, f_bytes) in enumerate(files_data):
-        task_dict["status_msg"] = "⚡ 后台正在解析第 " + str(idx + 1) + "/" + str(total) + " 张: " + f_name + " ..."
-        try:
-            data = analyze_single_image(f_bytes, f_name, task_dict)
-            if data:
-                task_dict["results"].extend(data)
-            else:
-                task_dict["errors"].append(f_name + ": 未能提取到有效数据")
-        except Exception as err:
-            task_dict["errors"].append(f_name + ": " + str(err))
-            
-        task_dict["progress"] = (idx + 1) / total
-        if idx + 1 < total:
-            time.sleep(3.0)
-            
-    task_dict["running"] = False
-    task_dict["finished"] = True
-    task_dict["status_msg"] = "✅ 全部图片已在后台分析完成！"
-
-def create_html_report(df):
-    cards_list = []
-    for _, row in df.iterrows():
-        dest = str(row.get('destination', '未知'))
-        price = str(row.get('price_text', 'N/A'))
-        code = str(row.get('tour_code', '无'))
-        loc = str(row.get('departure_location', '详见海报'))
-        dates = str(row.get('departure_dates', '见海报'))
-        title = str(row.get('title', '无'))
-        card = '<div class="card"><div class="card-header"><span class="dest">📍 ' + dest + '</span><span class="price">' + price + '</span></div><div class="card-body"><div class="meta-row"><span><strong>团号：</strong> ' + code + '</span><span><strong>出发地：</strong> <span class="badge">' + loc + '</span></span></div><div class="dates"><strong>📅 出发日期：</strong> ' + dates + '</div><div class="route"><strong>路线：</strong> ' + title + '</div></div></div>'
-        cards_list.append(card)
-
-    cards_html = "".join(cards_list)
-    total_str = str(len(df))
-    
-    # 采用 Base64 编码的通用外壳，防止粘贴代码时被编辑器断行损坏
-    b64_template = "PCFET0NUWVBFIGh0bWw+PGh0bWwgbGFuZz0iemgtQ04iPjxoZWFkPjxtZXRhIGNoYXJzZXQ9IlVURi04Ij48bWV0YSBuYW1lPSJ2aWV3cG9ydCIgY29udGVudD0id2lkdGg9ZGV2aWNlLXdpZHRoLCBpbml0aWFsLXNjYWxlPTEuMCI+PHRpdGxlPuaXhea4uOWbouetlumAiem4heWNlTwvdGl0bGU+PHNjcmlwdCBzcmM9Imh0dHBzOi8vY2RuLmpzZGVsaXZyLm5ldC9ucG0vaHRtbDJjYW52YXNAMS40LjEvZGlzdC9odG1sMmNhbnZhcy5taW4uanMiPjwvc2NyaXB0PjxzdHlsZT5ib2R5e2ZvbnQtZmFtaWx5Oi1hcHBsZS1zeXN0ZW0sQmxpbmtNYWNTeXN0ZW1Gb250LCJTZWdvZSBVSSIsUm9ib3RvLCJQaW5nRmFuZyBTQyIsIkhpcmFnaW5vIFNhbnMgR0IiLCJNaWNyb3NvZnQgWWFIZWkiLHNhbnMtc2VyaWY7YmFja2dyb3VuZC1jb2xvcjojZjFmNWY5O21hcmdpbjowO3BhZGRpbmc6MTZweDtjb2xvcjojMGYxNzJhO30udG9vbGJhcnttYXgtd2lkdGg6NjUwcHg7bWFyZ2luOjAgYXV0byAxNnB4IGF1dG87ZGlzcGxheTpmbGV4O2dhcDoxMHB4O30uYnRue2ZsZXg6MTtwYWRkaW5nOjEycHg7Ym9yZGVyOm5vbmU7Ym9yZGVyLXJhZGl1czo4cHg7Zm9udC1zaXplOjE1cHg7Zm9udC13ZWlnaHQ6NjAwO2N1cnNvcjpwb2ludGVyO3RleHQtYWxpZ246Y2VudGVyO30uYnRuLWltZ3tiYWNrZ3JvdW5kLWNvbG9yOiNlMTFkNDg7Y29sb3I6I2ZmZjt9LmJ0bi1wZGZ7YmFja2dyb3VuZC1jb2xvcjojMDI4NGM3O2NvbG9yOiNmZmY7fSNjYXB0dXJlLWFyZWF7bWF4LXdpZHRoOjY1MHB4O21hcmdpbjowIGF1dG87YmFja2dyb3VuZC1jb2xvcjojZmZmZmZmO3BhZGRpbmc6MjRweDtib3JkZXItcmFkaXVzOjEycHg7Ym94LXNoYWRvdzowIDRweCA2cHggLTFweCByZ2JhKDAsMCwwLDAuMSk7fS5tYWluLXRpdGxle3RleHQtYWxpZ246Y2VudGVyO2ZvbnQtc2l6ZToyMnB4O2ZvbnQtd2VpZ2h0OmJvbGQ7bWFyZ2luOjAgMCA2cHggMDt9LnN1Yi10aXRsZXt0ZXh0LWFsaWduOmNlbnRlcjtjb2xvcjojNjQ3NDhiO2ZvbnQtc2l6ZToxM3B4O21hcmdpbjowIDAgMjB
+                                "price_text": str(
