@@ -30,10 +30,8 @@ if uploaded_files:
                     {
                         "type": "text",
                         "text": """
-                        请仔细分析图片中的所有旅游团宣传信息。
-                        【绝对重要规则】：你必须直接输出一个合法的 JSON 数组，严禁输出任何 <think> 标签，严禁输出任何思考过程，严禁输出任何多余的解释或前后缀说明文字，首尾必须是 [ 和 ]。
-                        
-                        格式严格参考：
+                        请提取图片中的所有旅游团信息，并以 JSON 数组格式返回。
+                        格式示例：
                         [
                           {
                             "destination": "海南岛",
@@ -72,8 +70,7 @@ if uploaded_files:
                             "content": messages_content
                         }
                     ],
-                    "temperature": 0.0,
-                    "max_tokens": 4096
+                    "temperature": 0.0
                 }
 
                 response = requests.post(url, headers=headers, data=json.dumps(payload))
@@ -84,20 +81,21 @@ if uploaded_files:
                 res_json = response.json()
                 response_text = res_json['choices'][0]['message']['content'].strip()
                 
-                # 双重清洗：剥离任何可能残留的思考标签
+                # 【强力核心修改】：如果包含闭合的 </think>，直接只取它后面的内容！
                 if "</think>" in response_text:
                     response_text = response_text.split("</think>")[-1].strip()
                 
+                # 如果没有闭合标签但有 <think>，直接把 <think> 到内容结束全部过滤或者用正则抠出中括号
                 response_text = re.sub(r'<think>.*?</think>', '', response_text, flags=re.DOTALL).strip()
                 
-                # 提取纯 JSON 数组
-                json_match = re.search(r'(\[.*\])', response_text, re.DOTALL)
+                # 终极保险：不管前面有什么杂七杂八的文本，直接用正则把第一个 '[' 到最后一个 ']' 之间的内容精确抓出来
+                json_match = re.search(r'\[\s*\{.*\}\s*\]', response_text, re.DOTALL)
                 if json_match:
-                    clean_json_str = json_match.group(1)
+                    clean_json_str = json_match.group(0)
                     st.session_state.travel_data = json.loads(clean_json_str)
                     st.success("🎉 批量分析完成！")
                 else:
-                    raise Exception(f"未能从 AI 回复中提取出 JSON 数组，原始内容为: {response_text}")
+                    raise Exception(f"清洗后未找到 JSON 数组，原始内容段：{response_text[:300]}...")
                 
             except Exception as e:
                 st.error(f"解析过程中出现错误: {e}")
