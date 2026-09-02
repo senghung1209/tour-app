@@ -5,6 +5,7 @@ import requests
 import base64
 import time
 import re
+import os
 from io import BytesIO
 from PIL import Image
 import matplotlib.pyplot as plt
@@ -17,7 +18,28 @@ st.markdown("批量上传宣传单，精准提取目的地、起飞地点（吉�
 
 GROQ_API_KEY = "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"
 
-def compress_image(uploaded_file, max_size=800, quality=65):
+FONT_PATH = "simhei.ttf"
+
+@st.cache_resource
+def load_chinese_font():
+    """下载并加载开源思源中文字体，防止 Linux 服务器字体缺失导致方块字"""
+    if not os.path.exists(FONT_PATH):
+        font_url = "https://raw.githubusercontent.com/googlefonts/noto-cjk/main/Sans/OTF/SimplifiedChinese/NotoSansSC-Regular.otf"
+        try:
+            r = requests.get(font_url, timeout=15)
+            if r.status_code == 200:
+                with open(FONT_PATH, "wb") as f:
+                    f.write(r.content)
+        except Exception:
+            pass
+    if os.path.exists(FONT_PATH):
+        fm.fontManager.addfont(FONT_PATH)
+        return fm.FontProperties(fname=FONT_PATH)
+    return fm.FontProperties(family='sans-serif')
+
+chinese_font_prop = load_chinese_font()
+
+def compress_image(uploaded_file, max_size=650, quality=55):
     img = Image.open(uploaded_file)
     if img.mode in ("RGBA", "P"):
         img = img.convert("RGB")
@@ -28,14 +50,13 @@ def compress_image(uploaded_file, max_size=800, quality=65):
 
 def analyze_single_image(file, status_placeholder):
     encoded_string = compress_image(file)
-    
     prompt = """
     分析图片，提取所有旅游团项目，返回合法的 JSON 数组，绝不要返回任何多余文字。
     格式必须完全如下：
     [
       {
         "destination": "目的地（如：武汉、青岛、内蒙古、岘港、沙坝、北京、桂林、九寨沟、江西、云南、厦门、韩国、海南）",
-        "departure_location": "每个团右下角或价格旁标注的起飞城市（如：吉隆坡出发、槟城出发、新山出发、新加坡出发）",
+        "departure_location": "起飞城市（如：吉隆坡出发、槟城出发、新山出发、新加坡出发）",
         "tour_code": "SP开头的团号（如 SP002740）",
         "title": "行程名称或路线描述",
         "departure_dates": "海报中的出发日期",
@@ -50,7 +71,6 @@ def analyze_single_image(file, status_placeholder):
         "Authorization": f"Bearer {GROQ_API_KEY}",
         "Content-Type": "application/json"
     }
-    
     payload = {
         "model": "qwen/qwen3.6-27b",
         "messages": [
@@ -67,10 +87,8 @@ def analyze_single_image(file, status_placeholder):
         "reasoning_effort": "none"
     }
     
-    # 自动重试机制：遇 429 自动等待倒计时
     for attempt in range(3):
         response = requests.post(url, headers=headers, data=json.dumps(payload))
-        
         if response.status_code == 200:
             content = response.json()['choices'][0]['message']['content'].strip()
             json_match = re.search(r'\[\s*\{.*\}\s*\]', content, re.DOTALL)
@@ -90,33 +108,31 @@ def analyze_single_image(file, status_placeholder):
             return items
             
         elif response.status_code == 429:
-            wait_seconds = 35
+            wait_seconds = 20
             match = re.search(r'try again in ([\d\.]+)s', response.text)
             if match:
-                wait_seconds = int(float(match.group(1))) + 2
-            
+                wait_seconds = int(float(match.group(1))) + 1
             for remaining in range(wait_seconds, 0, -1):
-                status_placeholder.warning(f"⏳ 正在遵循 Groq 免费限流策略，等待 {remaining} 秒后自动解析第 {file.name} ...")
+                status_placeholder.warning(f"⏳ 限流保护中，等待 {remaining} 秒继续处理 {file.name} ...")
                 time.sleep(1)
             continue
         else:
-            raise Exception(f"API 请求失败 ({response.status_code}): {response.text}")
+            raise Exception(f"API 请求失败: {response.text}")
             
-    raise Exception("速率限制等待超时，请稍后重试。")
+    raise Exception("多次请求超时，请重试。")
 
 def generate_image_long(df):
-    chinese_fonts = [f.name for f in fm.fontManager.ttflist if any(kw in f.name.lower() for kw in ['cjk', 'hei', 'song', 'sans', 'droid', 'sim'])]
-    font_family = chinese_fonts[0] if chinese_fonts else 'sans-serif'
-    
+    """绘制高保真中文长图"""
     row_count = max(len(df), 1)
-    fig_height = 1.2 + row_count * 0.9
-    fig, ax = plt.subplots(figsize=(10, fig_height), dpi=150)
+    fig_height = 1.2 + row_count * 0.95
+    fig, ax = plt.subplots(figsize=(10, fig_height), dpi=160)
     fig.patch.set_facecolor('#f8fafc')
     ax.set_facecolor('#f8fafc')
     ax.axis('off')
     
-    ax.text(0.5, 0.98, "✈️ 旅游团筛选清单", fontsize=18, weight='bold', ha='center', va='top', color='#0f172a', fontfamily=font_family)
-    ax.text(0.5, 0.94, f"共筛选出 {len(df)} 个旅游团行程", fontsize=11, ha='center', va='top', color='#64748b', fontfamily=font_family)
+    # 头部标题
+    ax.text(0.5, 0.98, "旅游团筛选清单", fontproperties=chinese_font_prop, fontsize=18, weight='bold', ha='center', va='top', color='#0f172a')
+    ax.text(0.5, 0.94, f"共筛选出 {len(df)} 个精选行程", fontproperties=chinese_font_prop, fontsize=11, ha='center', va='top', color='#64748b')
     
     y_start = 0.88
     step = 0.86 / row_count
@@ -133,10 +149,10 @@ def generate_image_long(df):
         dates = str(row.get('departure_dates', ''))
         title = str(row.get('title', ''))
         
-        ax.text(0.05, y_pos - step * 0.25, f"📍 {dest}  |  团号: {code}", fontsize=12, weight='bold', color='#1e293b', fontfamily=font_family, zorder=2)
-        ax.text(0.95, y_pos - step * 0.25, f"{price}", fontsize=13, weight='bold', color='#e11d48', ha='right', fontfamily=font_family, zorder=2)
-        ax.text(0.05, y_pos - step * 0.50, f"🛫 出发地: {loc}    📅 出发日期: {dates}", fontsize=9.5, color='#475569', fontfamily=font_family, zorder=2)
-        ax.text(0.05, y_pos - step * 0.72, f"路线: {title[:48]}", fontsize=9.5, color='#64748b', fontfamily=font_family, zorder=2)
+        ax.text(0.05, y_pos - step * 0.25, f"{dest}  |  团号: {code}", fontproperties=chinese_font_prop, fontsize=12, weight='bold', color='#1e293b', zorder=2)
+        ax.text(0.95, y_pos - step * 0.25, f"{price}", fontproperties=chinese_font_prop, fontsize=13, weight='bold', color='#e11d48', ha='right', zorder=2)
+        ax.text(0.05, y_pos - step * 0.50, f"出发地: {loc}    出发日期: {dates}", fontproperties=chinese_font_prop, fontsize=9.5, color='#475569', zorder=2)
+        ax.text(0.05, y_pos - step * 0.72, f"路线: {title[:48]}", fontproperties=chinese_font_prop, fontsize=9.5, color='#64748b', zorder=2)
         
     buf = BytesIO()
     plt.savefig(buf, format='png', bbox_inches='tight', pad_inches=0.2)
@@ -168,7 +184,7 @@ def create_html_report(df):
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <title>旅游团筛选清单</title>
         <style>
-            body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background-color: #f8fafc; padding: 15px; margin: 0; }}
+            body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif; background-color: #f8fafc; padding: 15px; margin: 0; }}
             .header {{ text-align: center; margin-bottom: 20px; }}
             @media print {{ body {{ background: #fff; padding: 0; }} }}
         </style>
@@ -198,27 +214,24 @@ if uploaded_files:
     st.success(f"已选择 {len(uploaded_files)} 张图片")
     if st.button("🚀 开始让 AI 批量分析图片", type="primary"):
         all_results = []
-        errors = []
         progress_bar = st.progress(0)
         status_text = st.empty()
         
         for idx, file in enumerate(uploaded_files):
-            status_text.info(f"正在精准提取第 {idx + 1}/{len(uploaded_files)} 张: {file.name} ...")
+            status_text.info(f"⚡ 正在分析第 {idx + 1}/{len(uploaded_files)} 张: {file.name} ...")
             try:
                 data = analyze_single_image(file, status_text)
                 if data:
                     all_results.extend(data)
             except Exception as err:
-                errors.append(f"{file.name} 提示: {str(err)}")
+                st.warning(f"{file.name} 提示: {str(err)}")
             
             progress_bar.progress((idx + 1) / len(uploaded_files))
+            if idx + 1 < len(uploaded_files):
+                time.sleep(1.0)
                 
         status_text.empty()
         progress_bar.empty()
-        
-        if errors:
-            for e in errors:
-                st.warning(e)
         
         if all_results:
             st.session_state.travel_data = all_results
@@ -243,7 +256,8 @@ if st.session_state.travel_data:
     dest_list = ["全部"] + sorted([d for d in df['destination'].unique() if d and d != "nan"])
     selected_dest = st.sidebar.selectbox("选择目的地", dest_list)
     
-    loc_list = ["全部"] + sorted([l for l in df['departure_location'].unique() if l and l != "nan"])
+    raw_locs = sorted([l for l in df['departure_location'].unique() if l and l != "nan"])
+    loc_list = ["全部", "🇲🇾 全马来西亚出发 (包含吉隆坡/新山/槟城)"] + raw_locs
     selected_loc = st.sidebar.selectbox("选择起飞地点", loc_list)
     
     min_val = int(df['price_numeric'].min()) if not df.empty else 0
@@ -255,7 +269,13 @@ if st.session_state.travel_data:
     filtered_df = df.copy()
     if selected_dest != "全部":
         filtered_df = filtered_df[filtered_df['destination'] == selected_dest]
-    if selected_loc != "全部":
+        
+    if selected_loc == "🇲🇾 全马来西亚出发 (包含吉隆坡/新山/槟城)":
+        malaysia_keywords = ["吉隆坡", "新山", "JB", "槟城", "柔佛", "KUL", "PEN", "JHB", "马来西亚"]
+        filtered_df = filtered_df[filtered_df['departure_location'].apply(
+            lambda loc: any(kw in loc for kw in malaysia_keywords)
+        )]
+    elif selected_loc != "全部":
         filtered_df = filtered_df[filtered_df['departure_location'] == selected_loc]
         
     filtered_df = filtered_df[
