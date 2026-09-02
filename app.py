@@ -30,8 +30,8 @@ if uploaded_files:
                     {
                         "type": "text",
                         "text": """
-                        请提取图片中的所有旅游团信息，并以 JSON 数组格式返回。
-                        格式示例：
+                        请分析图片，提取所有旅游团信息。
+                        注意：你必须在回复的最后面，输出一个合法的 JSON 数组（以 [ 开头，以 ] 结尾）。格式必须严格如下：
                         [
                           {
                             "destination": "海南岛",
@@ -81,21 +81,15 @@ if uploaded_files:
                 res_json = response.json()
                 response_text = res_json['choices'][0]['message']['content'].strip()
                 
-                # 【强力核心修改】：如果包含闭合的 </think>，直接只取它后面的内容！
-                if "</think>" in response_text:
-                    response_text = response_text.split("</think>")[-1].strip()
-                
-                # 如果没有闭合标签但有 <think>，直接把 <think> 到内容结束全部过滤或者用正则抠出中括号
-                response_text = re.sub(r'<think>.*?</think>', '', response_text, flags=re.DOTALL).strip()
-                
-                # 终极保险：不管前面有什么杂七杂八的文本，直接用正则把第一个 '[' 到最后一个 ']' 之间的内容精确抓出来
-                json_match = re.search(r'\[\s*\{.*\}\s*\]', response_text, re.DOTALL)
-                if json_match:
-                    clean_json_str = json_match.group(0)
+                # 【终极抓取逻辑】：不管前面有多少 <think> 废话，我们直接从后往前找最后一个 '[' 开始，一直到最后一个 ']' 结束！
+                matches = list(re.finditer(r'\[\s*\{.*?\}\s*\]', response_text, re.DOTALL))
+                if matches:
+                    # 取最后一个匹配项（通常是 AI 思考完后最终输出的 JSON）
+                    clean_json_str = matches[-1].group(0)
                     st.session_state.travel_data = json.loads(clean_json_str)
                     st.success("🎉 批量分析完成！")
                 else:
-                    raise Exception(f"清洗后未找到 JSON 数组，原始内容段：{response_text[:300]}...")
+                    raise Exception(f"全文未找到 JSON 数组。AI 原始内容摘要：{response_text[-400:]}")
                 
             except Exception as e:
                 st.error(f"解析过程中出现错误: {e}")
