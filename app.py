@@ -8,24 +8,68 @@ import re
 import threading
 from io import BytesIO
 from PIL import Image
+import streamlit.components.v1 as components
 
 st.set_page_config(page_title="AI 旅游团智能筛选助手", page_icon="✈️", layout="wide")
 
 st.title("✈️ 旅游团宣传单智能分析与筛选")
-st.markdown("批量上传宣传单，精准提取目的地、起飞地点（吉隆坡/槟城/JB/SIN）、团号与价格！")
+st.markdown("支持后台运行与完成提醒！上传海报后点击开始，即使切出应用，处理完毕也会弹窗与发声提醒。")
 
 GROQ_API_KEY = "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"
 
-# 初始化全局任务状态
+# 全局状态管理
 if "task_state" not in st.session_state:
     st.session_state.task_state = {
         "running": False,
         "finished": False,
+        "notified": False,
         "progress": 0.0,
         "status_msg": "",
         "results": [],
         "errors": []
     }
+
+def trigger_notification():
+    """触发手机/电脑浏览器的系统通知与提示音"""
+    components.html("""
+    <script>
+    function notifyUser() {
+        try {
+            const ctx = new (window.AudioContext || window.webkitAudioContext)();
+            const osc = ctx.createOscillator();
+            const gain = ctx.createGain();
+            osc.type = 'sine';
+            osc.frequency.setValueAtTime(587.33, ctx.currentTime);
+            osc.frequency.setValueAtTime(880, ctx.currentTime + 0.15);
+            gain.gain.setValueAtTime(0.3, ctx.currentTime);
+            gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.6);
+            osc.connect(gain);
+            gain.connect(ctx.destination);
+            osc.start();
+            osc.stop(ctx.currentTime + 0.6);
+        } catch(e) {}
+
+        if ("Notification" in window) {
+            if (Notification.permission === "granted") {
+                new Notification("✈️ 旅游团分析完成！", {
+                    body: "所有海报数据已提取完毕，快回来看结果吧！",
+                    icon: "https://fav.farm/✈️"
+                });
+            } else if (Notification.permission !== "denied") {
+                Notification.requestPermission().then(permission => {
+                    if (permission === "granted") {
+                        new Notification("✈️ 旅游团分析完成！", {
+                            body: "所有海报数据已提取完毕，快回来看结果吧！",
+                            icon: "https://fav.farm/✈️"
+                        });
+                    }
+                });
+            }
+        }
+    }
+    notifyUser();
+    </script>
+    """, height=0)
 
 def compress_image(uploaded_file, max_size=650, quality=55):
     img = Image.open(uploaded_file)
@@ -76,21 +120,35 @@ def analyze_single_image(file_bytes, file_name, task_dict):
         "reasoning_effort": "none"
     }
     
-    for attempt in range(3):
+    last_error = ""
+    for attempt in range(4):
         try:
-            response = requests.post(url, headers=headers, data=json.dumps(payload), timeout=60)
-        except Exception:
-            time.sleep(2)
+            # 延长单次网络超时时间至 180 秒，避免长文本生成被强行掐断
+            response = requests.post(url, headers=headers, data=json.dumps(payload), timeout=180)
+        except requests.exceptions.Timeout:
+            last_error = "网络连接超时 (超过180秒)"
+            time.sleep(3)
+            continue
+        except Exception as e:
+            last_error = f"网络连接异常: {str(e)}"
+            time.sleep(3)
             continue
             
         if response.status_code == 200:
             content = response.json()['choices'][0]['message']['content'].strip()
+            
+            # 清除思考和代码框残留
+            if "</think>" in content:
+                content = content.split("</think>")[-1].strip()
+            content = re.sub(r'```(?:json)?', '', content).strip()
+            
             json_match = re.search(r'\[\s*\{.*\}\s*\]', content, re.DOTALL)
             if json_match:
                 try:
                     return json.loads(json_match.group(0))
                 except Exception:
                     pass
+                    
             items = []
             for b in re.findall(r'\{[^{}]*\}', content):
                 try:
@@ -99,46 +157,49 @@ def analyze_single_image(file_bytes, file_name, task_dict):
                         items.append(item)
                 except Exception:
                     continue
-            return items
+            if items:
+                return items
+            last_error = f"返回内容无法解析为JSON (片段: {content[:100]})"
             
         elif response.status_code == 429:
-            wait_seconds = 20
+            # 读取官方限制时间并友好倒计时
+            wait_seconds = 25
             match = re.search(r'try again in ([\d\.]+)s', response.text)
             if match:
-                wait_seconds = int(float(match.group(1))) + 1
+                wait_seconds = int(float(match.group(1))) + 2
+            
             for remaining in range(wait_seconds, 0, -1):
-                task_dict["status_msg"] = f"⏳ 限流保护中，后台等待 {remaining} 秒继续处理 {file_name} ..."
+                task_dict["status_msg"] = f"⏳ 触发免费配额保护，后台等待 {remaining} 秒继续处理 {file_name} ..."
                 time.sleep(1)
             continue
         else:
-            raise Exception(f"API 请求失败: {response.text}")
+            last_error = f"API 报错 ({response.status_code}): {response.text[:200]}"
+            time.sleep(3)
             
-    raise Exception("多次请求超时，请重试。")
+    raise Exception(last_error if last_error else "多次尝试仍未能获取有效结果")
 
 def background_worker(files_data, task_dict):
-    """独立后台工作线程执行体"""
     total = len(files_data)
     for idx, (f_name, f_bytes) in enumerate(files_data):
-        task_dict["status_msg"] = f"⚡ 后台正在深度解析第 {idx + 1}/{total} 张: {f_name} ..."
+        task_dict["status_msg"] = f"⚡ 后台正在解析第 {idx + 1}/{total} 张: {f_name} ..."
         try:
             data = analyze_single_image(f_bytes, f_name, task_dict)
             if data:
                 task_dict["results"].extend(data)
             else:
-                task_dict["errors"].append(f"{f_name} 未能提取到有效数据")
+                task_dict["errors"].append(f"{f_name}: 未能提取到有效数据")
         except Exception as err:
-            task_dict["errors"].append(f"{f_name} 提示: {str(err)}")
+            task_dict["errors"].append(f"{f_name}: {str(err)}")
             
         task_dict["progress"] = (idx + 1) / total
         if idx + 1 < total:
-            time.sleep(1.0)
+            time.sleep(2.0)
             
     task_dict["running"] = False
     task_dict["finished"] = True
     task_dict["status_msg"] = "✅ 全部图片已在后台分析完成！"
 
 def create_html_report(df):
-    """生成内置 html2canvas 截图引擎与打印样式的交互报告"""
     cards_html = ""
     for _, row in df.iterrows():
         cards_html += f"""
@@ -158,14 +219,14 @@ def create_html_report(df):
         </div>
         """
 
-    html_template = f"""
+    return f"""
     <!DOCTYPE html>
     <html lang="zh-CN">
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <title>旅游团筛选清单</title>
-        <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
+        <script src="[https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js](https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js)"></script>
         <style>
             body {{
                 font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
@@ -249,7 +310,7 @@ def create_html_report(df):
         </div>
         <div id="capture-area">
             <div class="main-title">✈️ 旅游团筛选清单</div>
-            <div class="sub-title">共筛选出 {len(df)} 个旅游团行程</div>
+            <div class="sub-title">共筛选出 {len(df)} 个精选行程</div>
             {cards_html}
         </div>
         <script>
@@ -266,7 +327,6 @@ def create_html_report(df):
     </body>
     </html>
     """
-    return html_template
 
 uploaded_files = st.file_uploader(
     "批量上传宣传图 (支持 JPG/PNG，可多选)", 
@@ -283,34 +343,37 @@ if uploaded_files:
         if st.button("🚀 开始后台批量分析", type="primary"):
             task["running"] = True
             task["finished"] = False
+            task["notified"] = False
             task["progress"] = 0.0
             task["results"] = []
             task["errors"] = []
             task["status_msg"] = "正在启动独立工作线程..."
             
-            # 读取文件二进制流传给后台线程
             files_data = [(f.name, f.getvalue()) for f in uploaded_files]
-            
             t = threading.Thread(target=background_worker, args=(files_data, task), daemon=True)
             t.start()
             st.rerun()
 
-# 任务运行时：保持动态刷新与保活
+# 轮询刷新：后台持续跑，前台不丢失状态
 if task["running"]:
     st.info(task["status_msg"])
     st.progress(task["progress"])
-    st.caption("💡 任务已在服务器独立线程运行中。你可以随意切换 App 或手机息屏，任务绝不会中断。")
+    st.caption("💡 任务已在服务器独立后台运行中，可锁屏或切出手机，完成后会自动发送提醒。")
     time.sleep(2)
     st.rerun()
 
 elif task["finished"]:
+    if not task["notified"]:
+        trigger_notification()
+        task["notified"] = True
+
     if task["results"]:
         st.success(f"🎉 提取完成！共准确获取到 {len(task['results'])} 条旅游团信息！")
     if task["errors"]:
         for e in task["errors"]:
-            st.warning(e)
+            st.warning(f"⚠️ {e}")
 
-# 数据面板
+# 结果展示与筛选面板
 if task["results"]:
     st.markdown("---")
     df = pd.DataFrame(task["results"])
