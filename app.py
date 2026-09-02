@@ -4,14 +4,14 @@ import json
 import requests
 import base64
 import time
+import re
 from io import BytesIO
-from PIL import Image, ImageDraw, ImageFont
-from fpdf import FPDF
+from PIL import Image
 
 st.set_page_config(page_title="AI 旅游团智能筛选助手", page_icon="✈️", layout="wide")
 
 st.title("✈️ 旅游团宣传单智能分析与筛选")
-st.markdown("批量上传旅游宣传图片，AI 自动提取价格、起飞地点并支持多条件筛选与导出！")
+st.markdown("批量上传旅游宣传图片，AI 自动提取价格、起飞地点并支持多条件筛选！")
 
 GROQ_API_KEY = "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"
 
@@ -26,29 +26,21 @@ def compress_image(uploaded_file, max_size=1024, quality=75):
 
 def analyze_single_image(file):
     encoded_string = compress_image(file)
-    system_prompt = (
-        "你是一个专业的数据结构化提取工具。请仔细识别旅游宣传单中的每一个旅游团项目。\n"
-        "要求：必须输出纯 JSON 对象，格式为 {\"tours\": [...] }，绝不要输出任何解释或多余字符。\n"
-        "每个团必须包含：\n"
-        "- destination: 准确的目的地城市或省份（如：重庆、云南、西藏、青岛、韩国、桂林等，不要带多余说明）\n"
-        "- tour_code: 团号（如：SP002376）\n"
-        "- title: 行程标题或路线描述\n"
-        "- departure_location: 实际起飞/出发城市（若有 SIN 代表新加坡，KUL 代表吉隆坡，JHB 代表柔佛，若未说明写'待定'）\n"
-        "- departure_dates: 出发日期列表\n"
-        "- price_numeric: 纯数字价格（整数，取最低起步价，如 2999）\n"
-        "- price_text: 显示价格（如 RM 2999 起）"
-    )
-    
-    messages = [
-        {"role": "system", "content": system_prompt},
-        {
-            "role": "user",
-            "content": [
-                {"type": "text", "text": "提取图片中的所有旅游团数据："},
-                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{encoded_string}"}}
-            ]
-        }
+    prompt = """
+    请提取这张宣传单中的所有旅游团项目，以合法的 JSON 数组格式输出，不要包含任何多余文字。
+    每个对象包含以下字段：
+    [
+      {
+        "destination": "目的地城市或省份",
+        "tour_code": "团号",
+        "title": "行程路线标题",
+        "departure_location": "起飞地点(如新加坡/吉隆坡/柔佛/待定)",
+        "departure_dates": "出发日期",
+        "price_numeric": 2999,
+        "price_text": "RM 2999 起"
+      }
     ]
+    """
     
     url = "https://api.groq.com/openai/v1/chat/completions"
     headers = {
@@ -57,106 +49,59 @@ def analyze_single_image(file):
     }
     payload = {
         "model": "qwen/qwen3.6-27b",
-        "messages": messages,
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": prompt},
+                    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{encoded_string}"}}
+                ]
+            }
+        ],
         "temperature": 0.1,
-        "response_format": {"type": "json_object"}
+        "max_tokens": 4096
     }
     
     response = requests.post(url, headers=headers, data=json.dumps(payload))
     if response.status_code != 200:
         return []
     
-    res_json = response.json()
-    content = res_json['choices'][0]['message']['content'].strip()
+    content = response.json()['choices'][0]['message']['content'].strip()
     
-    try:
-        parsed = json.loads(content)
-        if "tours" in parsed and isinstance(parsed["tours"], list):
-            return parsed["tours"]
-        for key, val in parsed.items():
-            if isinstance(val, list):
-                return val
-    except Exception:
-        pass
-    return []
-
-def generate_image(dataframe):
-    """将筛选结果动态绘制成一张高清清单长图 (PNG)"""
-    width = 900
-    card_height = 140
-    header_height = 120
-    footer_height = 50
-    total_height = header_height + len(dataframe) * card_height + footer_height
-
-    img = Image.new("RGB", (width, total_height), color=(248, 250, 252))
-    draw = ImageDraw.Draw(img)
-    font = ImageFont.load_default()
-
-    # 绘制头部横幅
-    draw.rectangle([(0, 0), (width, header_height - 20)], fill=(30, 41, 59))
-    draw.text((30, 30), "TRAVEL TOUR SUMMARY LIST", fill=(255, 255, 255), font=font)
-    draw.text((30, 60), f"Total Tours: {len(dataframe)}", fill=(148, 163, 184), font=font)
-
-    # 循环绘制每一个旅游团卡片
-    y = header_height
-    for _, row in dataframe.iterrows():
-        # 卡片白色背景与边框
-        draw.rectangle([(30, y), (width - 30, y + card_height - 15)], fill=(255, 255, 255), outline=(226, 232, 240), width=2)
-        
-        dest = str(row.get('destination', 'Unknown'))
-        price = str(row.get('price_text', 'N/A'))
-        code = str(row.get('tour_code', 'N/A'))
-        loc = str(row.get('departure_location', 'N/A'))
-        dates = str(row.get('departure_dates', 'N/A'))
-        title = str(row.get('title', 'N/A'))
-
-        # 卡片文字排版
-        draw.text((50, y + 15), f"[{dest}]  {code}", fill=(15, 23, 42), font=font)
-        draw.text((width - 220, y + 15), f"{price}", fill=(225, 29, 72), font=font)
-        draw.text((50, y + 45), f"Dept: {loc}  |  Dates: {dates}", fill=(71, 85, 105), font=font)
-        draw.text((50, y + 75), f"Route: {title[:70]}", fill=(100, 116, 139), font=font)
-
-        y += card_height
-
-    buf = BytesIO()
-    img.save(buf, format="PNG")
-    return buf.getvalue()
-
-def generate_pdf(dataframe):
-    """生成 PDF 清单"""
-    pdf = FPDF()
-    pdf.set_auto_page_break(auto=True, margin=15)
-    pdf.add_page()
-    pdf.set_font("Helvetica", "B", 18)
+    # 清洗掉思考过程
+    if "</think>" in content:
+        content = content.split("</think>")[-1].strip()
+    content = re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL).strip()
     
-    pdf.cell(0, 10, "Travel Tour Itinerary List", ln=True, align="C")
-    pdf.set_font("Helvetica", "", 10)
-    pdf.cell(0, 8, f"Total Tours: {len(dataframe)}", ln=True, align="C")
-    pdf.ln(5)
-    
-    for _, row in dataframe.iterrows():
-        pdf.set_fill_color(245, 247, 250)
-        pdf.rect(10, pdf.get_y(), 190, 26, "F")
-        
-        pdf.set_font("Helvetica", "B", 12)
-        dest = str(row.get('destination', 'Unknown')).encode('latin-1', 'replace').decode('latin-1')
-        price = str(row.get('price_text', 'N/A')).encode('latin-1', 'replace').decode('latin-1')
-        pdf.cell(120, 8, f"Destination: {dest}", ln=0)
-        pdf.cell(70, 8, f"Price: {price}", ln=1, align="R")
-        
-        pdf.set_font("Helvetica", "", 10)
-        code = str(row.get('tour_code', 'N/A')).encode('latin-1', 'replace').decode('latin-1')
-        loc = str(row.get('departure_location', 'N/A')).encode('latin-1', 'replace').decode('latin-1')
-        dates = str(row.get('departure_dates', 'N/A')).encode('latin-1', 'replace').decode('latin-1')
-        
-        pdf.cell(100, 6, f"Tour Code: {code}  |  Dept: {loc}", ln=0)
-        pdf.cell(90, 6, f"Dates: {dates}", ln=1)
-        
-        title = str(row.get('title', 'N/A')).encode('latin-1', 'replace').decode('latin-1')
-        pdf.cell(0, 6, f"Route: {title[:75]}", ln=1)
-        pdf.ln(6)
-        
-    return bytes(pdf.output())
+    # 正则提取 JSON
+    match = re.search(r'\[\s*\{.*?\}\s*\]', content, re.DOTALL)
+    if match:
+        try:
+            return json.loads(match.group(0))
+        except Exception:
+            pass
+            
+    # 兜底行提取
+    fallback = []
+    lines = content.split("\n")
+    cur_dest = "热门"
+    for line in lines:
+        if any(tag in line for tag in ["SIN-", "KL-", "JB-", "目的地"]):
+            cur_dest = re.sub(r'[#*]', '', line).strip()
+        code_match = re.search(r'(SP\d+)', line)
+        if code_match:
+            price_match = re.search(r'RM\s*(\d+)', line)
+            p_val = int(price_match.group(1)) if price_match else 1999
+            fallback.append({
+                "destination": cur_dest,
+                "tour_code": code_match.group(1),
+                "title": line.strip("- *0123456789. "),
+                "departure_location": "待定",
+                "departure_dates": "见海报",
+                "price_numeric": p_val,
+                "price_text": f"RM {p_val}"
+            })
+    return fallback
 
 uploaded_files = st.file_uploader(
     "批量上传宣传图 (支持 JPG/PNG，可多选)", 
@@ -175,7 +120,7 @@ if uploaded_files:
         status_text = st.empty()
         
         for idx, file in enumerate(uploaded_files):
-            status_text.text(f"正在精准解析第 {idx + 1}/{len(uploaded_files)} 张图片: {file.name} ...")
+            status_text.text(f"正在分析第 {idx + 1}/{len(uploaded_files)} 张图片: {file.name} ...")
             data = analyze_single_image(file)
             if data:
                 all_results.extend(data)
@@ -189,20 +134,20 @@ if uploaded_files:
         
         if all_results:
             st.session_state.travel_data = all_results
-            st.success(f"🎉 分析完成！共准确提取出 {len(all_results)} 条旅游团信息。")
+            st.success(f"🎉 识别完成！共获取 {len(all_results)} 条旅游团信息。")
         else:
-            st.error("未能提取出有效数据，请确认图片中包含清晰的旅游项目。")
+            st.error("未能提取出有效数据，请检查图片清晰度或重新点击分析。")
 
 if st.session_state.travel_data:
     st.markdown("---")
-    
     df = pd.DataFrame(st.session_state.travel_data)
+    
     if 'destination' in df.columns:
         df['destination'] = df['destination'].astype(str).str.replace(r'[\*\-#]', '', regex=True).str.strip()
     if 'price_numeric' in df.columns:
         df['price_numeric'] = pd.to_numeric(df['price_numeric'], errors='coerce').fillna(0).astype(int)
         
-    st.header("🔍 旅游团智能筛选与导出")
+    st.header("🔍 旅游团智能筛选面板")
     
     st.sidebar.header("🎛️ 筛选条件")
     dest_list = ["全部"] + sorted([d for d in df['destination'].unique() if d and d != "nan"])
@@ -228,45 +173,26 @@ if st.session_state.travel_data:
         (filtered_df['price_numeric'] <= price_range[1])
     ]
     
-    # 导出工具栏（提供图片、PDF、CSV 三种格式）
-    st.markdown("### 📥 一键导出筛选结果")
-    col_img, col_pdf, col_csv = st.columns(3)
+    # 导出区域
+    st.markdown("### 📥 导出数据")
+    csv_bytes = filtered_df.to_csv(index=False).encode('utf-8-sig')
+    st.download_button(
+        label="📋 下载结果表格 (CSV / Excel 可打开)",
+        data=csv_bytes,
+        file_name="旅游团筛选清单.csv",
+        mime="text/csv",
+        type="primary"
+    )
     
-    with col_img:
-        img_bytes = generate_image(filtered_df)
-        st.download_button(
-            label="🖼️ 导出为长图 (PNG)",
-            data=img_bytes,
-            file_name="旅游团筛选清单.png",
-            mime="image/png",
-            type="primary"
-        )
-        
-    with col_pdf:
-        pdf_bytes = generate_pdf(filtered_df)
-        st.download_button(
-            label="📄 导出为 PDF 文件",
-            data=pdf_bytes,
-            file_name="旅游团筛选清单.pdf",
-            mime="application/pdf"
-        )
-        
-    with col_csv:
-        csv_bytes = filtered_df.to_csv(index=False).encode('utf-8-sig')
-        st.download_button(
-            label="📋 导出为表格 (CSV)",
-            data=csv_bytes,
-            file_name="旅游团筛选清单.csv",
-            mime="text/csv"
-        )
-        
     st.markdown(f"### 符合条件的旅游团共 **{len(filtered_df)}** 个：")
     
+    # 表格展示
     st.dataframe(
         filtered_df[['destination', 'tour_code', 'title', 'departure_location', 'departure_dates', 'price_text']],
         use_container_width=True
     )
     
+    # 卡片明细
     for _, row in filtered_df.iterrows():
         with st.container(border=True):
             c1, c2, c3 = st.columns([3, 2, 2])
