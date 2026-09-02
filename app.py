@@ -15,7 +15,8 @@ st.markdown("批量上传宣传单，精准提取目的地、起飞地点（吉�
 
 GROQ_API_KEY = "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"
 
-def compress_image(uploaded_file, max_size=1100, quality=75):
+def compress_image(uploaded_file, max_size=850, quality=65):
+    """进一步压缩尺寸，确保单图 Token 严格控制在 5000 以内"""
     img = Image.open(uploaded_file)
     if img.mode in ("RGBA", "P"):
         img = img.convert("RGB")
@@ -25,7 +26,6 @@ def compress_image(uploaded_file, max_size=1100, quality=75):
     return base64.b64encode(buffer.getvalue()).decode("utf-8")
 
 def repair_truncated_json(raw_text):
-    """如果因为长文本截断，自动尝试补齐并提取所有完整的 JSON 块"""
     items = []
     blocks = re.findall(r'\{[^{}]*\}', raw_text)
     for b in blocks:
@@ -40,17 +40,17 @@ def repair_truncated_json(raw_text):
 def analyze_single_image(file):
     encoded_string = compress_image(file)
     prompt = """
-    分析这张旅游宣传单图片中的所有旅游团。
-    【提取要求】：
-    - destination: 大标题目的地（如：武汉、青岛、内蒙古、岘港、沙坝、北京、桂林、九寨沟、江西、云南、厦门、韩国、海南）
-    - departure_location: 每个旅游团标签上的起飞/出发城市（必须准确识别：如“吉隆坡出发”、“槟城出发”，若海报标注JB则填“新山出发”，SIN填“新加坡出发”）
+    分析这张旅游宣传单中的所有项目。
+    提取字段：
+    - destination: 目的地（如：武汉、青岛、内蒙古、岘港、沙坝、北京、桂林、九寨沟、江西、云南、厦门、韩国、海南）
+    - departure_location: 每个团右下角或价格旁标注的起飞城市（如“吉隆坡出发”、“槟城出发”，标有JB填“新山出发”，SIN填“新加坡出发”）
     - tour_code: SP开头的团号（如 SP002740）
-    - title: 行程天数与路线名称
+    - title: 行程名称
     - departure_dates: 出发日期
-    - price_numeric: 最低价格数字（例如 3199）
+    - price_numeric: 整数最低价（如 3199）
     - price_text: 显示价格（如 RM 3199）
 
-    以严格的 JSON 数组返回，不要有任何多余字符：
+    以纯 JSON 数组输出，不要有任何多余文字：
     [
       {
         "destination": "武汉",
@@ -81,7 +81,7 @@ def analyze_single_image(file):
             }
         ],
         "temperature": 0.1,
-        "max_tokens": 6000
+        "max_tokens": 2500
     }
     
     response = requests.post(url, headers=headers, data=json.dumps(payload))
@@ -91,12 +91,10 @@ def analyze_single_image(file):
     res_data = response.json()
     content = res_data['choices'][0]['message']['content'].strip()
     
-    # 清洗思考过程
     if "</think>" in content:
         content = content.split("</think>")[-1].strip()
     content = re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL).strip()
     
-    # 完整 JSON 提取
     json_match = re.search(r'\[\s*\{.*\}\s*\]', content, re.DOTALL)
     if json_match:
         try:
@@ -104,12 +102,11 @@ def analyze_single_image(file):
         except Exception:
             pass
             
-    # 针对截断文本的补救提取
     repaired_items = repair_truncated_json(content)
     if repaired_items:
         return repaired_items
         
-    raise Exception(f"未能解析出任何旅行团，AI 返回片段：{content[:400]}")
+    raise Exception(f"未找到有效数据，AI 输出摘要：{content[:250]}")
 
 def create_html_report(df):
     html_cards = ""
@@ -183,7 +180,7 @@ if uploaded_files:
             
             progress_bar.progress((idx + 1) / len(uploaded_files))
             if idx + 1 < len(uploaded_files):
-                time.sleep(1.5)
+                time.sleep(2.0)
                 
         status_text.empty()
         progress_bar.empty()
