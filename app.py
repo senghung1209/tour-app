@@ -1,3 +1,4 @@
+import os
 import streamlit as st
 import pandas as pd
 import json
@@ -9,8 +10,8 @@ st.set_page_config(page_title="AI 旅游团智能筛选助手", page_icon="✈�
 st.title("✈️ 旅游团宣传单智能分析与筛选")
 st.markdown("批量上传旅游宣传图片，AI 自动提取价格、起飞地点并支持多条件筛选！")
 
-# 直接内置你的 API Key，免去繁琐的云端 Secrets 配置
-API_KEY = "AQ.Ab8RN6ITYQFxGCn83gL0tdlTNT1CzrZAPpAsy2LFTJ0J4_I3Uw"
+# 将 API Key 直接注入到系统的环境变量中，彻底解决 401 鉴权报错
+os.environ["GEMINI_API_KEY"] = "AQ.Ab8RN6ITYQFxGCn83gL0tdlTNT1CzrZAPpAsy2LFTJ0J4_I3Uw"
 
 uploaded_files = st.file_uploader(
     "批量上传宣传图 (支持 JPG/PNG，可多选)", 
@@ -26,7 +27,8 @@ if uploaded_files:
     if st.button("🚀 开始让 AI 批量分析图片", type="primary"):
         with st.spinner("AI 正在努力批量识别图片中的文字、价格和起飞地点，请稍候..."):
             try:
-                client = genai.Client(api_key=API_KEY)
+                # 使用无参数的 Client()，它会自动从系统环境变量中读取刚才设好的 GEMINI_API_KEY
+                client = genai.Client()
                 
                 image_parts = []
                 for file in uploaded_files:
