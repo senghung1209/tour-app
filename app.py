@@ -15,8 +15,8 @@ st.markdown("批量上传宣传单，精准提取目的地、起飞地点（吉�
 
 GROQ_API_KEY = "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"
 
-def compress_image(uploaded_file, max_size=850, quality=65):
-    """进一步压缩尺寸，确保单图 Token 严格控制在 5000 以内"""
+def compress_image(uploaded_file, max_size=750, quality=60):
+    """将图片等比压缩至 750px，Token 消耗压至 2500 左右"""
     img = Image.open(uploaded_file)
     if img.mode in ("RGBA", "P"):
         img = img.convert("RGB")
@@ -25,88 +25,115 @@ def compress_image(uploaded_file, max_size=850, quality=65):
     img.save(buffer, format="JPEG", quality=quality)
     return base64.b64encode(buffer.getvalue()).decode("utf-8")
 
-def repair_truncated_json(raw_text):
-    items = []
-    blocks = re.findall(r'\{[^{}]*\}', raw_text)
-    for b in blocks:
-        try:
-            item = json.loads(b)
-            if "tour_code" in item or "destination" in item:
-                items.append(item)
-        except Exception:
-            continue
-    return items
+def parse_tours_from_text(raw_text):
+    """从识别文本中提取结构化旅游团数据"""
+    results = []
+    lines = [line.strip() for line in raw_text.split('\n') if line.strip()]
+    
+    current_dest = "热选目的地"
+    current_loc = "详见海报"
+    
+    for line in lines:
+        # 识别目的地或出发地大标题
+        if any(kw in line for kw in ["武汉", "青岛", "内蒙古", "岘港", "沙坝", "北京", "桂林", "九寨沟", "江西", "云南", "厦门", "韩国", "海南"]):
+            clean_name = re.sub(r'[^一-龥a-zA-Z]', '', line)
+            if clean_name:
+                current_dest = clean_name
+        
+        # 识别出发地点标签
+        if "吉隆坡" in line or "KUL" in line:
+            current_loc = "吉隆坡出发"
+        elif "槟城" in line or "PEN" in line:
+            current_loc = "槟城出发"
+        elif "JB" in line or "新山" in line or "柔佛" in line:
+            current_loc = "新山出发"
+        elif "SIN" in line or "新加坡" in line:
+            current_loc = "新加坡出发"
+            
+        # 提取含 SP 团号的行
+        sp_match = re.search(r'(SP\d{4,7})', line, re.IGNORECASE)
+        if sp_match:
+            code = sp_match.group(1).upper()
+            
+            # 提取价格
+            price_match = re.search(r'RM\s*(\d{3,5})', line, re.IGNORECASE)
+            p_val = int(price_match.group(1)) if price_match else 0
+            
+            # 提取日期
+            dates_found = re.findall(r'\d{1,2}/\d{1,2}(?:/\d{2,4})?', line)
+            date_str = ", ".join(dates_found) if dates_found else "详见海报"
+            
+            # 提取行程标题
+            clean_title = re.sub(r'SP\d{4,7}', '', line, flags=re.IGNORECASE)
+            clean_title = re.sub(r'RM\s*\d+', '', clean_title, flags=re.IGNORECASE)
+            clean_title = clean_title.strip("- :*#，。")
+            
+            results.append({
+                "destination": current_dest,
+                "tour_code": code,
+                "title": clean_title if clean_title else f"{current_dest}精选游",
+                "departure_location": current_loc,
+                "departure_dates": date_str,
+                "price_numeric": p_val if p_val > 0 else 2999,
+                "price_text": f"RM {p_val}" if p_val > 0 else "详见海报"
+            })
+            
+    return results
 
 def analyze_single_image(file):
     encoded_string = compress_image(file)
-    prompt = """
-    分析这张旅游宣传单中的所有项目。
-    提取字段：
-    - destination: 目的地（如：武汉、青岛、内蒙古、岘港、沙坝、北京、桂林、九寨沟、江西、云南、厦门、韩国、海南）
-    - departure_location: 每个团右下角或价格旁标注的起飞城市（如“吉隆坡出发”、“槟城出发”，标有JB填“新山出发”，SIN填“新加坡出发”）
-    - tour_code: SP开头的团号（如 SP002740）
-    - title: 行程名称
-    - departure_dates: 出发日期
-    - price_numeric: 整数最低价（如 3199）
-    - price_text: 显示价格（如 RM 3199）
-
-    以纯 JSON 数组输出，不要有任何多余文字：
-    [
-      {
-        "destination": "武汉",
-        "tour_code": "SP002740",
-        "title": "8天6夜 稻城旅峡谷之美",
-        "departure_location": "吉隆坡出发",
-        "departure_dates": "01/11/26",
-        "price_numeric": 3199,
-        "price_text": "RM 3199"
-      }
-    ]
-    """
     
     url = "https://api.groq.com/openai/v1/chat/completions"
     headers = {
         "Authorization": f"Bearer {GROQ_API_KEY}",
         "Content-Type": "application/json"
     }
+    
+    # 极简提示词，杜绝模型做思维发散
     payload = {
         "model": "qwen/qwen3.6-27b",
         "messages": [
             {
                 "role": "user",
                 "content": [
-                    {"type": "text", "text": prompt},
-                    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{encoded_string}"}}
+                    {
+                        "type": "text", 
+                        "text": "请直接列出图片上所有的团号（如SP002740）、路线天数标题、出发地点（吉隆坡出发/槟城出发/新山/新加坡）、出发日期和RM价格，每行一个团。"
+                    },
+                    {
+                        "type": "image_url", 
+                        "image_url": {"url": f"data:image/jpeg;base64,{encoded_string}"}
+                    }
                 ]
             }
         ],
-        "temperature": 0.1,
-        "max_tokens": 2500
+        "temperature": 0.0,
+        "max_tokens": 1500
     }
     
-    response = requests.post(url, headers=headers, data=json.dumps(payload))
-    if response.status_code != 200:
-        raise Exception(f"API 请求失败 ({response.status_code}): {response.text}")
-    
-    res_data = response.json()
-    content = res_data['choices'][0]['message']['content'].strip()
-    
-    if "</think>" in content:
-        content = content.split("</think>")[-1].strip()
-    content = re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL).strip()
-    
-    json_match = re.search(r'\[\s*\{.*\}\s*\]', content, re.DOTALL)
-    if json_match:
-        try:
-            return json.loads(json_match.group(0))
-        except Exception:
-            pass
-            
-    repaired_items = repair_truncated_json(content)
-    if repaired_items:
-        return repaired_items
+    # 遭遇 429 自动等待重试机制
+    max_retries = 3
+    for attempt in range(max_retries):
+        response = requests.post(url, headers=headers, data=json.dumps(payload))
+        if response.status_code == 200:
+            content = response.json()['choices'][0]['message']['content']
+            # 过滤思考标签
+            if "</think>" in content:
+                content = content.split("</think>")[-1]
+            return parse_tours_from_text(content)
         
-    raise Exception(f"未找到有效数据，AI 输出摘要：{content[:250]}")
+        elif response.status_code == 429:
+            # 提取等待时间
+            wait_time = 25
+            err_msg = response.text
+            match = re.search(r'try again in ([\d\.]+)s', err_msg)
+            if match:
+                wait_time = int(float(match.group(1))) + 2
+            time.sleep(wait_time)
+        else:
+            raise Exception(f"API 请求失败: {response.text}")
+            
+    raise Exception("多次触发速率限制，未能完成解析，请稍后重试。")
 
 def create_html_report(df):
     html_cards = ""
@@ -125,7 +152,7 @@ def create_html_report(df):
         </div>
         """
         
-    full_html = f"""
+    return f"""
     <!DOCTYPE html>
     <html>
     <head>
@@ -134,15 +161,13 @@ def create_html_report(df):
         <style>
             body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background-color: #f8fafc; padding: 20px; }}
             .header {{ text-align: center; margin-bottom: 25px; }}
-            @media print {{
-                body {{ background: #fff; padding: 0; }}
-            }}
+            @media print {{ body {{ background: #fff; padding: 0; }} }}
         </style>
     </head>
     <body>
         <div class="header">
             <h1 style="color: #0f172a; margin-bottom: 5px;">✈️ 旅游团筛选清单</h1>
-            <p style="color: #64748b; margin-top: 0;">共筛选出 {len(df)} 个旅游团行程（按 Ctrl + P 可直接另存为 PDF 或截图保存）</p>
+            <p style="color: #64748b; margin-top: 0;">共筛选出 {len(df)} 个旅游团行程（按 Ctrl + P 可另存为 PDF 或长图）</p>
         </div>
         <div style="max-width: 800px; margin: 0 auto;">
             {html_cards}
@@ -150,7 +175,6 @@ def create_html_report(df):
     </body>
     </html>
     """
-    return full_html
 
 uploaded_files = st.file_uploader(
     "批量上传宣传图 (支持 JPG/PNG，可多选)", 
@@ -170,7 +194,7 @@ if uploaded_files:
         status_text = st.empty()
         
         for idx, file in enumerate(uploaded_files):
-            status_text.text(f"正在分析第 {idx + 1}/{len(uploaded_files)} 张图片: {file.name} ...")
+            status_text.text(f"正在分析第 {idx + 1}/{len(uploaded_files)} 张: {file.name} ...")
             try:
                 data = analyze_single_image(file)
                 if data:
@@ -180,32 +204,24 @@ if uploaded_files:
             
             progress_bar.progress((idx + 1) / len(uploaded_files))
             if idx + 1 < len(uploaded_files):
-                time.sleep(2.0)
+                # 预留缓冲时间防止触发每分钟限流
+                time.sleep(3.0)
                 
         status_text.empty()
         progress_bar.empty()
         
         if errors:
             for e in errors:
-                st.error(f"处理细节提醒: {e}")
+                st.error(e)
         
         if all_results:
             st.session_state.travel_data = all_results
-            st.success(f"🎉 识别完成！成功抓取到 {len(all_results)} 条旅游团信息！")
-        elif not errors:
-            st.error("未能提取出有效旅游团数据。")
+            st.success(f"🎉 识别完成！共成功抓取到 {len(all_results)} 条旅游团信息！")
 
 if st.session_state.travel_data:
     st.markdown("---")
     df = pd.DataFrame(st.session_state.travel_data)
     
-    if 'destination' in df.columns:
-        df['destination'] = df['destination'].astype(str).str.replace(r'[\*\-#\d\.]', '', regex=True).str.strip()
-    if 'departure_location' in df.columns:
-        df['departure_location'] = df['departure_location'].astype(str).str.strip()
-    if 'price_numeric' in df.columns:
-        df['price_numeric'] = pd.to_numeric(df['price_numeric'], errors='coerce').fillna(0).astype(int)
-        
     st.header("🔍 旅游团智能筛选面板")
     
     st.sidebar.header("🎛️ 筛选条件")
@@ -232,13 +248,13 @@ if st.session_state.travel_data:
         (filtered_df['price_numeric'] <= price_range[1])
     ]
     
-    st.markdown("### 📥 导出报告")
+    st.markdown("### 📥 导出筛选结果")
     col_html, col_csv = st.columns(2)
     
     with col_html:
         html_report = create_html_report(filtered_df)
         st.download_button(
-            label="📄 下载排版报告 (网页打开后按 Ctrl+P 可存为 PDF/图片)",
+            label="📄 下载排版报告 (网页打开后按 Ctrl+P 可存为 PDF/长图)",
             data=html_report,
             file_name="旅游团筛选报告.html",
             mime="text/html",
