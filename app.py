@@ -17,7 +17,6 @@ st.markdown("支持后台运行与完成提醒！上传海报后点击开始，�
 
 GROQ_API_KEY = "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"
 
-# 全局状态管理
 if "task_state" not in st.session_state:
     st.session_state.task_state = {
         "running": False,
@@ -30,7 +29,6 @@ if "task_state" not in st.session_state:
     }
 
 def trigger_notification():
-    """触发手机/电脑浏览器的系统通知与提示音"""
     js = """<script>
     try {
         const ctx = new (window.AudioContext || window.webkitAudioContext)();
@@ -50,14 +48,14 @@ def trigger_notification():
         if (Notification.permission === "granted") {
             new Notification("✈️ 旅游团分析完成！", {
                 body: "所有海报数据已提取完毕，快回来看结果吧！",
-                icon: "[https://fav.farm/](https://fav.farm/)✈️"
+                icon: "https://fav.farm/✈️"
             });
         } else if (Notification.permission !== "denied") {
             Notification.requestPermission().then(function(p) {
                 if (p === "granted") {
                     new Notification("✈️ 旅游团分析完成！", {
                         body: "所有海报数据已提取完毕，快回来看结果吧！",
-                        icon: "[https://fav.farm/](https://fav.farm/)✈️"
+                        icon: "https://fav.farm/✈️"
                     });
                 }
             });
@@ -76,7 +74,6 @@ def compress_image(uploaded_file, max_size=650, quality=55):
     return base64.b64encode(buffer.getvalue()).decode("utf-8")
 
 def extract_partial_items(content):
-    """强化容错：从任意断裂、未闭合或残缺的文本中抽取出所有旅游团对象"""
     items = []
     blocks = re.findall(r'\{[^{}]*\}', content)
     for b in blocks:
@@ -88,15 +85,12 @@ def extract_partial_items(content):
                 title = str(it.get("title", dest + "游")).strip()
                 loc = str(it.get("departure_location", "详见海报")).strip()
                 dates = str(it.get("departure_dates", "见海报")).strip()
-                
                 p_raw = it.get("price_numeric", 0)
                 try:
                     p_val = int(re.sub(r'[^\d]', '', str(p_raw)))
                 except Exception:
                     p_val = 0
-                
                 p_text = str(it.get("price_text", ("RM " + str(p_val)) if p_val > 0 else "详见海报")).strip()
-                
                 items.append({
                     "destination": dest if dest else "精选目的地",
                     "tour_code": code,
@@ -112,24 +106,9 @@ def extract_partial_items(content):
 
 def analyze_single_image(file_bytes, file_name, task_dict):
     encoded_string = compress_image(BytesIO(file_bytes))
-    
-    prompt = (
-        "分析图片，提取所有旅游团项目，返回 JSON 数组：\n"
-        "[\n"
-        "  {\n"
-        '    "destination": "目的地（如：武汉、青岛、内蒙古、岘港、沙坝、北京、桂林、九寨沟、江西、云南、厦门、韩国、海南）",\n'
-        '    "departure_location": "起飞城市（如：吉隆坡出发、槟城出发、新山出发、新加坡出发）",\n'
-        '    "tour_code": "SP开头的团号（如 SP002740）",\n'
-        '    "title": "行程名称或路线描述",\n'
-        '    "departure_dates": "出发日期",\n'
-        '    "price_numeric": 3199,\n'
-        '    "price_text": "RM 3199"\n'
-        "  }\n"
-        "]\n"
-        "注意：只输出合法的 JSON 数组，不要任何多余解释。"
-    )
+    prompt = "分析图片，提取所有旅游团项目，返回合法的纯 JSON 数组（含 destination, departure_location, tour_code, title, departure_dates, price_numeric, price_text 字段），不要任何解释。"
 
-    url = "[https://api.groq.com/openai/v1/chat/completions](https://api.groq.com/openai/v1/chat/completions)"
+    url = "https://api.groq.com/openai/v1/chat/completions"
     headers = {
         "Authorization": "Bearer " + GROQ_API_KEY,
         "Content-Type": "application/json"
@@ -155,7 +134,7 @@ def analyze_single_image(file_bytes, file_name, task_dict):
         try:
             response = requests.post(url, headers=headers, data=json.dumps(payload), timeout=180)
         except requests.exceptions.Timeout:
-            last_error = "请求超时(180s)，可能当前并发较高"
+            last_error = "请求超时(180s)"
             time.sleep(3)
             continue
         except Exception as e:
@@ -165,7 +144,6 @@ def analyze_single_image(file_bytes, file_name, task_dict):
             
         if response.status_code == 200:
             content = response.json()['choices'][0]['message']['content'].strip()
-            
             if "</think>" in content:
                 content = content.split("</think>")[-1].strip()
             content = re.sub(r'```(?:json)?', '', content).strip()
@@ -199,38 +177,18 @@ def analyze_single_image(file_bytes, file_name, task_dict):
             if rescued_items:
                 return rescued_items
                 
-            fallback_items = []
-            for line in content.split('\n'):
-                sp = re.search(r'(SP\d{4,7})', line)
-                if sp:
-                    p = re.search(r'RM\s*(\d+)', line)
-                    p_val = int(p.group(1)) if p else 0
-                    fallback_items.append({
-                        "destination": "精选目的地",
-                        "tour_code": sp.group(1),
-                        "title": line.strip("- *#"),
-                        "departure_location": "详见海报",
-                        "departure_dates": "见海报",
-                        "price_numeric": p_val,
-                        "price_text": ("RM " + str(p_val)) if p_val > 0 else "详见海报"
-                    })
-            if fallback_items:
-                return fallback_items
-                
-            last_error = "未能识别出旅游团格式，AI 返回片段：" + content[:120]
-            
+            last_error = "未能识别出旅游团格式"
         elif response.status_code == 429:
             wait_seconds = 25
             match = re.search(r'try again in ([\d\.]+)s', response.text)
             if match:
                 wait_seconds = int(float(match.group(1))) + 2
-            
             for remaining in range(wait_seconds, 0, -1):
                 task_dict["status_msg"] = "⏳ 触发免费配额保护，后台等待 " + str(remaining) + " 秒继续处理 " + file_name + " ..."
                 time.sleep(1)
             continue
         else:
-            last_error = "API 返回错误码 " + str(response.status_code) + ": " + response.text[:150]
+            last_error = "API 返回错误码 " + str(response.status_code)
             time.sleep(3)
             
     raise Exception(last_error if last_error else "多次尝试仍未能获取有效数据")
@@ -265,41 +223,11 @@ def create_html_report(df):
         loc = str(row.get('departure_location', '详见海报'))
         dates = str(row.get('departure_dates', '见海报'))
         title = str(row.get('title', '无'))
-        
-        card = (
-            '<div class="card">'
-            '<div class="card-header">'
-            '<span class="dest">📍 ' + dest + '</span>'
-            '<span class="price">' + price + '</span>'
-            '</div>'
-            '<div class="card-body">'
-            '<div class="meta-row">'
-            '<span><strong>团号：</strong> ' + code + '</span>'
-            '<span><strong>出发地：</strong> <span class="badge">' + loc + '</span></span>'
-            '</div>'
-            '<div class="dates"><strong>📅 出发日期：</strong> ' + dates + '</div>'
-            '<div class="route"><strong>路线：</strong> ' + title + '</div>'
-            '</div>'
-            '</div>'
-        )
+        card = '<div class="card"><div class="card-header"><span class="dest">📍 ' + dest + '</span><span class="price">' + price + '</span></div><div class="card-body"><div class="meta-row"><span><strong>团号：</strong> ' + code + '</span><span><strong>出发地：</strong> <span class="badge">' + loc + '</span></span></div><div class="dates"><strong>📅 出发日期：</strong> ' + dates + '</div><div class="route"><strong>路线：</strong> ' + title + '</div></div></div>'
         cards_list.append(card)
 
-    cards_html = "\n".join(cards_list)
+    cards_html = "".join(cards_list)
     total_str = str(len(df))
-
-    html_parts = [
-        '<!DOCTYPE html>',
-        '<html lang="zh-CN">',
-        '<head>',
-        '<meta charset="UTF-8">',
-        '<meta name="viewport" content="width=device-width, initial-scale=1.0">',
-        '<title>旅游团筛选清单</title>',
-        '<script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>',
-        '<style>',
-        'body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif; background-color: #f1f5f9; margin: 0; padding: 16px; color: #0f172a; }',
-        '.toolbar { max-width: 650px; margin: 0 auto 16px auto; display: flex; gap: 10px; }',
-        '.btn { flex: 1; padding: 12px; border: none; border-radius: 8px; font-size: 15px; font-weight: 600; cursor: pointer; text-align: center; }',
-        '.btn-img { background-color: #e11d48; color: #fff; }',
-        '.btn-pdf { background-color: #0284c7; color: #fff; }',
-        '#capture-area { max-width: 650px; margin: 0 auto; background-color: #ffffff; padding: 24px; border-radius: 12px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1); }',
-        '.main
+    
+    # 采用 Base64 编码的通用外壳，防止粘贴代码时被编辑器断行损坏
+    b64_template = "PCFET0NUWVBFIGh0bWw+PGh0bWwgbGFuZz0iemgtQ04iPjxoZWFkPjxtZXRhIGNoYXJzZXQ9IlVURi04Ij48bWV0YSBuYW1lPSJ2aWV3cG9ydCIgY29udGVudD0id2lkdGg9ZGV2aWNlLXdpZHRoLCBpbml0aWFsLXNjYWxlPTEuMCI+PHRpdGxlPuaXhea4uOWbouetlumAiem4heWNlTwvdGl0bGU+PHNjcmlwdCBzcmM9Imh0dHBzOi8vY2RuLmpzZGVsaXZyLm5ldC9ucG0vaHRtbDJjYW52YXNAMS40LjEvZGlzdC9odG1sMmNhbnZhcy5taW4uanMiPjwvc2NyaXB0PjxzdHlsZT5ib2R5e2ZvbnQtZmFtaWx5Oi1hcHBsZS1zeXN0ZW0sQmxpbmtNYWNTeXN0ZW1Gb250LCJTZWdvZSBVSSIsUm9ib3RvLCJQaW5nRmFuZyBTQyIsIkhpcmFnaW5vIFNhbnMgR0IiLCJNaWNyb3NvZnQgWWFIZWkiLHNhbnMtc2VyaWY7YmFja2dyb3VuZC1jb2xvcjojZjFmNWY5O21hcmdpbjowO3BhZGRpbmc6MTZweDtjb2xvcjojMGYxNzJhO30udG9vbGJhcnttYXgtd2lkdGg6NjUwcHg7bWFyZ2luOjAgYXV0byAxNnB4IGF1dG87ZGlzcGxheTpmbGV4O2dhcDoxMHB4O30uYnRue2ZsZXg6MTtwYWRkaW5nOjEycHg7Ym9yZGVyOm5vbmU7Ym9yZGVyLXJhZGl1czo4cHg7Zm9udC1zaXplOjE1cHg7Zm9udC13ZWlnaHQ6NjAwO2N1cnNvcjpwb2ludGVyO3RleHQtYWxpZ246Y2VudGVyO30uYnRuLWltZ3tiYWNrZ3JvdW5kLWNvbG9yOiNlMTFkNDg7Y29sb3I6I2ZmZjt9LmJ0bi1wZGZ7YmFja2dyb3VuZC1jb2xvcjojMDI4NGM3O2NvbG9yOiNmZmY7fSNjYXB0dXJlLWFyZWF7bWF4LXdpZHRoOjY1MHB4O21hcmdpbjowIGF1dG87YmFja2dyb3VuZC1jb2xvcjojZmZmZmZmO3BhZGRpbmc6MjRweDtib3JkZXItcmFkaXVzOjEycHg7Ym94LXNoYWRvdzowIDRweCA2cHggLTFweCByZ2JhKDAsMCwwLDAuMSk7fS5tYWluLXRpdGxle3RleHQtYWxpZ246Y2VudGVyO2ZvbnQtc2l6ZToyMnB4O2ZvbnQtd2VpZ2h0OmJvbGQ7bWFyZ2luOjAgMCA2cHggMDt9LnN1Yi10aXRsZXt0ZXh0LWFsaWduOmNlbnRlcjtjb2xvcjojNjQ3NDhiO2ZvbnQtc2l6ZToxM3B4O21hcmdpbjowIDAgMjB
