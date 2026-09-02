@@ -9,7 +9,6 @@ st.set_page_config(page_title="AI 旅游团智能筛选助手", page_icon="✈�
 st.title("✈️ 旅游团宣传单智能分析与筛选")
 st.markdown("批量上传旅游宣传图片，AI 自动提取价格、起飞地点并支持多条件筛选！")
 
-# 已为你配置好 Groq API Key
 GROQ_API_KEY = "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"
 
 uploaded_files = st.file_uploader(
@@ -30,7 +29,7 @@ if uploaded_files:
                     {
                         "type": "text",
                         "text": """
-                        分析这几张旅游宣传单图片。请提取所有图片中出现的所有旅游团信息，并【必须】把它们合并成一个合法的 JSON 列表返回，不要包含任何 markdown 标记之外的多余文字，格式如下：
+                        分析这几张旅游宣传单图片。请提取所有图片中出现的所有旅游团信息，并【必须】把它们合并成一个合法的 JSON 列表返回，不要包含任何 markdown 标记以外的多余文字，格式如下：
                         [
                           {
                             "destination": "目的地，例如：海南岛、哈尔滨、上海、大连、广州澳门、重庆、张家界、北疆、南疆",
@@ -62,7 +61,7 @@ if uploaded_files:
                     "Content-Type": "application/json"
                 }
                 payload = {
-                    "model": "llama-3.2-11b-vision-preview",
+                    "model": "meta-llama/llama-3.2-90b-vision-instruct", # 换成了目前最新的主力视觉大模型
                     "messages": [
                         {
                             "role": "user",
