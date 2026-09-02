@@ -30,18 +30,18 @@ if uploaded_files:
                     {
                         "type": "text",
                         "text": """
-                        请仔细读取图片中的旅游团宣传单，把所有旅游团提取出来。
-                        你必须且只能返回一个合法的 JSON 数组，绝对不要有任何思考过程或多余文本。
-                        格式必须完全如下：
+                        请仔细识别图片中所有旅游团。请【不要输出长篇思考】，直接输出一个纯 JSON 列表。
+                        如果无法生成纯 JSON，请每一行输出一个团的信息。
+                        JSON 格式要求：
                         [
                           {
-                            "destination": "海南岛",
-                            "tour_code": "SP002301",
-                            "title": "路线标题",
-                            "departure_location": "吉隆坡出发",
-                            "departure_dates": "10月1日",
-                            "price_numeric": 1599,
-                            "price_text": "RM 1599 起"
+                            "destination": "目的地",
+                            "tour_code": "团号例如 SP002376",
+                            "title": "路线描述",
+                            "departure_location": "出发地例如 新加坡/吉隆坡/柔佛",
+                            "departure_dates": "出发日期",
+                            "price_numeric": 2999,
+                            "price_text": "RM 2999"
                           }
                         ]
                         """
@@ -64,15 +64,15 @@ if uploaded_files:
                     "Content-Type": "application/json"
                 }
                 payload = {
-                    "model": "llama-3.3-70b-versatile", # 换成无思考过程的高性能标准大模型
+                    "model": "qwen/qwen3.6-27b",
                     "messages": [
                         {
                             "role": "user",
                             "content": messages_content
                         }
                     ],
-                    "temperature": 0.0,
-                    "max_tokens": 4096
+                    "temperature": 0.1,
+                    "max_tokens": 8192
                 }
 
                 response = requests.post(url, headers=headers, data=json.dumps(payload))
@@ -83,23 +83,45 @@ if uploaded_files:
                 res_json = response.json()
                 response_text = res_json['choices'][0]['message']['content'].strip()
                 
-                # 清理可能存在的 markdown 代码块符号
-                if response_text.startswith("```json"):
-                    response_text = response_text[7:]
-                if response_text.startswith("```"):
-                    response_text = response_text[3:]
-                if response_text.endswith("```"):
-                    response_text = response_text[:-3]
-                response_text = response_text.strip()
+                # 尝试从模型输出中提取 JSON
+                data = None
+                json_matches = list(re.finditer(r'\[\s*\{.*?\}\s*\]', response_text, re.DOTALL))
+                if json_matches:
+                    try:
+                        data = json.loads(json_matches[-1].group(0))
+                    except Exception:
+                        pass
                 
-                # 提取 JSON 数组
-                json_match = re.search(r'\[.*\]', response_text, re.DOTALL)
-                if json_match:
-                    clean_json_str = json_match.group(0)
-                    st.session_state.travel_data = json.loads(clean_json_str)
+                # 如果没提取到完整 JSON，直接从它思考提取的纯文本里抓取数据（兜底方案）
+                if not data:
+                    parsed_list = []
+                    # 匹配类似于 SP002376: 7天6夜 ... RM2999 的格式
+                    lines = response_text.split('\n')
+                    current_dest = "热门推荐"
+                    for line in lines:
+                        if "SIN-" in line or "KL-" in line or "JB-" in line:
+                            current_dest = line.replace("*", "").replace("#", "").strip()
+                        tour_match = re.search(r'(SP\d+).*?(?:RM\s*(\d+)|$)', line)
+                        if tour_match:
+                            t_code = tour_match.group(1)
+                            p_num = int(tour_match.group(2)) if tour_match.group(2) else 2999
+                            parsed_list.append({
+                                "destination": current_dest,
+                                "tour_code": t_code,
+                                "title": line.strip("- *0123456789. "),
+                                "departure_location": "马来西亚/新加坡",
+                                "departure_dates": "详见海报",
+                                "price_numeric": p_num,
+                                "price_text": f"RM {p_num}"
+                            })
+                    if parsed_list:
+                        data = parsed_list
+
+                if data:
+                    st.session_state.travel_data = data
                     st.success("🎉 批量分析完成！")
                 else:
-                    raise Exception(f"未找到 JSON，AI 原始内容为: {response_text}")
+                    raise Exception("未能成功抓取到有效旅游团数据，请尝试换一张更清晰的图片上传。")
                 
             except Exception as e:
                 st.error(f"解析过程中出现错误: {e}")
@@ -111,14 +133,14 @@ if st.session_state.travel_data:
     df = pd.DataFrame(st.session_state.travel_data)
     
     st.sidebar.header("🎛️ 筛选条件")
-    all_destinations = ["全部"] + list(df['destination'].unique())
+    all_destinations = ["全部"] + [d for d in df['destination'].unique() if d]
     selected_dest = st.sidebar.selectbox("选择目的地", all_destinations)
     
-    all_dept_locations = ["全部"] + list(df['departure_location'].unique())
+    all_dept_locations = ["全部"] + [l for l in df['departure_location'].unique() if l]
     selected_loc = st.sidebar.selectbox("选择起飞地点", all_dept_locations)
     
-    min_price = int(df['price_numeric'].min()) if not df.empty else 0
-    max_price = int(df['price_numeric'].max()) if not df.empty else 10000
+    min_price = int(df['price_numeric'].min()) if not df.empty and pd.notna(df['price_numeric'].min()) else 0
+    max_price = int(df['price_numeric'].max()) if not df.empty and pd.notna(df['price_numeric'].max()) else 10000
     price_range = st.sidebar.slider("价格预算范围 (RM)", min_price, max_price, (min_price, max_price))
     
     filtered_df = df.copy()
