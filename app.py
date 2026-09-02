@@ -31,46 +31,40 @@ if "task_state" not in st.session_state:
 
 def trigger_notification():
     """触发手机/电脑浏览器的系统通知与提示音"""
-    html_code = """
-    <script>
-    function notifyUser() {
-        try {
-            const ctx = new (window.AudioContext || window.webkitAudioContext)();
-            const osc = ctx.createOscillator();
-            const gain = ctx.createGain();
-            osc.type = 'sine';
-            osc.frequency.setValueAtTime(587.33, ctx.currentTime);
-            osc.frequency.setValueAtTime(880, ctx.currentTime + 0.15);
-            gain.gain.setValueAtTime(0.3, ctx.currentTime);
-            gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.6);
-            osc.connect(gain);
-            gain.connect(ctx.destination);
-            osc.start();
-            osc.stop(ctx.currentTime + 0.6);
-        } catch(e) {}
-
-        if ("Notification" in window) {
-            if (Notification.permission === "granted") {
-                new Notification("✈️ 旅游团分析完成！", {
-                    body: "所有海报数据已提取完毕，快回来看结果吧！",
-                    icon: "[https://fav.farm/](https://fav.farm/)✈️"
-                });
-            } else if (Notification.permission !== "denied") {
-                Notification.requestPermission().then(permission => {
-                    if (permission === "granted") {
-                        new Notification("✈️ 旅游团分析完成！", {
-                            body: "所有海报数据已提取完毕，快回来看结果吧！",
-                            icon: "[https://fav.farm/](https://fav.farm/)✈️"
-                        });
-                    }
-                });
-            }
+    js = """<script>
+    try {
+        const ctx = new (window.AudioContext || window.webkitAudioContext)();
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(587.33, ctx.currentTime);
+        osc.frequency.setValueAtTime(880, ctx.currentTime + 0.15);
+        gain.gain.setValueAtTime(0.3, ctx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.6);
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.start();
+        osc.stop(ctx.currentTime + 0.6);
+    } catch(e) {}
+    if ("Notification" in window) {
+        if (Notification.permission === "granted") {
+            new Notification("✈️ 旅游团分析完成！", {
+                body: "所有海报数据已提取完毕，快回来看结果吧！",
+                icon: "[https://fav.farm/](https://fav.farm/)✈️"
+            });
+        } else if (Notification.permission !== "denied") {
+            Notification.requestPermission().then(function(p) {
+                if (p === "granted") {
+                    new Notification("✈️ 旅游团分析完成！", {
+                        body: "所有海报数据已提取完毕，快回来看结果吧！",
+                        icon: "[https://fav.farm/](https://fav.farm/)✈️"
+                    });
+                }
+            });
         }
     }
-    notifyUser();
-    </script>
-    """
-    components.html(html_code, height=0)
+    </script>"""
+    components.html(js, height=0)
 
 def compress_image(uploaded_file, max_size=650, quality=55):
     img = Image.open(uploaded_file)
@@ -119,21 +113,21 @@ def extract_partial_items(content):
 def analyze_single_image(file_bytes, file_name, task_dict):
     encoded_string = compress_image(BytesIO(file_bytes))
     
-    prompt = """
-    分析图片，提取所有旅游团项目，返回 JSON 数组：
-    [
-      {
-        "destination": "目的地（如：武汉、青岛、内蒙古、岘港、沙坝、北京、桂林、九寨沟、江西、云南、厦门、韩国、海南）",
-        "departure_location": "起飞城市（如：吉隆坡出发、槟城出发、新山出发、新加坡出发）",
-        "tour_code": "SP开头的团号（如 SP002740）",
-        "title": "行程名称或路线描述",
-        "departure_dates": "出发日期",
-        "price_numeric": 3199,
-        "price_text": "RM 3199"
-      }
-    ]
-    注意：只输出合法的 JSON 数组，不要任何多余解释。
-    """
+    prompt = (
+        "分析图片，提取所有旅游团项目，返回 JSON 数组：\n"
+        "[\n"
+        "  {\n"
+        '    "destination": "目的地（如：武汉、青岛、内蒙古、岘港、沙坝、北京、桂林、九寨沟、江西、云南、厦门、韩国、海南）",\n'
+        '    "departure_location": "起飞城市（如：吉隆坡出发、槟城出发、新山出发、新加坡出发）",\n'
+        '    "tour_code": "SP开头的团号（如 SP002740）",\n'
+        '    "title": "行程名称或路线描述",\n'
+        '    "departure_dates": "出发日期",\n'
+        '    "price_numeric": 3199,\n'
+        '    "price_text": "RM 3199"\n'
+        "  }\n"
+        "]\n"
+        "注意：只输出合法的 JSON 数组，不要任何多余解释。"
+    )
 
     url = "[https://api.groq.com/openai/v1/chat/completions](https://api.groq.com/openai/v1/chat/completions)"
     headers = {
@@ -232,11 +226,11 @@ def analyze_single_image(file_bytes, file_name, task_dict):
                 wait_seconds = int(float(match.group(1))) + 2
             
             for remaining in range(wait_seconds, 0, -1):
-                task_dict["status_msg"] = f"⏳ 触发免费配额保护，后台等待 {remaining} 秒继续处理 {file_name} ..."
+                task_dict["status_msg"] = "⏳ 触发免费配额保护，后台等待 " + str(remaining) + " 秒继续处理 " + file_name + " ..."
                 time.sleep(1)
             continue
         else:
-            last_error = f"API 返回错误码 {response.status_code}: {response.text[:150]}"
+            last_error = "API 返回错误码 " + str(response.status_code) + ": " + response.text[:150]
             time.sleep(3)
             
     raise Exception(last_error if last_error else "多次尝试仍未能获取有效数据")
@@ -244,15 +238,15 @@ def analyze_single_image(file_bytes, file_name, task_dict):
 def background_worker(files_data, task_dict):
     total = len(files_data)
     for idx, (f_name, f_bytes) in enumerate(files_data):
-        task_dict["status_msg"] = f"⚡ 后台正在解析第 {idx + 1}/{total} 张: {f_name} ..."
+        task_dict["status_msg"] = "⚡ 后台正在解析第 " + str(idx + 1) + "/" + str(total) + " 张: " + f_name + " ..."
         try:
             data = analyze_single_image(f_bytes, f_name, task_dict)
             if data:
                 task_dict["results"].extend(data)
             else:
-                task_dict["errors"].append(f"{f_name}: 未能提取到有效数据")
+                task_dict["errors"].append(f_name + ": 未能提取到有效数据")
         except Exception as err:
-            task_dict["errors"].append(f"{f_name}: {str(err)}")
+            task_dict["errors"].append(f_name + ": " + str(err))
             
         task_dict["progress"] = (idx + 1) / total
         if idx + 1 < total:
@@ -263,7 +257,7 @@ def background_worker(files_data, task_dict):
     task_dict["status_msg"] = "✅ 全部图片已在后台分析完成！"
 
 def create_html_report(df):
-    cards_html = ""
+    cards_list = []
     for _, row in df.iterrows():
         dest = str(row.get('destination', '未知'))
         price = str(row.get('price_text', 'N/A'))
@@ -272,31 +266,40 @@ def create_html_report(df):
         dates = str(row.get('departure_dates', '见海报'))
         title = str(row.get('title', '无'))
         
-        cards_html += """
-        <div class="card">
-            <div class="card-header">
-                <span class="dest">📍 """ + dest + """</span>
-                <span class="price">""" + price + """</span>
-            </div>
-            <div class="card-body">
-                <div class="meta-row">
-                    <span><strong>团号：</strong> """ + code + """</span>
-                    <span><strong>出发地：</strong> <span class="badge">""" + loc + """</span></span>
-                </div>
-                <div class="dates"><strong>📅 出发日期：</strong> """ + dates + """</div>
-                <div class="route"><strong>路线：</strong> """ + title + """</div>
-            </div>
-        </div>
-        """
+        card = (
+            '<div class="card">'
+            '<div class="card-header">'
+            '<span class="dest">📍 ' + dest + '</span>'
+            '<span class="price">' + price + '</span>'
+            '</div>'
+            '<div class="card-body">'
+            '<div class="meta-row">'
+            '<span><strong>团号：</strong> ' + code + '</span>'
+            '<span><strong>出发地：</strong> <span class="badge">' + loc + '</span></span>'
+            '</div>'
+            '<div class="dates"><strong>📅 出发日期：</strong> ' + dates + '</div>'
+            '<div class="route"><strong>路线：</strong> ' + title + '</div>'
+            '</div>'
+            '</div>'
+        )
+        cards_list.append(card)
 
+    cards_html = "\n".join(cards_list)
     total_str = str(len(df))
-    template = """<!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>旅游团筛选清单</title>
-    <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
-    <style>
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif
+
+    html_parts = [
+        '<!DOCTYPE html>',
+        '<html lang="zh-CN">',
+        '<head>',
+        '<meta charset="UTF-8">',
+        '<meta name="viewport" content="width=device-width, initial-scale=1.0">',
+        '<title>旅游团筛选清单</title>',
+        '<script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>',
+        '<style>',
+        'body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif; background-color: #f1f5f9; margin: 0; padding: 16px; color: #0f172a; }',
+        '.toolbar { max-width: 650px; margin: 0 auto 16px auto; display: flex; gap: 10px; }',
+        '.btn { flex: 1; padding: 12px; border: none; border-radius: 8px; font-size: 15px; font-weight: 600; cursor: pointer; text-align: center; }',
+        '.btn-img { background-color: #e11d48; color: #fff; }',
+        '.btn-pdf { background-color: #0284c7; color: #fff; }',
+        '#capture-area { max-width: 650px; margin: 0 auto; background-color: #ffffff; padding: 24px; border-radius: 12px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1); }',
+        '.main
