@@ -30,8 +30,9 @@ if uploaded_files:
                     {
                         "type": "text",
                         "text": """
-                        请分析图片，提取所有旅游团信息。
-                        注意：你必须在回复的最后面，输出一个合法的 JSON 数组（以 [ 开头，以 ] 结尾）。格式必须严格如下：
+                        请仔细读取图片中的旅游团宣传单，把所有旅游团提取出来。
+                        你必须且只能返回一个合法的 JSON 数组，绝对不要有任何思考过程或多余文本。
+                        格式必须完全如下：
                         [
                           {
                             "destination": "海南岛",
@@ -63,14 +64,15 @@ if uploaded_files:
                     "Content-Type": "application/json"
                 }
                 payload = {
-                    "model": "qwen/qwen3.6-27b",
+                    "model": "llama-3.3-70b-versatile", # 换成无思考过程的高性能标准大模型
                     "messages": [
                         {
                             "role": "user",
                             "content": messages_content
                         }
                     ],
-                    "temperature": 0.0
+                    "temperature": 0.0,
+                    "max_tokens": 4096
                 }
 
                 response = requests.post(url, headers=headers, data=json.dumps(payload))
@@ -81,15 +83,23 @@ if uploaded_files:
                 res_json = response.json()
                 response_text = res_json['choices'][0]['message']['content'].strip()
                 
-                # 【终极抓取逻辑】：不管前面有多少 <think> 废话，我们直接从后往前找最后一个 '[' 开始，一直到最后一个 ']' 结束！
-                matches = list(re.finditer(r'\[\s*\{.*?\}\s*\]', response_text, re.DOTALL))
-                if matches:
-                    # 取最后一个匹配项（通常是 AI 思考完后最终输出的 JSON）
-                    clean_json_str = matches[-1].group(0)
+                # 清理可能存在的 markdown 代码块符号
+                if response_text.startswith("```json"):
+                    response_text = response_text[7:]
+                if response_text.startswith("```"):
+                    response_text = response_text[3:]
+                if response_text.endswith("```"):
+                    response_text = response_text[:-3]
+                response_text = response_text.strip()
+                
+                # 提取 JSON 数组
+                json_match = re.search(r'\[.*\]', response_text, re.DOTALL)
+                if json_match:
+                    clean_json_str = json_match.group(0)
                     st.session_state.travel_data = json.loads(clean_json_str)
                     st.success("🎉 批量分析完成！")
                 else:
-                    raise Exception(f"全文未找到 JSON 数组。AI 原始内容摘要：{response_text[-400:]}")
+                    raise Exception(f"未找到 JSON，AI 原始内容为: {response_text}")
                 
             except Exception as e:
                 st.error(f"解析过程中出现错误: {e}")
