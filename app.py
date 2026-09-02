@@ -4,6 +4,9 @@ import json
 import requests
 import base64
 import re
+import time
+from io import BytesIO
+from PIL import Image
 
 st.set_page_config(page_title="AI 旅游团智能筛选助手", page_icon="✈️", layout="wide")
 
@@ -11,6 +14,91 @@ st.title("✈️ 旅游团宣传单智能分析与筛选")
 st.markdown("批量上传旅游宣传图片，AI 自动提取价格、起飞地点并支持多条件筛选！")
 
 GROQ_API_KEY = "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"
+
+def compress_image(uploaded_file, max_size=900, quality=70):
+    """等比缩小图片尺寸与体积，确保单图占用极低 Token"""
+    img = Image.open(uploaded_file)
+    if img.mode in ("RGBA", "P"):
+        img = img.convert("RGB")
+    img.thumbnail((max_size, max_size), Image.Resampling.LANCZOS)
+    buffer = BytesIO()
+    img.save(buffer, format="JPEG", quality=quality)
+    return base64.b64encode(buffer.getvalue()).decode("utf-8")
+
+def analyze_single_image(file):
+    """单张图片识别，隔离单次 Token 开销"""
+    encoded_string = compress_image(file)
+    prompt = """
+    请识别该旅游宣传单中的所有旅游团。请【绝对不要输出长篇思考】，直接输出一个 JSON 数组。
+    格式要求：
+    [
+      {
+        "destination": "目的地",
+        "tour_code": "团号例如 SP002376",
+        "title": "路线描述",
+        "departure_location": "出发地点例如 吉隆坡/新加坡/柔佛",
+        "departure_dates": "出发日期",
+        "price_numeric": 2999,
+        "price_text": "RM 2999"
+      }
+    ]
+    """
+    messages_content = [
+        {"type": "text", "text": prompt},
+        {
+            "type": "image_url",
+            "image_url": {"url": f"data:image/jpeg;base64,{encoded_string}"}
+        }
+    ]
+    
+    url = "https://api.groq.com/openai/v1/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {GROQ_API_KEY}",
+        "Content-Type": "application/json"
+    }
+    payload = {
+        "model": "qwen/qwen3.6-27b",
+        "messages": [{"role": "user", "content": messages_content}],
+        "temperature": 0.1,
+        "max_tokens": 2048
+    }
+    
+    response = requests.post(url, headers=headers, data=json.dumps(payload))
+    if response.status_code != 200:
+        return []
+    
+    res_json = response.json()
+    response_text = res_json['choices'][0]['message']['content'].strip()
+    
+    # 优先解析 JSON
+    json_matches = list(re.finditer(r'\[\s*\{.*?\}\s*\]', response_text, re.DOTALL))
+    if json_matches:
+        try:
+            return json.loads(json_matches[-1].group(0))
+        except Exception:
+            pass
+            
+    # 兜底文本行解析
+    fallback_list = []
+    lines = response_text.split('\n')
+    current_dest = "精选推荐"
+    for line in lines:
+        if any(prefix in line for prefix in ["SIN-", "KL-", "JB-", "目的地"]):
+            current_dest = line.replace("*", "").replace("#", "").strip()
+        tour_match = re.search(r'(SP\d+).*?(?:RM\s*(\d+)|$)', line)
+        if tour_match:
+            t_code = tour_match.group(1)
+            p_num = int(tour_match.group(2)) if tour_match.group(2) else 1999
+            fallback_list.append({
+                "destination": current_dest,
+                "tour_code": t_code,
+                "title": line.strip("- *0123456789. "),
+                "departure_location": "马来西亚/新加坡",
+                "departure_dates": "详见海报",
+                "price_numeric": p_num,
+                "price_text": f"RM {p_num}"
+            })
+    return fallback_list
 
 uploaded_files = st.file_uploader(
     "批量上传宣传图 (支持 JPG/PNG，可多选)", 
@@ -24,107 +112,32 @@ if "travel_data" not in st.session_state:
 if uploaded_files:
     st.success(f"已选择 {len(uploaded_files)} 张图片")
     if st.button("🚀 开始让 AI 批量分析图片", type="primary"):
-        with st.spinner("AI 正在努力批量识别图片中的文字、价格和起飞地点，请稍候..."):
+        all_results = []
+        progress_bar = st.progress(0)
+        status_text = st.empty()
+        
+        for idx, file in enumerate(uploaded_files):
+            status_text.text(f"正在分析第 {idx + 1}/{len(uploaded_files)} 张图片: {file.name} ...")
             try:
-                messages_content = [
-                    {
-                        "type": "text",
-                        "text": """
-                        请仔细识别图片中所有旅游团。请【不要输出长篇思考】，直接输出一个纯 JSON 列表。
-                        如果无法生成纯 JSON，请每一行输出一个团的信息。
-                        JSON 格式要求：
-                        [
-                          {
-                            "destination": "目的地",
-                            "tour_code": "团号例如 SP002376",
-                            "title": "路线描述",
-                            "departure_location": "出发地例如 新加坡/吉隆坡/柔佛",
-                            "departure_dates": "出发日期",
-                            "price_numeric": 2999,
-                            "price_text": "RM 2999"
-                          }
-                        ]
-                        """
-                    }
-                ]
-                
-                for file in uploaded_files:
-                    encoded_string = base64.b64encode(file.getvalue()).decode('utf-8')
-                    mime = file.type
-                    messages_content.append({
-                        "type": "image_url",
-                        "image_url": {
-                            "url": f"data:{mime};base64,{encoded_string}"
-                        }
-                    })
-
-                url = "https://api.groq.com/openai/v1/chat/completions"
-                headers = {
-                    "Authorization": f"Bearer {GROQ_API_KEY}",
-                    "Content-Type": "application/json"
-                }
-                payload = {
-                    "model": "qwen/qwen3.6-27b",
-                    "messages": [
-                        {
-                            "role": "user",
-                            "content": messages_content
-                        }
-                    ],
-                    "temperature": 0.1,
-                    "max_tokens": 8192
-                }
-
-                response = requests.post(url, headers=headers, data=json.dumps(payload))
-                
-                if response.status_code != 200:
-                    raise Exception(f"API 请求失败: {response.text}")
-                
-                res_json = response.json()
-                response_text = res_json['choices'][0]['message']['content'].strip()
-                
-                # 尝试从模型输出中提取 JSON
-                data = None
-                json_matches = list(re.finditer(r'\[\s*\{.*?\}\s*\]', response_text, re.DOTALL))
-                if json_matches:
-                    try:
-                        data = json.loads(json_matches[-1].group(0))
-                    except Exception:
-                        pass
-                
-                # 如果没提取到完整 JSON，直接从它思考提取的纯文本里抓取数据（兜底方案）
-                if not data:
-                    parsed_list = []
-                    # 匹配类似于 SP002376: 7天6夜 ... RM2999 的格式
-                    lines = response_text.split('\n')
-                    current_dest = "热门推荐"
-                    for line in lines:
-                        if "SIN-" in line or "KL-" in line or "JB-" in line:
-                            current_dest = line.replace("*", "").replace("#", "").strip()
-                        tour_match = re.search(r'(SP\d+).*?(?:RM\s*(\d+)|$)', line)
-                        if tour_match:
-                            t_code = tour_match.group(1)
-                            p_num = int(tour_match.group(2)) if tour_match.group(2) else 2999
-                            parsed_list.append({
-                                "destination": current_dest,
-                                "tour_code": t_code,
-                                "title": line.strip("- *0123456789. "),
-                                "departure_location": "马来西亚/新加坡",
-                                "departure_dates": "详见海报",
-                                "price_numeric": p_num,
-                                "price_text": f"RM {p_num}"
-                            })
-                    if parsed_list:
-                        data = parsed_list
-
+                data = analyze_single_image(file)
                 if data:
-                    st.session_state.travel_data = data
-                    st.success("🎉 批量分析完成！")
-                else:
-                    raise Exception("未能成功抓取到有效旅游团数据，请尝试换一张更清晰的图片上传。")
+                    all_results.extend(data)
+            except Exception as err:
+                st.warning(f"图片 {file.name} 解析跳过: {err}")
+            
+            progress_bar.progress((idx + 1) / len(uploaded_files))
+            # 多张处理时每张间隔 1.5 秒，避免触碰 Groq 速率限制
+            if idx + 1 < len(uploaded_files):
+                time.sleep(1.5)
                 
-            except Exception as e:
-                st.error(f"解析过程中出现错误: {e}")
+        status_text.empty()
+        progress_bar.empty()
+        
+        if all_results:
+            st.session_state.travel_data = all_results
+            st.success(f"🎉 批量分析完成！共识别出 {len(all_results)} 个旅游团信息。")
+        else:
+            st.error("未能从上传的图片中解析出有效信息，请检查图片清晰度。")
 
 if st.session_state.travel_data:
     st.markdown("---")
@@ -133,15 +146,17 @@ if st.session_state.travel_data:
     df = pd.DataFrame(st.session_state.travel_data)
     
     st.sidebar.header("🎛️ 筛选条件")
-    all_destinations = ["全部"] + [d for d in df['destination'].unique() if d]
+    all_destinations = ["全部"] + [str(d) for d in df['destination'].unique() if pd.notna(d)]
     selected_dest = st.sidebar.selectbox("选择目的地", all_destinations)
     
-    all_dept_locations = ["全部"] + [l for l in df['departure_location'].unique() if l]
+    all_dept_locations = ["全部"] + [str(l) for l in df['departure_location'].unique() if pd.notna(l)]
     selected_loc = st.sidebar.selectbox("选择起飞地点", all_dept_locations)
     
-    min_price = int(df['price_numeric'].min()) if not df.empty and pd.notna(df['price_numeric'].min()) else 0
-    max_price = int(df['price_numeric'].max()) if not df.empty and pd.notna(df['price_numeric'].max()) else 10000
-    price_range = st.sidebar.slider("价格预算范围 (RM)", min_price, max_price, (min_price, max_price))
+    min_val = int(df['price_numeric'].min()) if not df.empty and pd.notna(df['price_numeric'].min()) else 0
+    max_val = int(df['price_numeric'].max()) if not df.empty and pd.notna(df['price_numeric'].max()) else 10000
+    if min_val >= max_val:
+        max_val = min_val + 1000
+    price_range = st.sidebar.slider("价格预算范围 (RM)", min_val, max_val, (min_val, max_val))
     
     filtered_df = df.copy()
     if selected_dest != "全部":
@@ -160,11 +175,11 @@ if st.session_state.travel_data:
         with st.container(border=True):
             col1, col2, col3 = st.columns([3, 2, 2])
             with col1:
-                st.markdown(f"### 📍 **{row['destination']}**")
-                st.write(f"**路线：** {row['title']}")
-                st.write(f"**团号：** `{row['tour_code']}`")
+                st.markdown(f"### 📍 **{row.get('destination', '未知')}**")
+                st.write(f"**路线：** {row.get('title', '无')}")
+                st.write(f"**团号：** `{row.get('tour_code', '无')}`")
             with col2:
-                st.write(f"🛫 **起飞点：** {row['departure_location']}")
-                st.write(f"📅 **出发日期：** {row['departure_dates']}")
+                st.write(f"🛫 **起飞点：** {row.get('departure_location', '无')}")
+                st.write(f"📅 **出发日期：** {row.get('departure_dates', '无')}")
             with col3:
-                st.markdown(f"### 💰 **{row['price_text']}**")
+                st.markdown(f"### 💰 **{row.get('price_text', '无')}**")
