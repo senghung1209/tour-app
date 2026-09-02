@@ -61,7 +61,7 @@ if uploaded_files:
                     "Content-Type": "application/json"
                 }
                 payload = {
-                    "model": "meta-llama/llama-3.2-90b-vision-instruct", # 换成了目前最新的主力视觉大模型
+                    "model": "llama-3.2-11b-vision-instruct",
                     "messages": [
                         {
                             "role": "user",
