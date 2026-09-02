@@ -3,6 +3,7 @@ import pandas as pd
 import json
 import requests
 import base64
+import re
 
 st.set_page_config(page_title="AI 旅游团智能筛选助手", page_icon="✈️", layout="wide")
 
@@ -29,18 +30,19 @@ if uploaded_files:
                     {
                         "type": "text",
                         "text": """
-                        分析这几张旅游宣传单图片。请提取所有图片中出现的所有旅游团信息，并【必须】把它们合并成一个合法的 JSON 列表返回，不要包含任何 markdown 标记以外的多余文字，格式如下：
+                        分析这几张旅游宣传单图片。请提取所有图片中出现的所有旅游团信息，并【必须】以合法的 JSON 数组格式返回。例如：
                         [
                           {
-                            "destination": "目的地，例如：海南岛、哈尔滨、上海、大连、广州澳门、重庆、张家界、北疆、南疆",
-                            "tour_code": "团号，例如：SP002301",
-                            "title": "路线标题或详细描述",
-                            "departure_location": "起飞地点，例如：吉隆坡出发、柔佛起飞等",
-                            "departure_dates": "出发日期字符串",
+                            "destination": "海南岛",
+                            "tour_code": "SP002301",
+                            "title": "路线标题",
+                            "departure_location": "吉隆坡出发",
+                            "departure_dates": "10月1日",
                             "price_numeric": 1599,
                             "price_text": "RM 1599 起"
                           }
                         ]
+                        注意：只需输出 JSON 列表，不要包含任何多余的解释或 markdown 符号。
                         """
                     }
                 ]
@@ -61,7 +63,7 @@ if uploaded_files:
                     "Content-Type": "application/json"
                 }
                 payload = {
-                    "model": "qwen/qwen3.6-27b",  # 使用 Groq 当前稳定的多模态视觉模型
+                    "model": "qwen/qwen3.6-27b",
                     "messages": [
                         {
                             "role": "user",
@@ -79,13 +81,14 @@ if uploaded_files:
                 res_json = response.json()
                 response_text = res_json['choices'][0]['message']['content'].strip()
                 
-                if response_text.startswith("```json"):
-                    response_text = response_text[7:-3].strip()
-                elif response_text.startswith("```"):
-                    response_text = response_text[3:-3].strip()
-                    
-                st.session_state.travel_data = json.loads(response_text)
-                st.success("🎉 批量分析完成！")
+                # 智能清洗：自动提取大括号或中括号包裹的 JSON 内容
+                json_match = re.search(r'(\[.*\]|\{.*\})', response_text, re.DOTALL)
+                if json_match:
+                    clean_json_str = json_match.group(1)
+                    st.session_state.travel_data = json.loads(clean_json_str)
+                    st.success("🎉 批量分析完成！")
+                else:
+                    raise Exception(f"未能从 AI 回复中解析出有效 JSON，原始内容为: {response_text}")
                 
             except Exception as e:
                 st.error(f"解析过程中出现错误: {e}")
