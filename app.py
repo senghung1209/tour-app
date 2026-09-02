@@ -316,4 +316,53 @@ if st.session_state.travel_data:
         
     if selected_loc == "🇲🇾 全马来西亚出发 (包含吉隆坡/新山/槟城)":
         malaysia_keywords = ["吉隆坡", "新山", "JB", "槟城", "柔佛", "KUL", "PEN", "JHB", "马来西亚"]
-        filtered_df = filtered_df[filtered_df['departure_location'].
+        filtered_df = filtered_df[filtered_df['departure_location'].apply(
+            lambda loc: any(kw in str(loc) for kw in malaysia_keywords)
+        )]
+    elif selected_loc != "全部":
+        filtered_df = filtered_df[filtered_df['departure_location'] == selected_loc]
+        
+    filtered_df = filtered_df[
+        (filtered_df['price_numeric'] >= price_range[0]) & 
+        (filtered_df['price_numeric'] <= price_range[1])
+    ]
+    
+    st.markdown("### 📥 导出筛选结果")
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        html_report = create_html_report(filtered_df)
+        st.download_button(
+            label="📄 下载长图 / PDF 报告文件 (HTML)",
+            data=html_report,
+            file_name="旅游团筛选清单.html",
+            mime="text/html",
+            type="primary"
+        )
+        
+    with col2:
+        csv_bytes = filtered_df.to_csv(index=False).encode('utf-8-sig')
+        st.download_button(
+            label="📊 下载 Excel / CSV 表格",
+            data=csv_bytes,
+            file_name="旅游团清单.csv",
+            mime="text/csv"
+        )
+        
+    st.markdown(f"### 符合条件的旅游团共 **{len(filtered_df)}** 个：")
+    
+    display_cols = [c for c in ['destination', 'tour_code', 'departure_location', 'departure_dates', 'price_text', 'title'] if c in filtered_df.columns]
+    st.dataframe(filtered_df[display_cols], use_container_width=True)
+    
+    for _, row in filtered_df.iterrows():
+        with st.container(border=True):
+            c1, c2, c3 = st.columns([3, 2, 2])
+            with c1:
+                st.markdown(f"### 📍 **{row.get('destination', '未知')}**")
+                st.write(f"**路线：** {row.get('title', '无')}")
+                st.write(f"**团号：** `{row.get('tour_code', '无')}`")
+            with c2:
+                st.markdown(f"🛫 **出发地：** `{row.get('departure_location', '详见海报')}`")
+                st.write(f"📅 **出发日期：** {row.get('departure_dates', '见海报')}")
+            with c3:
+                st.markdown(f"### 💰 **{row.get('price_text', '无')}**")
