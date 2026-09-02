@@ -5,18 +5,29 @@ import requests
 import base64
 import time
 import re
+import threading
 from io import BytesIO
 from PIL import Image
 
 st.set_page_config(page_title="AI 旅游团智能筛选助手", page_icon="✈️", layout="wide")
 
 st.title("✈️ 旅游团宣传单智能分析与筛选")
-st.markdown("批量上传宣传单，极速提取目的地、起飞地点（吉隆坡/槟城/JB/SIN）、团号与价格！")
+st.markdown("批量上传宣传单，精准提取目的地、起飞地点（吉隆坡/槟城/JB/SIN）、团号与价格！")
 
 GROQ_API_KEY = "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"
 
-def compress_image(uploaded_file, max_size=800, quality=70):
-    """黄金分辨率 800px：既能看清文字细节，又不会撑爆 Token 限制"""
+# 初始化全局任务状态
+if "task_state" not in st.session_state:
+    st.session_state.task_state = {
+        "running": False,
+        "finished": False,
+        "progress": 0.0,
+        "status_msg": "",
+        "results": [],
+        "errors": []
+    }
+
+def compress_image(uploaded_file, max_size=650, quality=55):
     img = Image.open(uploaded_file)
     if img.mode in ("RGBA", "P"):
         img = img.convert("RGB")
@@ -25,18 +36,19 @@ def compress_image(uploaded_file, max_size=800, quality=70):
     img.save(buffer, format="JPEG", quality=quality)
     return base64.b64encode(buffer.getvalue()).decode("utf-8")
 
-def analyze_single_image(file, status_placeholder):
-    encoded_string = compress_image(file)
+def analyze_single_image(file_bytes, file_name, task_dict):
+    encoded_string = compress_image(BytesIO(file_bytes))
     
     prompt = """
-    仔细提取海报中所有旅游团项目，返回纯 JSON 数组，严禁包含任何前缀、解释或标记：
+    分析图片，提取所有旅游团项目，返回合法的 JSON 数组，绝不要返回任何多余文字。
+    格式必须完全如下：
     [
       {
-        "destination": "目的地(如武汉/青岛/内蒙古/沙坝/北京/桂林/九寨沟/江西/云南/厦门/韩国/海南)",
-        "departure_location": "起飞城市(如吉隆坡出发/槟城出发/新山出发/新加坡出发，未写填马来西亚出发)",
-        "tour_code": "SP团号(如SP002740)",
-        "title": "天数与行程标题",
-        "departure_dates": "出发日期(如01/11/26)",
+        "destination": "目的地（如：武汉、青岛、内蒙古、岘港、沙坝、北京、桂林、九寨沟、江西、云南、厦门、韩国、海南）",
+        "departure_location": "起飞城市（如：吉隆坡出发、槟城出发、新山出发、新加坡出发）",
+        "tour_code": "SP开头的团号（如 SP002740）",
+        "title": "行程名称或路线描述",
+        "departure_dates": "海报中的出发日期",
         "price_numeric": 3199,
         "price_text": "RM 3199"
       }
@@ -60,56 +72,73 @@ def analyze_single_image(file, status_placeholder):
             }
         ],
         "temperature": 0.0,
-        "max_tokens": 3000,
+        "max_tokens": 4096,
         "reasoning_effort": "none"
     }
     
     for attempt in range(3):
-        response = requests.post(url, headers=headers, data=json.dumps(payload))
-        
+        try:
+            response = requests.post(url, headers=headers, data=json.dumps(payload), timeout=60)
+        except Exception:
+            time.sleep(2)
+            continue
+            
         if response.status_code == 200:
             content = response.json()['choices'][0]['message']['content'].strip()
-            
-            if "</think>" in content:
-                content = content.split("</think>")[-1].strip()
-            content = re.sub(r'```(?:json)?', '', content).strip()
-            
             json_match = re.search(r'\[\s*\{.*\}\s*\]', content, re.DOTALL)
             if json_match:
                 try:
                     return json.loads(json_match.group(0))
                 except Exception:
                     pass
-            
             items = []
             for b in re.findall(r'\{[^{}]*\}', content):
                 try:
                     item = json.loads(b)
-                    if "destination" in item or "tour_code" in item:
+                    if "destination" in item and "tour_code" in item:
                         items.append(item)
                 except Exception:
                     continue
-            if items:
-                return items
-                
-            raise Exception(f"模型未返回合规数据，返回内容片段：{content[:200]}")
+            return items
             
         elif response.status_code == 429:
             wait_seconds = 20
             match = re.search(r'try again in ([\d\.]+)s', response.text)
             if match:
-                wait_seconds = int(float(match.group(1))) + 2
-            
+                wait_seconds = int(float(match.group(1))) + 1
             for remaining in range(wait_seconds, 0, -1):
-                status_placeholder.warning(f"⏳ 触发免费额度保护，倒计时 {remaining} 秒后自动继续处理 {file.name} ...")
+                task_dict["status_msg"] = f"⏳ 限流保护中，后台等待 {remaining} 秒继续处理 {file_name} ..."
                 time.sleep(1)
             continue
         else:
-            raise Exception(f"API 请求失败 ({response.status_code}): {response.text}")
+            raise Exception(f"API 请求失败: {response.text}")
             
     raise Exception("多次请求超时，请重试。")
 
+def background_worker(files_data, task_dict):
+    """独立后台工作线程执行体"""
+    total = len(files_data)
+    for idx, (f_name, f_bytes) in enumerate(files_data):
+        task_dict["status_msg"] = f"⚡ 后台正在深度解析第 {idx + 1}/{total} 张: {f_name} ..."
+        try:
+            data = analyze_single_image(f_bytes, f_name, task_dict)
+            if data:
+                task_dict["results"].extend(data)
+            else:
+                task_dict["errors"].append(f"{f_name} 未能提取到有效数据")
+        except Exception as err:
+            task_dict["errors"].append(f"{f_name} 提示: {str(err)}")
+            
+        task_dict["progress"] = (idx + 1) / total
+        if idx + 1 < total:
+            time.sleep(1.0)
+            
+    task_dict["running"] = False
+    task_dict["finished"] = True
+    task_dict["status_msg"] = "✅ 全部图片已在后台分析完成！"
+
 def create_html_report(df):
+    """生成内置 html2canvas 截图引擎与打印样式的交互报告"""
     cards_html = ""
     for _, row in df.iterrows():
         cards_html += f"""
@@ -129,14 +158,14 @@ def create_html_report(df):
         </div>
         """
 
-    return f"""
+    html_template = f"""
     <!DOCTYPE html>
     <html lang="zh-CN">
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <title>旅游团筛选清单</title>
-        <script src="[https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js](https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js)"></script>
+        <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
         <style>
             body {{
                 font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
@@ -220,7 +249,7 @@ def create_html_report(df):
         </div>
         <div id="capture-area">
             <div class="main-title">✈️ 旅游团筛选清单</div>
-            <div class="sub-title">共筛选出 {len(df)} 个精选行程</div>
+            <div class="sub-title">共筛选出 {len(df)} 个旅游团行程</div>
             {cards_html}
         </div>
         <script>
@@ -237,6 +266,7 @@ def create_html_report(df):
     </body>
     </html>
     """
+    return html_template
 
 uploaded_files = st.file_uploader(
     "批量上传宣传图 (支持 JPG/PNG，可多选)", 
@@ -244,48 +274,46 @@ uploaded_files = st.file_uploader(
     accept_multiple_files=True
 )
 
-if "travel_data" not in st.session_state:
-    st.session_state.travel_data = None
+task = st.session_state.task_state
 
 if uploaded_files:
     st.success(f"已选择 {len(uploaded_files)} 张图片")
-    if st.button("🚀 开始极速分析图片", type="primary"):
-        all_results = []
-        errors = []
-        progress_bar = st.progress(0)
-        status_text = st.empty()
-        
-        start_time = time.time()
-        for idx, file in enumerate(uploaded_files):
-            status_text.info(f"⚡ 正在分析第 {idx + 1}/{len(uploaded_files)} 张: {file.name} ...")
-            try:
-                data = analyze_single_image(file, status_text)
-                if data:
-                    all_results.extend(data)
-            except Exception as err:
-                errors.append(f"{file.name}: {str(err)}")
+    
+    if not task["running"]:
+        if st.button("🚀 开始后台批量分析", type="primary"):
+            task["running"] = True
+            task["finished"] = False
+            task["progress"] = 0.0
+            task["results"] = []
+            task["errors"] = []
+            task["status_msg"] = "正在启动独立工作线程..."
             
-            progress_bar.progress((idx + 1) / len(uploaded_files))
-            if idx + 1 < len(uploaded_files):
-                time.sleep(1.5)
-                
-        status_text.empty()
-        progress_bar.empty()
-        cost_time = round(time.time() - start_time, 1)
-        
-        if errors:
-            for e in errors:
-                st.warning(f"⚠️ 解析提示: {e}")
-        
-        if all_results:
-            st.session_state.travel_data = all_results
-            st.success(f"🎉 批量分析完成！耗时 {cost_time} 秒，共提取出 {len(all_results)} 条旅游团信息！")
-        elif not errors:
-            st.error("未能提取出有效旅游团数据，请确认海报清晰度。")
+            # 读取文件二进制流传给后台线程
+            files_data = [(f.name, f.getvalue()) for f in uploaded_files]
+            
+            t = threading.Thread(target=background_worker, args=(files_data, task), daemon=True)
+            t.start()
+            st.rerun()
 
-if st.session_state.travel_data:
+# 任务运行时：保持动态刷新与保活
+if task["running"]:
+    st.info(task["status_msg"])
+    st.progress(task["progress"])
+    st.caption("💡 任务已在服务器独立线程运行中。你可以随意切换 App 或手机息屏，任务绝不会中断。")
+    time.sleep(2)
+    st.rerun()
+
+elif task["finished"]:
+    if task["results"]:
+        st.success(f"🎉 提取完成！共准确获取到 {len(task['results'])} 条旅游团信息！")
+    if task["errors"]:
+        for e in task["errors"]:
+            st.warning(e)
+
+# 数据面板
+if task["results"]:
     st.markdown("---")
-    df = pd.DataFrame(st.session_state.travel_data)
+    df = pd.DataFrame(task["results"])
     
     if 'destination' in df.columns:
         df['destination'] = df['destination'].astype(str).str.strip()
@@ -317,7 +345,7 @@ if st.session_state.travel_data:
     if selected_loc == "🇲🇾 全马来西亚出发 (包含吉隆坡/新山/槟城)":
         malaysia_keywords = ["吉隆坡", "新山", "JB", "槟城", "柔佛", "KUL", "PEN", "JHB", "马来西亚"]
         filtered_df = filtered_df[filtered_df['departure_location'].apply(
-            lambda loc: any(kw in str(loc) for kw in malaysia_keywords)
+            lambda loc: any(kw in loc for kw in malaysia_keywords)
         )]
     elif selected_loc != "全部":
         filtered_df = filtered_df[filtered_df['departure_location'] == selected_loc]
