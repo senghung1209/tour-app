@@ -7,6 +7,8 @@ import time
 import re
 from io import BytesIO
 from PIL import Image
+import matplotlib.pyplot as plt
+import matplotlib.font_manager as fm
 
 st.set_page_config(page_title="AI 旅游团智能筛选助手", page_icon="✈️", layout="wide")
 
@@ -15,8 +17,7 @@ st.markdown("批量上传宣传单，精准提取目的地、起飞地点（吉�
 
 GROQ_API_KEY = "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"
 
-def compress_image(uploaded_file, max_size=750, quality=60):
-    """将图片等比压缩至 750px，Token 消耗压至 2500 左右"""
+def compress_image(uploaded_file, max_size=900, quality=70):
     img = Image.open(uploaded_file)
     if img.mode in ("RGBA", "P"):
         img = img.convert("RGB")
@@ -25,115 +26,114 @@ def compress_image(uploaded_file, max_size=750, quality=60):
     img.save(buffer, format="JPEG", quality=quality)
     return base64.b64encode(buffer.getvalue()).decode("utf-8")
 
-def parse_tours_from_text(raw_text):
-    """从识别文本中提取结构化旅游团数据"""
-    results = []
-    lines = [line.strip() for line in raw_text.split('\n') if line.strip()]
-    
-    current_dest = "热选目的地"
-    current_loc = "详见海报"
-    
-    for line in lines:
-        # 识别目的地或出发地大标题
-        if any(kw in line for kw in ["武汉", "青岛", "内蒙古", "岘港", "沙坝", "北京", "桂林", "九寨沟", "江西", "云南", "厦门", "韩国", "海南"]):
-            clean_name = re.sub(r'[^一-龥a-zA-Z]', '', line)
-            if clean_name:
-                current_dest = clean_name
-        
-        # 识别出发地点标签
-        if "吉隆坡" in line or "KUL" in line:
-            current_loc = "吉隆坡出发"
-        elif "槟城" in line or "PEN" in line:
-            current_loc = "槟城出发"
-        elif "JB" in line or "新山" in line or "柔佛" in line:
-            current_loc = "新山出发"
-        elif "SIN" in line or "新加坡" in line:
-            current_loc = "新加坡出发"
-            
-        # 提取含 SP 团号的行
-        sp_match = re.search(r'(SP\d{4,7})', line, re.IGNORECASE)
-        if sp_match:
-            code = sp_match.group(1).upper()
-            
-            # 提取价格
-            price_match = re.search(r'RM\s*(\d{3,5})', line, re.IGNORECASE)
-            p_val = int(price_match.group(1)) if price_match else 0
-            
-            # 提取日期
-            dates_found = re.findall(r'\d{1,2}/\d{1,2}(?:/\d{2,4})?', line)
-            date_str = ", ".join(dates_found) if dates_found else "详见海报"
-            
-            # 提取行程标题
-            clean_title = re.sub(r'SP\d{4,7}', '', line, flags=re.IGNORECASE)
-            clean_title = re.sub(r'RM\s*\d+', '', clean_title, flags=re.IGNORECASE)
-            clean_title = clean_title.strip("- :*#，。")
-            
-            results.append({
-                "destination": current_dest,
-                "tour_code": code,
-                "title": clean_title if clean_title else f"{current_dest}精选游",
-                "departure_location": current_loc,
-                "departure_dates": date_str,
-                "price_numeric": p_val if p_val > 0 else 2999,
-                "price_text": f"RM {p_val}" if p_val > 0 else "详见海报"
-            })
-            
-    return results
-
 def analyze_single_image(file):
     encoded_string = compress_image(file)
     
+    prompt = """
+    分析图片，提取所有旅游团项目，返回合法的 JSON 数组，绝不要返回任何多余文字。
+    格式必须完全如下：
+    [
+      {
+        "destination": "目的地（如：武汉、青岛、内蒙古、岘港、沙坝、北京、桂林、九寨沟、江西、云南、厦门、韩国、海南）",
+        "departure_location": "每个团右下角或价格旁标注的起飞城市（如：吉隆坡出发、槟城出发、新山出发、新加坡出发）",
+        "tour_code": "SP开头的团号（如 SP002740）",
+        "title": "行程名称或路线描述",
+        "departure_dates": "海报中的出发日期",
+        "price_numeric": 3199,
+        "price_text": "RM 3199"
+      }
+    ]
+    """
+
     url = "https://api.groq.com/openai/v1/chat/completions"
     headers = {
         "Authorization": f"Bearer {GROQ_API_KEY}",
         "Content-Type": "application/json"
     }
     
-    # 极简提示词，杜绝模型做思维发散
     payload = {
         "model": "qwen/qwen3.6-27b",
         "messages": [
             {
                 "role": "user",
                 "content": [
-                    {
-                        "type": "text", 
-                        "text": "请直接列出图片上所有的团号（如SP002740）、路线天数标题、出发地点（吉隆坡出发/槟城出发/新山/新加坡）、出发日期和RM价格，每行一个团。"
-                    },
-                    {
-                        "type": "image_url", 
-                        "image_url": {"url": f"data:image/jpeg;base64,{encoded_string}"}
-                    }
+                    {"type": "text", "text": prompt},
+                    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{encoded_string}"}}
                 ]
             }
         ],
         "temperature": 0.0,
-        "max_tokens": 1500
+        "max_tokens": 4096,
+        "reasoning_effort": "none"  # 彻底关闭思考模型，不输出多余废话
     }
     
-    # 遭遇 429 自动等待重试机制
-    max_retries = 3
-    for attempt in range(max_retries):
-        response = requests.post(url, headers=headers, data=json.dumps(payload))
-        if response.status_code == 200:
-            content = response.json()['choices'][0]['message']['content']
-            # 过滤思考标签
-            if "</think>" in content:
-                content = content.split("</think>")[-1]
-            return parse_tours_from_text(content)
-        
-        elif response.status_code == 429:
-            # 提取等待时间
-            wait_time = 25
-            err_msg = response.text
-            match = re.search(r'try again in ([\d\.]+)s', err_msg)
-            if match:
-                wait_time = int(float(match.group(1))) + 2
-            time.sleep(wait_time)
-        else:
-            raise Exception(f"API 请求失败: {response.text}")
+    response = requests.post(url, headers=headers, data=json.dumps(payload))
+    if response.status_code != 200:
+        raise Exception(f"API 请求失败: {response.text}")
+    
+    content = response.json()['choices'][0]['message']['content'].strip()
+    
+    json_match = re.search(r'\[\s*\{.*\}\s*\]', content, re.DOTALL)
+    if json_match:
+        try:
+            return json.loads(json_match.group(0))
+        except Exception:
+            pass
             
-    raise Exception("多次触发速率限制，未能完成解析，请稍后重试。")
+    items = []
+    blocks = re.findall(r'\{[^{}]*\}', content)
+    for b in blocks:
+        try:
+            item = json.loads(b)
+            if "destination" in item and "tour_code" in item:
+                items.append(item)
+        except Exception:
+            continue
+    return items
+
+def generate_image_long(df):
+    """使用 Matplotlib 动态生成一张支持中文的高清长图清单 (PNG)"""
+    # 查找可用中文字体
+    chinese_fonts = [f.name for f in fm.fontManager.ttflist if any(kw in f.name.lower() for kw in ['cjk', 'hei', 'song', 'sans', 'droid', 'sim'])]
+    font_family = chinese_fonts[0] if chinese_fonts else 'sans-serif'
+    
+    row_count = max(len(df), 1)
+    fig_height = 1.2 + row_count * 0.9
+    fig, ax = plt.subplots(figsize=(10, fig_height), dpi=150)
+    fig.patch.set_facecolor('#f8fafc')
+    ax.set_facecolor('#f8fafc')
+    ax.axis('off')
+    
+    # 绘制头部
+    ax.text(0.5, 0.98, "✈️ 旅游团筛选清单", fontsize=18, weight='bold', ha='center', va='top', color='#0f172a', fontfamily=font_family)
+    ax.text(0.5, 0.94, f"共筛选出 {len(df)} 个旅游团行程", fontsize=11, ha='center', va='top', color='#64748b', fontfamily=font_family)
+    
+    y_start = 0.88
+    step = 0.86 / row_count
+    
+    for i, (_, row in df.reset_index().iterrows()):
+        y_pos = y_start - i * step
+        # 卡片背景
+        rect = plt.Rectangle((0.02, y_pos - step * 0.9), 0.96, step * 0.85, facecolor='white', edgecolor='#e2e8f0', linewidth=1.2, transform=ax.transAxes, zorder=1)
+        ax.add_patch(rect)
+        
+        # 卡片内容
+        dest = str(row.get('destination', ''))
+        code = str(row.get('tour_code', ''))
+        price = str(row.get('price_text', ''))
+        loc = str(row.get('departure_location', ''))
+        dates = str(row.get('departure_dates', ''))
+        title = str(row.get('title', ''))
+        
+        ax.text(0.05, y_pos - step * 0.25, f"📍 {dest}  |  团号: {code}", fontsize=12, weight='bold', color='#1e293b', fontfamily=font_family, zorder=2)
+        ax.text(0.95, y_pos - step * 0.25, f"{price}", fontsize=13, weight='bold', color='#e11d48', ha='right', fontfamily=font_family, zorder=2)
+        ax.text(0.05, y_pos - step * 0.50, f"🛫 出发地: {loc}    📅 出发日期: {dates}", fontsize=9.5, color='#475569', fontfamily=font_family, zorder=2)
+        ax.text(0.05, y_pos - step * 0.72, f"路线: {title[:48]}", fontsize=9.5, color='#64748b', fontfamily=font_family, zorder=2)
+        
+    buf = BytesIO()
+    plt.savefig(buf, format='png', bbox_inches='tight', pad_inches=0.2)
+    plt.close(fig)
+    return buf.getvalue()
 
 def create_html_report(df):
     html_cards = ""
@@ -157,17 +157,18 @@ def create_html_report(df):
     <html>
     <head>
         <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <title>旅游团筛选清单</title>
         <style>
-            body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background-color: #f8fafc; padding: 20px; }}
-            .header {{ text-align: center; margin-bottom: 25px; }}
+            body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background-color: #f8fafc; padding: 15px; margin: 0; }}
+            .header {{ text-align: center; margin-bottom: 20px; }}
             @media print {{ body {{ background: #fff; padding: 0; }} }}
         </style>
     </head>
     <body>
         <div class="header">
-            <h1 style="color: #0f172a; margin-bottom: 5px;">✈️ 旅游团筛选清单</h1>
-            <p style="color: #64748b; margin-top: 0;">共筛选出 {len(df)} 个旅游团行程（按 Ctrl + P 可另存为 PDF 或长图）</p>
+            <h2 style="color: #0f172a; margin-bottom: 5px;">✈️ 旅游团筛选清单</h2>
+            <p style="color: #64748b; font-size: 14px; margin-top: 0;">手机点分享->打印->另存为PDF ｜ 电脑按 Ctrl+P 保存</p>
         </div>
         <div style="max-width: 800px; margin: 0 auto;">
             {html_cards}
@@ -189,39 +190,42 @@ if uploaded_files:
     st.success(f"已选择 {len(uploaded_files)} 张图片")
     if st.button("🚀 开始让 AI 批量分析图片", type="primary"):
         all_results = []
-        errors = []
         progress_bar = st.progress(0)
         status_text = st.empty()
         
         for idx, file in enumerate(uploaded_files):
-            status_text.text(f"正在分析第 {idx + 1}/{len(uploaded_files)} 张: {file.name} ...")
+            status_text.text(f"正在极速提取第 {idx + 1}/{len(uploaded_files)} 张: {file.name} ...")
             try:
                 data = analyze_single_image(file)
                 if data:
                     all_results.extend(data)
             except Exception as err:
-                errors.append(f"{file.name}: {str(err)}")
+                st.warning(f"{file.name} 提示: {str(err)}")
             
             progress_bar.progress((idx + 1) / len(uploaded_files))
             if idx + 1 < len(uploaded_files):
-                # 预留缓冲时间防止触发每分钟限流
-                time.sleep(3.0)
+                time.sleep(1.5)
                 
         status_text.empty()
         progress_bar.empty()
         
-        if errors:
-            for e in errors:
-                st.error(e)
-        
         if all_results:
             st.session_state.travel_data = all_results
-            st.success(f"🎉 识别完成！共成功抓取到 {len(all_results)} 条旅游团信息！")
+            st.success(f"🎉 提取完成！共准确获取到 {len(all_results)} 条旅游团信息！")
+        else:
+            st.error("未能提取出有效旅游团数据，请检查网络后重试。")
 
 if st.session_state.travel_data:
     st.markdown("---")
     df = pd.DataFrame(st.session_state.travel_data)
     
+    if 'destination' in df.columns:
+        df['destination'] = df['destination'].astype(str).str.strip()
+    if 'departure_location' in df.columns:
+        df['departure_location'] = df['departure_location'].astype(str).str.strip()
+    if 'price_numeric' in df.columns:
+        df['price_numeric'] = pd.to_numeric(df['price_numeric'], errors='coerce').fillna(0).astype(int)
+        
     st.header("🔍 旅游团智能筛选面板")
     
     st.sidebar.header("🎛️ 筛选条件")
@@ -248,25 +252,35 @@ if st.session_state.travel_data:
         (filtered_df['price_numeric'] <= price_range[1])
     ]
     
+    # 导出专区
     st.markdown("### 📥 导出筛选结果")
-    col_html, col_csv = st.columns(2)
+    col1, col2, col3 = st.columns(3)
     
-    with col_html:
-        html_report = create_html_report(filtered_df)
+    with col1:
+        img_data = generate_image_long(filtered_df)
         st.download_button(
-            label="📄 下载排版报告 (网页打开后按 Ctrl+P 可存为 PDF/长图)",
-            data=html_report,
-            file_name="旅游团筛选报告.html",
-            mime="text/html",
+            label="🖼️ 下载清单长图 (PNG)",
+            data=img_data,
+            file_name="旅游团清单.png",
+            mime="image/png",
             type="primary"
         )
         
-    with col_csv:
+    with col2:
+        html_report = create_html_report(filtered_df)
+        st.download_button(
+            label="📄 导出 PDF 报告 (HTML)",
+            data=html_report,
+            file_name="旅游团报告.html",
+            mime="text/html"
+        )
+        
+    with col3:
         csv_bytes = filtered_df.to_csv(index=False).encode('utf-8-sig')
         st.download_button(
-            label="📊 下载 Excel / CSV 表格",
+            label="📊 下载 Excel / CSV",
             data=csv_bytes,
-            file_name="旅游团筛选清单.csv",
+            file_name="旅游团清单.csv",
             mime="text/csv"
         )
         
