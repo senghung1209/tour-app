@@ -5,13 +5,13 @@ import requests
 import base64
 import time
 from io import BytesIO
-from PIL import Image
+from PIL import Image, ImageDraw, ImageFont
 from fpdf import FPDF
 
 st.set_page_config(page_title="AI 旅游团智能筛选助手", page_icon="✈️", layout="wide")
 
 st.title("✈️ 旅游团宣传单智能分析与筛选")
-st.markdown("批量上传旅游宣传图片，AI 自动提取价格、起飞地点并支持多条件筛选与 PDF 导出！")
+st.markdown("批量上传旅游宣传图片，AI 自动提取价格、起飞地点并支持多条件筛选与导出！")
 
 GROQ_API_KEY = "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"
 
@@ -80,20 +80,60 @@ def analyze_single_image(file):
         pass
     return []
 
+def generate_image(dataframe):
+    """将筛选结果动态绘制成一张高清清单长图 (PNG)"""
+    width = 900
+    card_height = 140
+    header_height = 120
+    footer_height = 50
+    total_height = header_height + len(dataframe) * card_height + footer_height
+
+    img = Image.new("RGB", (width, total_height), color=(248, 250, 252))
+    draw = ImageDraw.Draw(img)
+    font = ImageFont.load_default()
+
+    # 绘制头部横幅
+    draw.rectangle([(0, 0), (width, header_height - 20)], fill=(30, 41, 59))
+    draw.text((30, 30), "TRAVEL TOUR SUMMARY LIST", fill=(255, 255, 255), font=font)
+    draw.text((30, 60), f"Total Tours: {len(dataframe)}", fill=(148, 163, 184), font=font)
+
+    # 循环绘制每一个旅游团卡片
+    y = header_height
+    for _, row in dataframe.iterrows():
+        # 卡片白色背景与边框
+        draw.rectangle([(30, y), (width - 30, y + card_height - 15)], fill=(255, 255, 255), outline=(226, 232, 240), width=2)
+        
+        dest = str(row.get('destination', 'Unknown'))
+        price = str(row.get('price_text', 'N/A'))
+        code = str(row.get('tour_code', 'N/A'))
+        loc = str(row.get('departure_location', 'N/A'))
+        dates = str(row.get('departure_dates', 'N/A'))
+        title = str(row.get('title', 'N/A'))
+
+        # 卡片文字排版
+        draw.text((50, y + 15), f"[{dest}]  {code}", fill=(15, 23, 42), font=font)
+        draw.text((width - 220, y + 15), f"{price}", fill=(225, 29, 72), font=font)
+        draw.text((50, y + 45), f"Dept: {loc}  |  Dates: {dates}", fill=(71, 85, 105), font=font)
+        draw.text((50, y + 75), f"Route: {title[:70]}", fill=(100, 116, 139), font=font)
+
+        y += card_height
+
+    buf = BytesIO()
+    img.save(buf, format="PNG")
+    return buf.getvalue()
+
 def generate_pdf(dataframe):
-    """将筛选出的旅游团生成为格式化的 PDF 报告"""
+    """生成 PDF 清单"""
     pdf = FPDF()
     pdf.set_auto_page_break(auto=True, margin=15)
     pdf.add_page()
     pdf.set_font("Helvetica", "B", 18)
     
-    # 标题
     pdf.cell(0, 10, "Travel Tour Itinerary List", ln=True, align="C")
     pdf.set_font("Helvetica", "", 10)
     pdf.cell(0, 8, f"Total Tours: {len(dataframe)}", ln=True, align="C")
     pdf.ln(5)
     
-    # 内容卡片
     for _, row in dataframe.iterrows():
         pdf.set_fill_color(245, 247, 250)
         pdf.rect(10, pdf.get_y(), 190, 26, "F")
@@ -188,24 +228,33 @@ if st.session_state.travel_data:
         (filtered_df['price_numeric'] <= price_range[1])
     ]
     
-    # 导出区域
+    # 导出工具栏（提供图片、PDF、CSV 三种格式）
     st.markdown("### 📥 一键导出筛选结果")
-    col_pdf, col_csv = st.columns(2)
+    col_img, col_pdf, col_csv = st.columns(3)
     
+    with col_img:
+        img_bytes = generate_image(filtered_df)
+        st.download_button(
+            label="🖼️ 导出为长图 (PNG)",
+            data=img_bytes,
+            file_name="旅游团筛选清单.png",
+            mime="image/png",
+            type="primary"
+        )
+        
     with col_pdf:
         pdf_bytes = generate_pdf(filtered_df)
         st.download_button(
-            label="📄 下载为 PDF 清单文件",
+            label="📄 导出为 PDF 文件",
             data=pdf_bytes,
             file_name="旅游团筛选清单.pdf",
-            mime="application/pdf",
-            type="primary"
+            mime="application/pdf"
         )
         
     with col_csv:
         csv_bytes = filtered_df.to_csv(index=False).encode('utf-8-sig')
         st.download_button(
-            label="📋 下载为表格 (CSV)",
+            label="📋 导出为表格 (CSV)",
             data=csv_bytes,
             file_name="旅游团筛选清单.csv",
             mime="text/csv"
