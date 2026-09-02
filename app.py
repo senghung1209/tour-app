@@ -5,11 +5,8 @@ import requests
 import base64
 import time
 import re
-import os
 from io import BytesIO
 from PIL import Image
-import matplotlib.pyplot as plt
-import matplotlib.font_manager as fm
 
 st.set_page_config(page_title="AI 旅游团智能筛选助手", page_icon="✈️", layout="wide")
 
@@ -17,27 +14,6 @@ st.title("✈️ 旅游团宣传单智能分析与筛选")
 st.markdown("批量上传宣传单，精准提取目的地、起飞地点（吉隆坡/槟城/JB/SIN）、团号与价格！")
 
 GROQ_API_KEY = "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"
-
-FONT_PATH = "simhei.ttf"
-
-@st.cache_resource
-def load_chinese_font():
-    """下载并加载开源思源中文字体，防止 Linux 服务器字体缺失导致方块字"""
-    if not os.path.exists(FONT_PATH):
-        font_url = "https://raw.githubusercontent.com/googlefonts/noto-cjk/main/Sans/OTF/SimplifiedChinese/NotoSansSC-Regular.otf"
-        try:
-            r = requests.get(font_url, timeout=15)
-            if r.status_code == 200:
-                with open(FONT_PATH, "wb") as f:
-                    f.write(r.content)
-        except Exception:
-            pass
-    if os.path.exists(FONT_PATH):
-        fm.fontManager.addfont(FONT_PATH)
-        return fm.FontProperties(fname=FONT_PATH)
-    return fm.FontProperties(family='sans-serif')
-
-chinese_font_prop = load_chinese_font()
 
 def compress_image(uploaded_file, max_size=650, quality=55):
     img = Image.open(uploaded_file)
@@ -50,6 +26,7 @@ def compress_image(uploaded_file, max_size=650, quality=55):
 
 def analyze_single_image(file, status_placeholder):
     encoded_string = compress_image(file)
+    
     prompt = """
     分析图片，提取所有旅游团项目，返回合法的 JSON 数组，绝不要返回任何多余文字。
     格式必须完全如下：
@@ -89,6 +66,7 @@ def analyze_single_image(file, status_placeholder):
     
     for attempt in range(3):
         response = requests.post(url, headers=headers, data=json.dumps(payload))
+        
         if response.status_code == 200:
             content = response.json()['choices'][0]['message']['content'].strip()
             json_match = re.search(r'\[\s*\{.*\}\s*\]', content, re.DOTALL)
@@ -121,85 +99,136 @@ def analyze_single_image(file, status_placeholder):
             
     raise Exception("多次请求超时，请重试。")
 
-def generate_image_long(df):
-    """绘制高保真中文长图"""
-    row_count = max(len(df), 1)
-    fig_height = 1.2 + row_count * 0.95
-    fig, ax = plt.subplots(figsize=(10, fig_height), dpi=160)
-    fig.patch.set_facecolor('#f8fafc')
-    ax.set_facecolor('#f8fafc')
-    ax.axis('off')
-    
-    # 头部标题
-    ax.text(0.5, 0.98, "旅游团筛选清单", fontproperties=chinese_font_prop, fontsize=18, weight='bold', ha='center', va='top', color='#0f172a')
-    ax.text(0.5, 0.94, f"共筛选出 {len(df)} 个精选行程", fontproperties=chinese_font_prop, fontsize=11, ha='center', va='top', color='#64748b')
-    
-    y_start = 0.88
-    step = 0.86 / row_count
-    
-    for i, row in df.reset_index().iterrows():
-        y_pos = y_start - i * step
-        rect = plt.Rectangle((0.02, y_pos - step * 0.9), 0.96, step * 0.85, facecolor='white', edgecolor='#e2e8f0', linewidth=1.2, transform=ax.transAxes, zorder=1)
-        ax.add_patch(rect)
-        
-        dest = str(row.get('destination', ''))
-        code = str(row.get('tour_code', ''))
-        price = str(row.get('price_text', ''))
-        loc = str(row.get('departure_location', ''))
-        dates = str(row.get('departure_dates', ''))
-        title = str(row.get('title', ''))
-        
-        ax.text(0.05, y_pos - step * 0.25, f"{dest}  |  团号: {code}", fontproperties=chinese_font_prop, fontsize=12, weight='bold', color='#1e293b', zorder=2)
-        ax.text(0.95, y_pos - step * 0.25, f"{price}", fontproperties=chinese_font_prop, fontsize=13, weight='bold', color='#e11d48', ha='right', zorder=2)
-        ax.text(0.05, y_pos - step * 0.50, f"出发地: {loc}    出发日期: {dates}", fontproperties=chinese_font_prop, fontsize=9.5, color='#475569', zorder=2)
-        ax.text(0.05, y_pos - step * 0.72, f"路线: {title[:48]}", fontproperties=chinese_font_prop, fontsize=9.5, color='#64748b', zorder=2)
-        
-    buf = BytesIO()
-    plt.savefig(buf, format='png', bbox_inches='tight', pad_inches=0.2)
-    plt.close(fig)
-    return buf.getvalue()
-
 def create_html_report(df):
-    html_cards = ""
+    """生成内置 html2canvas 截图引擎与打印样式的交互报告"""
+    cards_html = ""
     for _, row in df.iterrows():
-        html_cards += f"""
-        <div style="border: 1px solid #e2e8f0; border-radius: 8px; padding: 15px; margin-bottom: 12px; background-color: #ffffff; page-break-inside: avoid;">
-            <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #f1f5f9; padding-bottom: 8px;">
-                <span style="font-size: 18px; font-weight: bold; color: #0f172a;">📍 {row.get('destination', '未知')}</span>
-                <span style="font-size: 18px; font-weight: bold; color: #e11d48;">{row.get('price_text', 'N/A')}</span>
+        cards_html += f"""
+        <div class="card">
+            <div class="card-header">
+                <span class="dest">📍 {row.get('destination', '未知')}</span>
+                <span class="price">{row.get('price_text', 'N/A')}</span>
             </div>
-            <div style="margin-top: 8px; color: #334155; font-size: 14px;">
-                <p style="margin: 4px 0;"><strong>团号：</strong> {row.get('tour_code', '无')} &nbsp;&nbsp;|&nbsp;&nbsp; <strong>出发地：</strong> <span style="color:#0284c7; font-weight: bold;">{row.get('departure_location', '详见海报')}</span></p>
-                <p style="margin: 4px 0;"><strong>出发日期：</strong> {row.get('departure_dates', '见海报')}</p>
-                <p style="margin: 4px 0;"><strong>行程路线：</strong> {row.get('title', '无')}</p>
+            <div class="card-body">
+                <div class="meta-row">
+                    <span><strong>团号：</strong> {row.get('tour_code', '无')}</span>
+                    <span><strong>出发地：</strong> <span class="badge">{row.get('departure_location', '详见海报')}</span></span>
+                </div>
+                <div class="dates"><strong>📅 出发日期：</strong> {row.get('departure_dates', '见海报')}</div>
+                <div class="route"><strong>路线：</strong> {row.get('title', '无')}</div>
             </div>
         </div>
         """
-        
-    return f"""
+
+    html_template = f"""
     <!DOCTYPE html>
-    <html>
+    <html lang="zh-CN">
     <head>
-        <meta charset="utf-8">
+        <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <title>旅游团筛选清单</title>
+        <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
         <style>
-            body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif; background-color: #f8fafc; padding: 15px; margin: 0; }}
-            .header {{ text-align: center; margin-bottom: 20px; }}
-            @media print {{ body {{ background: #fff; padding: 0; }} }}
+            body {{
+                font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+                background-color: #f1f5f9;
+                margin: 0;
+                padding: 16px;
+                color: #0f172a;
+            }}
+            .toolbar {{
+                max-width: 650px;
+                margin: 0 auto 16px auto;
+                display: flex;
+                gap: 10px;
+            }}
+            .btn {{
+                flex: 1;
+                padding: 12px;
+                border: none;
+                border-radius: 8px;
+                font-size: 15px;
+                font-weight: 600;
+                cursor: pointer;
+                text-align: center;
+            }}
+            .btn-img {{ background-color: #e11d48; color: #fff; }}
+            .btn-pdf {{ background-color: #0284c7; color: #fff; }}
+            #capture-area {{
+                max-width: 650px;
+                margin: 0 auto;
+                background-color: #ffffff;
+                padding: 24px;
+                border-radius: 12px;
+                box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1);
+            }}
+            .main-title {{
+                text-align: center;
+                font-size: 22px;
+                font-weight: bold;
+                margin: 0 0 6px 0;
+            }}
+            .sub-title {{
+                text-align: center;
+                color: #64748b;
+                font-size: 13px;
+                margin: 0 0 20px 0;
+            }}
+            .card {{
+                border: 1px solid #e2e8f0;
+                border-radius: 8px;
+                padding: 14px;
+                margin-bottom: 12px;
+                background: #f8fafc;
+                page-break-inside: avoid;
+            }}
+            .card-header {{
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                border-bottom: 1px solid #e2e8f0;
+                padding-bottom: 8px;
+                margin-bottom: 8px;
+            }}
+            .dest {{ font-size: 17px; font-weight: bold; color: #1e293b; }}
+            .price {{ font-size: 18px; font-weight: bold; color: #e11d48; }}
+            .card-body {{ font-size: 13.5px; line-height: 1.6; }}
+            .meta-row {{ display: flex; justify-content: space-between; margin-bottom: 4px; }}
+            .badge {{ color: #0284c7; font-weight: 600; }}
+            .dates {{ color: #334155; margin-bottom: 4px; }}
+            .route {{ color: #475569; }}
+            @media print {{
+                .toolbar {{ display: none; }}
+                body {{ background: #fff; padding: 0; }}
+                #capture-area {{ box-shadow: none; padding: 0; }}
+            }}
         </style>
     </head>
     <body>
-        <div class="header">
-            <h2 style="color: #0f172a; margin-bottom: 5px;">✈️ 旅游团筛选清单</h2>
-            <p style="color: #64748b; font-size: 14px; margin-top: 0;">手机点分享->打印->另存为PDF ｜ 电脑按 Ctrl+P 保存</p>
+        <div class="toolbar">
+            <button class="btn btn-img" onclick="saveAsImage()">🖼️ 保存为手机长图</button>
+            <button class="btn btn-pdf" onclick="window.print()">📄 另存为 PDF 文件</button>
         </div>
-        <div style="max-width: 800px; margin: 0 auto;">
-            {html_cards}
+        <div id="capture-area">
+            <div class="main-title">✈️ 旅游团筛选清单</div>
+            <div class="sub-title">共筛选出 {len(df)} 个旅游团行程</div>
+            {cards_html}
         </div>
+        <script>
+            function saveAsImage() {{
+                const target = document.getElementById('capture-area');
+                html2canvas(target, {{ scale: 2, useCORS: true }}).then(canvas => {{
+                    const link = document.createElement('a');
+                    link.download = '旅游团清单长图.png';
+                    link.href = canvas.toDataURL('image/png');
+                    link.click();
+                }});
+            }}
+        </script>
     </body>
     </html>
     """
+    return html_template
 
 uploaded_files = st.file_uploader(
     "批量上传宣传图 (支持 JPG/PNG，可多选)", 
@@ -284,31 +313,22 @@ if st.session_state.travel_data:
     ]
     
     st.markdown("### 📥 导出筛选结果")
-    col1, col2, col3 = st.columns(3)
+    col1, col2 = st.columns(2)
     
     with col1:
-        img_data = generate_image_long(filtered_df)
+        html_report = create_html_report(filtered_df)
         st.download_button(
-            label="🖼️ 下载清单长图 (PNG)",
-            data=img_data,
-            file_name="旅游团清单.png",
-            mime="image/png",
+            label="📄 下载长图 / PDF 报告文件 (HTML)",
+            data=html_report,
+            file_name="旅游团筛选清单.html",
+            mime="text/html",
             type="primary"
         )
         
     with col2:
-        html_report = create_html_report(filtered_df)
-        st.download_button(
-            label="📄 导出 PDF 报告 (HTML)",
-            data=html_report,
-            file_name="旅游团报告.html",
-            mime="text/html"
-        )
-        
-    with col3:
         csv_bytes = filtered_df.to_csv(index=False).encode('utf-8-sig')
         st.download_button(
-            label="📊 下载 Excel / CSV",
+            label="📊 下载 Excel / CSV 表格",
             data=csv_bytes,
             file_name="旅游团清单.csv",
             mime="text/csv"
