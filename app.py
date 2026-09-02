@@ -86,7 +86,15 @@ def extract_partial_items(content):
                     p_val = int(re.sub(r'[^\d]', '', str(p_raw)))
                 except Exception:
                     p_val = 0
-                p_text = str(it.get("price_text", ("RM " + str(p_val)) if p_val > 0 else "详见海报")).strip()
+                
+                raw_text = it.get("price_text")
+                if raw_text:
+                    p_text = str(raw_text).strip()
+                elif p_val > 0:
+                    p_text = "RM " + str(p_val)
+                else:
+                    p_text = "详见海报"
+
                 items.append({
                     "destination": dest if dest else "精选目的地",
                     "tour_code": code,
@@ -102,7 +110,7 @@ def extract_partial_items(content):
 
 def analyze_single_image(file_bytes, file_name, task_dict):
     encoded_string = compress_image(BytesIO(file_bytes))
-    prompt = "分析图片，提取所有旅游团项目，返回合法的纯 JSON 数组（含 destination, departure_location, tour_code, title, departure_dates, price_numeric, price_text 字段），不要任何解释。"
+    prompt = "分析图片提取所有旅游团项目，返回纯JSON数组，包含字段：destination, departure_location, tour_code, title, departure_dates, price_numeric, price_text。严禁输出任何多余说明。"
 
     url = "https://api.groq.com/openai/v1/chat/completions"
     headers = {
@@ -151,16 +159,29 @@ def analyze_single_image(file_bytes, file_name, task_dict):
                     if isinstance(parsed, list) and len(parsed) > 0:
                         std_list = []
                         for it in parsed:
-                            p_val = it.get("price_numeric", 0)
+                            p_raw = it.get("price_numeric", 0)
                             try:
-                                p_val = int(re.sub(r'[^\d]', '', str(p_val)))
+                                p_val = int(re.sub(r'[^\d]', '', str(p_raw)))
                             except Exception:
                                 p_val = 0
+                            
+                            dest_str = str(it.get("destination", "精选目的地")).strip()
+                            code_str = str(it.get("tour_code", "")).strip()
+                            title_str = str(it.get("title", "")).strip()
+                            loc_str = str(it.get("departure_location", "详见海报")).strip()
+                            date_str = str(it.get("departure_dates", "见海报")).strip()
+                            
+                            raw_price_str = it.get("price_text")
+                            if raw_price_str:
+                                final_price_str = str(raw_price_str).strip()
+                            elif p_val > 0:
+                                final_price_str = "RM " + str(p_val)
+                            else:
+                                final_price_str = "详见海报"
+
                             std_list.append({
-                                "destination": str(it.get("destination", "精选目的地")).strip(),
-                                "tour_code": str(it.get("tour_code", "")).strip(),
-                                "title": str(it.get("title", "")).strip(),
-                                "departure_location": str(it.get("departure_location", "详见海报")).strip(),
-                                "departure_dates": str(it.get("departure_dates", "见海报")).strip(),
-                                "price_numeric": p_val,
-                                "price_text": str(
+                                "destination": dest_str,
+                                "tour_code": code_str,
+                                "title": title_str,
+                                "departure_location": loc_str,
+                                "departure_dates": date
