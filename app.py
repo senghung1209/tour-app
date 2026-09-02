@@ -61,7 +61,7 @@ if uploaded_files:
                     "Content-Type": "application/json"
                 }
                 payload = {
-                    "model": "llama-3.2-11b-vision-instruct",
+                    "model": "meta-llama/llama-4-scout-17b-16e-instruct", # 换成当前可用的最新多模态视觉模型
                     "messages": [
                         {
                             "role": "user",
