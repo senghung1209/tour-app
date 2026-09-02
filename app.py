@@ -31,7 +31,7 @@ if "task_state" not in st.session_state:
 
 def trigger_notification():
     """触发手机/电脑浏览器的系统通知与提示音"""
-    components.html("""
+    html_code = """
     <script>
     function notifyUser() {
         try {
@@ -53,14 +53,14 @@ def trigger_notification():
             if (Notification.permission === "granted") {
                 new Notification("✈️ 旅游团分析完成！", {
                     body: "所有海报数据已提取完毕，快回来看结果吧！",
-                    icon: "https://fav.farm/✈️"
+                    icon: "[https://fav.farm/](https://fav.farm/)✈️"
                 });
             } else if (Notification.permission !== "denied") {
                 Notification.requestPermission().then(permission => {
                     if (permission === "granted") {
                         new Notification("✈️ 旅游团分析完成！", {
                             body: "所有海报数据已提取完毕，快回来看结果吧！",
-                            icon: "https://fav.farm/✈️"
+                            icon: "[https://fav.farm/](https://fav.farm/)✈️"
                         });
                     }
                 });
@@ -69,7 +69,8 @@ def trigger_notification():
     }
     notifyUser();
     </script>
-    """, height=0)
+    """
+    components.html(html_code, height=0)
 
 def compress_image(uploaded_file, max_size=650, quality=55):
     img = Image.open(uploaded_file)
@@ -83,27 +84,24 @@ def compress_image(uploaded_file, max_size=650, quality=55):
 def extract_partial_items(content):
     """强化容错：从任意断裂、未闭合或残缺的文本中抽取出所有旅游团对象"""
     items = []
-    # 匹配每一个独立的 JSON object
     blocks = re.findall(r'\{[^{}]*\}', content)
     for b in blocks:
         try:
             it = json.loads(b)
-            # 只要包含目的地或团号任意一个，即为有效卡片
             if "destination" in it or "tour_code" in it or "title" in it:
                 dest = str(it.get("destination", "精选目的地")).strip()
                 code = str(it.get("tour_code", "")).strip()
-                title = str(it.get("title", f"{dest}游")).strip()
+                title = str(it.get("title", dest + "游")).strip()
                 loc = str(it.get("departure_location", "详见海报")).strip()
                 dates = str(it.get("departure_dates", "见海报")).strip()
                 
-                # 价格抽取与转换
                 p_raw = it.get("price_numeric", 0)
                 try:
                     p_val = int(re.sub(r'[^\d]', '', str(p_raw)))
                 except Exception:
                     p_val = 0
                 
-                p_text = str(it.get("price_text", f"RM {p_val}" if p_val > 0 else "详见海报")).strip()
+                p_text = str(it.get("price_text", ("RM " + str(p_val)) if p_val > 0 else "详见海报")).strip()
                 
                 items.append({
                     "destination": dest if dest else "精选目的地",
@@ -137,9 +135,9 @@ def analyze_single_image(file_bytes, file_name, task_dict):
     注意：只输出合法的 JSON 数组，不要任何多余解释。
     """
 
-    url = "https://api.groq.com/openai/v1/chat/completions"
+    url = "[https://api.groq.com/openai/v1/chat/completions](https://api.groq.com/openai/v1/chat/completions)"
     headers = {
-        "Authorization": f"Bearer {GROQ_API_KEY}",
+        "Authorization": "Bearer " + GROQ_API_KEY,
         "Content-Type": "application/json"
     }
     payload = {
@@ -149,7 +147,7 @@ def analyze_single_image(file_bytes, file_name, task_dict):
                 "role": "user",
                 "content": [
                     {"type": "text", "text": prompt},
-                    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{encoded_string}"}}
+                    {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64," + encoded_string}}
                 ]
             }
         ],
@@ -167,7 +165,7 @@ def analyze_single_image(file_bytes, file_name, task_dict):
             time.sleep(3)
             continue
         except Exception as e:
-            last_error = f"网络异常: {str(e)}"
+            last_error = "网络异常: " + str(e)
             time.sleep(3)
             continue
             
@@ -178,13 +176,11 @@ def analyze_single_image(file_bytes, file_name, task_dict):
                 content = content.split("</think>")[-1].strip()
             content = re.sub(r'```(?:json)?', '', content).strip()
             
-            # 1. 尝试直接整段 JSON 数组解析
             json_match = re.search(r'\[\s*\{.*\}\s*\]', content, re.DOTALL)
             if json_match:
                 try:
                     parsed = json.loads(json_match.group(0))
                     if isinstance(parsed, list) and len(parsed) > 0:
-                        # 规整字段
                         std_list = []
                         for it in parsed:
                             p_val = it.get("price_numeric", 0)
@@ -199,18 +195,16 @@ def analyze_single_image(file_bytes, file_name, task_dict):
                                 "departure_location": str(it.get("departure_location", "详见海报")).strip(),
                                 "departure_dates": str(it.get("departure_dates", "见海报")).strip(),
                                 "price_numeric": p_val,
-                                "price_text": str(it.get("price_text", f"RM {p_val}")).strip()
+                                "price_text": str(it.get("price_text", "RM " + str(p_val))).strip()
                             })
                         return std_list
                 except Exception:
                     pass
             
-            # 2. 如果整段解析失败（常见于末尾被截断），使用容错抽取器抢救每一个独立的团对象
             rescued_items = extract_partial_items(content)
             if rescued_items:
                 return rescued_items
                 
-            # 3. 如果以上还是空，尝试用正则兜底抽取文字行
             fallback_items = []
             for line in content.split('\n'):
                 sp = re.search(r'(SP\d{4,7})', line)
@@ -224,12 +218,12 @@ def analyze_single_image(file_bytes, file_name, task_dict):
                         "departure_location": "详见海报",
                         "departure_dates": "见海报",
                         "price_numeric": p_val,
-                        "price_text": f"RM {p_val}" if p_val > 0 else "详见海报"
+                        "price_text": ("RM " + str(p_val)) if p_val > 0 else "详见海报"
                     })
             if fallback_items:
                 return fallback_items
                 
-            last_error = f"未能识别出旅游团格式，AI 返回片段：{content[:120]}"
+            last_error = "未能识别出旅游团格式，AI 返回片段：" + content[:120]
             
         elif response.status_code == 429:
             wait_seconds = 25
@@ -261,7 +255,6 @@ def background_worker(files_data, task_dict):
             task_dict["errors"].append(f"{f_name}: {str(err)}")
             
         task_dict["progress"] = (idx + 1) / total
-        # 多图之间增加 3 秒间隔，平滑 Token 消耗曲线
         if idx + 1 < total:
             time.sleep(3.0)
             
@@ -272,86 +265,38 @@ def background_worker(files_data, task_dict):
 def create_html_report(df):
     cards_html = ""
     for _, row in df.iterrows():
-        cards_html += f"""
+        dest = str(row.get('destination', '未知'))
+        price = str(row.get('price_text', 'N/A'))
+        code = str(row.get('tour_code', '无'))
+        loc = str(row.get('departure_location', '详见海报'))
+        dates = str(row.get('departure_dates', '见海报'))
+        title = str(row.get('title', '无'))
+        
+        cards_html += """
         <div class="card">
             <div class="card-header">
-                <span class="dest">📍 {row.get('destination', '未知')}</span>
-                <span class="price">{row.get('price_text', 'N/A')}</span>
+                <span class="dest">📍 """ + dest + """</span>
+                <span class="price">""" + price + """</span>
             </div>
             <div class="card-body">
                 <div class="meta-row">
-                    <span><strong>团号：</strong> {row.get('tour_code', '无')}</span>
-                    <span><strong>出发地：</strong> <span class="badge">{row.get('departure_location', '详见海报')}</span></span>
+                    <span><strong>团号：</strong> """ + code + """</span>
+                    <span><strong>出发地：</strong> <span class="badge">""" + loc + """</span></span>
                 </div>
-                <div class="dates"><strong>📅 出发日期：</strong> {row.get('departure_dates', '见海报')}</div>
-                <div class="route"><strong>路线：</strong> {row.get('title', '无')}</div>
+                <div class="dates"><strong>📅 出发日期：</strong> """ + dates + """</div>
+                <div class="route"><strong>路线：</strong> """ + title + """</div>
             </div>
         </div>
         """
 
-    return f"""
-    <!DOCTYPE html>
-    <html lang="zh-CN">
-    <head>
-        <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>旅游团筛选清单</title>
-        <script src="[https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js](https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js)"></script>
-        <style>
-            body {{
-                font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
-                background-color: #f1f5f9;
-                margin: 0;
-                padding: 16px;
-                color: #0f172a;
-            }}
-            .toolbar {{
-                max-width: 650px;
-                margin: 0 auto 16px auto;
-                display: flex;
-                gap: 10px;
-            }}
-            .btn {{
-                flex: 1;
-                padding: 12px;
-                border: none;
-                border-radius: 8px;
-                font-size: 15px;
-                font-weight: 600;
-                cursor: pointer;
-                text-align: center;
-            }}
-            .btn-img {{ background-color: #e11d48; color: #fff; }}
-            .btn-pdf {{ background-color: #0284c7; color: #fff; }}
-            #capture-area {{
-                max-width: 650px;
-                margin: 0 auto;
-                background-color: #ffffff;
-                padding: 24px;
-                border-radius: 12px;
-                box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1);
-            }}
-            .main-title {{
-                text-align: center;
-                font-size: 22px;
-                font-weight: bold;
-                margin: 0 0 6px 0;
-            }}
-            .sub-title {{
-                text-align: center;
-                color: #64748b;
-                font-size: 13px;
-                margin: 0 0 20px 0;
-            }}
-            .card {{
-                border: 1px solid #e2e8f0;
-                border-radius: 8px;
-                padding: 14px;
-                margin-bottom: 12px;
-                background: #f8fafc;
-                page-break-inside: avoid;
-            }}
-            .card-header {{
-                display: flex;
-                justify-content: space-between;
-                align-items
+    total_str = str(len(df))
+    template = """<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>旅游团筛选清单</title>
+    <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif
