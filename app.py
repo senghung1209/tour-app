@@ -9,8 +9,8 @@ st.set_page_config(page_title="AI 旅游团智能筛选助手", page_icon="✈�
 st.title("✈️ 旅游团宣传单智能分析与筛选")
 st.markdown("批量上传旅游宣传图片，AI 自动提取价格、起飞地点并支持多条件筛选！")
 
-# 你的 AQ. 密钥
-API_KEY = "AQ.Ab8RN6ITYQFxGCn83gL0tdlTNT1CzrZAPpAsy2LFTJ0J4_I3Uw"
+# 已为你配置好 Groq API Key
+GROQ_API_KEY = "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"
 
 uploaded_files = st.file_uploader(
     "批量上传宣传图 (支持 JPG/PNG，可多选)", 
@@ -26,39 +26,51 @@ if uploaded_files:
     if st.button("🚀 开始让 AI 批量分析图片", type="primary"):
         with st.spinner("AI 正在努力批量识别图片中的文字、价格和起飞地点，请稍候..."):
             try:
-                # 构造多模态请求体
-                contents_parts = []
-                
-                prompt_text = """
-                分析这几张旅游宣传单图片。请提取所有图片中出现的所有旅游团信息，并【必须】把它们合并成一个合法的 JSON 列表返回，不要包含任何 markdown 标记之外的多余文字：
-                [
-                  {
-                    "destination": "目的地，例如：海南岛、哈尔滨、上海、大连、广州澳门、重庆、张家界、北疆、南疆",
-                    "tour_code": "团号，例如：SP002301",
-                    "title": "路线标题或详细描述",
-                    "departure_location": "起飞地点，例如：吉隆坡出发、柔佛起飞等",
-                    "departure_dates": "出发日期字符串",
-                    "price_numeric": 1599,
-                    "price_text": "RM 1599 起"
-                  }
+                messages_content = [
+                    {
+                        "type": "text",
+                        "text": """
+                        分析这几张旅游宣传单图片。请提取所有图片中出现的所有旅游团信息，并【必须】把它们合并成一个合法的 JSON 列表返回，不要包含任何 markdown 标记之外的多余文字，格式如下：
+                        [
+                          {
+                            "destination": "目的地，例如：海南岛、哈尔滨、上海、大连、广州澳门、重庆、张家界、北疆、南疆",
+                            "tour_code": "团号，例如：SP002301",
+                            "title": "路线标题或详细描述",
+                            "departure_location": "起飞地点，例如：吉隆坡出发、柔佛起飞等",
+                            "departure_dates": "出发日期字符串",
+                            "price_numeric": 1599,
+                            "price_text": "RM 1599 起"
+                          }
+                        ]
+                        """
+                    }
                 ]
-                """
-                contents_parts.append({"text": prompt_text})
                 
                 for file in uploaded_files:
                     encoded_string = base64.b64encode(file.getvalue()).decode('utf-8')
-                    contents_parts.append({
-                        "inline_data": {
-                            "mime_type": file.type,
-                            "data": encoded_string
+                    mime = file.type
+                    messages_content.append({
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:{mime};base64,{encoded_string}"
                         }
                     })
 
-                url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={API_KEY}"
-                payload = {
-                    "contents": [{"parts": contents_parts}]
+                url = "https://api.groq.com/openai/v1/chat/completions"
+                headers = {
+                    "Authorization": f"Bearer {GROQ_API_KEY}",
+                    "Content-Type": "application/json"
                 }
-                headers = {'Content-Type': 'application/json'}
+                payload = {
+                    "model": "llama-3.2-11b-vision-preview",
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": messages_content
+                        }
+                    ],
+                    "temperature": 0.1
+                }
 
                 response = requests.post(url, headers=headers, data=json.dumps(payload))
                 
@@ -66,7 +78,7 @@ if uploaded_files:
                     raise Exception(f"API 请求失败: {response.text}")
                 
                 res_json = response.json()
-                response_text = res_json['candidates'][0]['content']['parts'][0]['text'].strip()
+                response_text = res_json['choices'][0]['message']['content'].strip()
                 
                 if response_text.startswith("```json"):
                     response_text = response_text[7:-3].strip()
@@ -79,7 +91,6 @@ if uploaded_files:
             except Exception as e:
                 st.error(f"解析过程中出现错误: {e}")
 
-# 渲染筛选和展示界面
 if st.session_state.travel_data:
     st.markdown("---")
     st.header("🔍 旅游团智能筛选面板")
