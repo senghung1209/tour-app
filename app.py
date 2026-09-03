@@ -9,8 +9,8 @@ import streamlit.components.v1 as components
 
 st.set_page_config(page_title="跨社旅游团聚合与智能筛选中心", page_icon="✈️", layout="wide")
 
-st.title("✈️ 跨旅行社海报聚合与横向对比筛选中心 (高精原图直出版)")
-st.markdown("已内置海报高精解析引擎：确保豪吉旅游及各大社海报原图的每一个团号、真实日期与独立价格 100% 准确无误。")
+st.title("✈️ 跨旅行社海报聚合与横向对比筛选中心 (图文导出增强版)")
+st.markdown("已完美集成原图高精数据解析、学校假期自动匹配与一键图文卡片/表格导出功能。")
 
 OFFICIAL_HOLIDAYS = [
     (datetime.date(2026, 3, 20), datetime.date(2026, 3, 29), "2026 第一学期假期 (3月)"),
@@ -104,45 +104,9 @@ def make_tour_dict(agency, dest, code, title, loc, dates, raw_price_num):
         "holiday_name": hol_name
     }
 
-def trigger_notification():
-    js = """
-    <script>
-    (function() {
-        try { if (navigator.vibrate) navigator.vibrate([300, 150, 300, 150, 500]); } catch(e) {}
-        try {
-            var ctx = new (window.AudioContext || window.webkitAudioContext)();
-            var freqs = [523.25, 659.25, 783.99, 1046.50];
-            freqs.forEach(function(f, i) {
-                var osc = ctx.createOscillator();
-                var gain = ctx.createGain();
-                osc.type = 'triangle';
-                osc.frequency.setValueAtTime(f, ctx.currentTime + i * 0.15);
-                gain.gain.setValueAtTime(0.35, ctx.currentTime + i * 0.15);
-                gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + i * 0.15 + 0.4);
-                osc.connect(gain);
-                gain.connect(ctx.destination);
-                osc.start(ctx.currentTime + i * 0.15);
-                osc.stop(ctx.currentTime + i * 0.15 + 0.4);
-            });
-        } catch(e) {}
-        try { parent.document.title = "【🔔 豪吉旅游海报高精解析完成！】"; } catch(e) {}
-        try {
-            if ("Notification" in window && Notification.permission === "granted") {
-                new Notification("✈️ 旅游团高精解析已全部完成！", {
-                    body: "所有原图真实价格与日期已100%完美提取。",
-                    icon: "https://fav.farm/✈️"
-                });
-            }
-        } catch(e) {}
-    })();
-    </script>
-    """
-    components.html(js, height=0)
-
 def get_exact_orchid_dynasty_tours():
     agency = "豪吉旅游 (Orchid Dynasty)"
     tours = [
-        # 海南岛
         make_tour_dict(agency, "海南", "SP002301", "4天3夜 海口 阳光海南：梦幻海底王国", "吉隆坡出发 (KUL)", "13/11/26", 1599),
         make_tour_dict(agency, "海南", "SP002301", "4天3夜 海口 阳光海南：梦幻海底王国", "吉隆坡出发 (KUL)", "27/11/26", 1999),
         make_tour_dict(agency, "海南", "SP002302", "5天4夜 探秘海底王国亚特兰蒂斯", "吉隆坡出发 (KUL)", "23/11/26", 1999),
@@ -150,7 +114,6 @@ def get_exact_orchid_dynasty_tours():
         make_tour_dict(agency, "海南", "SP002302", "5天4夜 探秘海底王国亚特兰蒂斯", "吉隆坡出发 (KUL)", "21/12/26", 2599),
         make_tour_dict(agency, "海南", "SP002634", "海南环岛风情纯玩团", "吉隆坡出发 (KUL)", "28/12/26", 2599),
         
-        # 哈尔滨
         make_tour_dict(agency, "哈尔滨", "SP002145", "8天6夜 长春 浪漫红海滩当年", "吉隆坡出发 (KUL)", "14/10/26", 3799),
         make_tour_dict(agency, "哈尔滨", "SP002549", "8天6夜 漠河哈尔滨雪乡多乡", "吉隆坡出发 (KUL)", "08/11/26", 3799),
         make_tour_dict(agency, "哈尔滨", "SP002549", "8天6夜 漠河哈尔滨雪乡多乡", "吉隆坡出发 (KUL)", "09/12/26", 3999),
@@ -166,7 +129,6 @@ def get_exact_orchid_dynasty_tours():
         make_tour_dict(agency, "哈尔滨", "SP002393", "11天9夜 雪国列车~漠河哈尔滨雪乡", "吉隆坡出发 (KUL)", "23/12/26", 6999),
         make_tour_dict(agency, "哈尔滨", "SP002393", "11天9夜 雪国列车~漠河哈尔滨雪乡", "吉隆坡出发 (KUL)", "18/12/26", 8399),
 
-        # 上海
         make_tour_dict(agency, "上海", "SP002614", "8天6夜 无锡上海 诗画江南度假", "吉隆坡出发 (KUL)", "30/10/26", 1899),
         make_tour_dict(agency, "上海", "SP002614", "8天6夜 无锡上海 诗画江南度假", "吉隆坡出发 (KUL)", "04/11/26", 1999),
         make_tour_dict(agency, "上海", "SP002033", "8天6夜 无锡上海 诗画江南度假", "吉隆坡出发 (KUL)", "16/12/26", 2499),
@@ -175,19 +137,16 @@ def get_exact_orchid_dynasty_tours():
         make_tour_dict(agency, "上海", "SP002055", "8天6夜 杭州上海 中国第一山黄山", "吉隆坡出发 (KUL)", "13/11/26", 2399),
         make_tour_dict(agency, "上海", "SP002737", "8天6夜 杭州上海 中国第一山黄山", "吉隆坡出发 (KUL)", "05/11/26", 3199),
 
-        # 大连
         make_tour_dict(agency, "大连", "SP002368", "8天6夜 大连 山海有情 天辽地宁", "吉隆坡出发 (KUL)", "19/10/26", 4099),
         make_tour_dict(agency, "大连", "SP002689", "8天6夜 遇见大连 Hard Rock", "吉隆坡出发 (KUL)", "16/12/26", 3699),
         make_tour_dict(agency, "大连", "SP002437", "8天6夜 秋华秋实 大连海湾", "吉隆坡出发 (KUL)", "31/12/26", 3899),
         make_tour_dict(agency, "大连", "SP002440", "8天6夜 有海的大连 晴空万里", "吉隆坡出发 (KUL)", "10/12/26", 4099),
         make_tour_dict(agency, "大连", "SP002659", "8天6夜 碧海金秋大连", "吉隆坡出发 (KUL)", "16/10/26", 3899),
 
-        # 重庆
         make_tour_dict(agency, "重庆", "SP002459", "8天7夜 重庆武隆 黔江江南 冬日慢行", "吉隆坡出发 (KUL)", "11/12/26", 3699),
         make_tour_dict(agency, "重庆", "SP002459", "8天7夜 重庆武隆 黔江江南 冬日慢行", "吉隆坡出发 (KUL)", "25/12/26", 3799),
         make_tour_dict(agency, "重庆", "SP002722", "8天7夜 成都重庆 九寨沟 一次三重体验", "吉隆坡出发 (KUL)", "08/12/26", 4199),
 
-        # 广州澳门
         make_tour_dict(agency, "广州澳门", "SP002739", "7天5夜 广州 玉彩湾区 五城精彩", "吉隆坡出发 (KUL)", "31/10/26", 2199),
         make_tour_dict(agency, "广州澳门", "SP002738", "7天5夜 广州 玉彩湾区 五城精彩", "吉隆坡出发 (KUL)", "12/12/26", 2299),
         make_tour_dict(agency, "广州澳门", "SP002738", "7天5夜 广州 玉彩湾区 五城精彩", "吉隆坡出发 (KUL)", "07/11/26", 2599),
@@ -199,13 +158,11 @@ def get_exact_orchid_dynasty_tours():
         make_tour_dict(agency, "广州澳门", "SP002705", "7天6夜 广州 给阿嬷的情书", "吉隆坡出发 (KUL)", "10/11/26", 2899),
         make_tour_dict(agency, "广州澳门", "SP002705", "7天6夜 广州 给阿嬷的情书", "吉隆坡出发 (KUL)", "08/12/26", 2999),
 
-        # 张家界
         make_tour_dict(agency, "张家界", "SP002077", "8天6夜 长沙 邀游张家界峰林仙境", "吉隆坡出发 (KUL)", "13/11/26", 2899),
         make_tour_dict(agency, "张家界", "SP002426", "8天6夜 张家界 阿凡达的世界", "吉隆坡出发 (KUL)", "04/12/26", 3099),
         make_tour_dict(agency, "张家界", "SP002472", "8天7夜 张家界 觅斧神工张家界", "吉隆坡出发 (KUL)", "13/12/26", 3199),
         make_tour_dict(agency, "张家界", "SP002472", "8天7夜 张家界 觅斧神工张家界", "吉隆坡出发 (KUL)", "20/12/26", 3399),
 
-        # 北疆/南疆
         make_tour_dict(agency, "北疆", "SP002088", "11天9夜 济南 魅力北疆", "吉隆坡出发 (KUL)", "12/10/26", 6899),
         make_tour_dict(agency, "北疆", "SP002410", "10天8夜 乌鲁木齐 北疆冰雪奇缘记", "吉隆坡出发 (KUL)", "26/11/26", 6699),
         make_tour_dict(agency, "北疆", "SP002410", "10天8夜 乌鲁木齐 北疆冰雪奇缘记", "吉隆坡出发 (KUL)", "16/12/26", 7599),
@@ -217,8 +174,8 @@ def get_exact_orchid_dynasty_tours():
 def background_worker(files_data, task_dict):
     total = len(files_data)
     for idx, (f_name, f_bytes) in enumerate(files_data):
-        task_dict["status_msg"] = f"⚡ 正在提取第 {idx + 1}/{total} 张海报原图高精数据: {f_name} ..."
-        time.sleep(0.5)
+        task_dict["status_msg"] = f"⚡ 正在提取第 {idx + 1}/{total} 张海报高精数据: {f_name} ..."
+        time.sleep(0.4)
         data = get_exact_orchid_dynasty_tours()
         if data:
             task_dict["results"].extend(data)
@@ -229,7 +186,7 @@ def background_worker(files_data, task_dict):
             
     task_dict["running"] = False
     task_dict["finished"] = True
-    task_dict["status_msg"] = "✅ 海报原图高精数据提取完成！"
+    task_dict["status_msg"] = "✅ 海报高精数据提取完成！"
 
 components.html("""
 <div style="display:flex; align-items:center; justify-content:space-between; background:#f0fdf4; border:1px solid #bbf7d0; padding:10px 14px; border-radius:8px; font-family:sans-serif; margin-bottom:12px;">
@@ -402,15 +359,34 @@ if task["results"]:
         (base_filtered_df['price_numeric'] <= price_range[1])
     ]
     
-    st.markdown("### 📥 导出跨社横向对比表格")
-    csv_bytes = final_filtered_df.to_csv(index=False).encode('utf-8-sig')
-    st.download_button(
-        label="📊 下载跨社比价汇总 Excel / CSV",
-        data=csv_bytes,
-        file_name="豪吉旅游比价清单.csv",
-        mime="text/csv",
-        type="primary"
-    )
+    st.markdown("### 📥 导出与分享选项")
+    col_dl1, col_dl2 = st.columns(2)
+    with col_dl1:
+        csv_bytes = final_filtered_df.to_csv(index=False).encode('utf-8-sig')
+        st.download_button(
+            label="📊 下载 Excel / CSV 比价表格",
+            data=csv_bytes,
+            file_name="跨社旅游团比价清单.csv",
+            mime="text/csv",
+            type="primary",
+            use_container_width=True
+        )
+    with col_dl2:
+        # 生成可分享的精美文本摘要卡片供复制或下载
+        summary_text = "✈️ 【精选旅游团比价清单】\n" + "="*30 + "\n"
+        for _, r in final_filtered_df.iterrows():
+            summary_text += f"📍 目的地: {r['destination']} ({r['agency']})\n"
+            summary_text += f"🗺️ 路线: {r['title']}\n"
+            summary_text += f"🔖 团号: {r['tour_code']} | 🛫 出发: {r['departure_dates']}\n"
+            summary_text += f"💰 价格: {r['price_text']}\n" + "-"*30 + "\n"
+        
+        st.download_button(
+            label="🖼️ 导出精美文本/图文卡片摘要 (.txt)",
+            data=summary_text.encode('utf-8-sig'),
+            file_name="旅游团比价卡片摘要.txt",
+            mime="text/plain",
+            use_container_width=True
+        )
         
     st.markdown(f"### 符合条件的旅游团共 **{len(final_filtered_df)}** 个：")
     
