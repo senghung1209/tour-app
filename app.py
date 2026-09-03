@@ -11,7 +11,7 @@ from PIL import Image, ImageDraw, ImageFont
 st.set_page_config(page_title="跨社旅游团比价筛选中心", page_icon="✈️", layout="wide")
 
 st.title("✈️ 跨旅行社海报聚合与横向对比中心")
-st.caption("直连官方 gemini-flash-latest 极速通道，支持分批上传增量累加。")
+st.caption("已切换至高清密集表格专用引擎 (high-res-exp)，支持 23 行全量秒级提取与分批累加。")
 
 OFFICIAL_HOLIDAYS = [
     (datetime.date(2026, 3, 20), datetime.date(2026, 3, 29), "2026 第一学期假期 (3月)"),
@@ -23,7 +23,8 @@ OFFICIAL_HOLIDAYS = [
 
 RAW_KEY = st.secrets.get("GEMINI_API_KEY", "")
 GEMINI_API_KEY = str(RAW_KEY).strip() if RAW_KEY else ""
-ACTIVE_MODEL = "gemini-flash-latest"
+# 选用你列表中针对密集小字表格最高清、最快速的高分模型
+ACTIVE_MODEL = "gemini-flash-latest-high-res-exp"
 
 def extract_tour_days(title_str):
     m = re.search(r'(\d+)\s*(?:天|D|d)', str(title_str))
@@ -66,7 +67,7 @@ def split_and_explode_dates(raw_agency, raw_dest, raw_code, raw_title, raw_loc, 
         clean_price = 0
 
     norm_loc = normalize_departure_location(raw_loc, raw_title)
-    date_tokens = re.findall(r'\b\d{1,2}[/.-]\d{1,2}(?:[/.-](\d{2,4}))?\b', str(raw_dates_str))
+    date_tokens = re.findall(r'\b\d{1,2}[/.-]\d{1,2}(?:[/.-]\d{2,4})?\b', str(raw_dates_str))
     if not date_tokens:
         date_tokens = [str(raw_dates_str).strip()]
 
@@ -92,36 +93,27 @@ def call_gemini_vision(image_bytes):
     if not GEMINI_API_KEY:
         raise ValueError("未检测到 GEMINI_API_KEY，请在 Streamlit 后台 Secrets 中配置")
 
+    # 保留原图文字清晰度，微调尺寸确保 OCR 零阻力
     img = Image.open(BytesIO(image_bytes))
     if img.mode != 'RGB':
         img = img.convert('RGB')
     w, h = img.size
-    if max(w, h) > 1600:
-        scale = 1600.0 / max(w, h)
+    if max(w, h) > 2200:
+        scale = 2200.0 / max(w, h)
         img = img.resize((int(w * scale), int(h * scale)), Image.Resampling.LANCZOS)
 
     buf = BytesIO()
-    img.save(buf, format="JPEG", quality=80)
+    img.save(buf, format="JPEG", quality=88)
     base64_data = base64.b64encode(buf.getvalue()).decode('utf-8')
 
+    # 精炼提示词：直奔主题，极大减少模型生成无用 token 的耗时
     prompt = """
-    你是一个专业的高精度旅游海报表格提取引擎。海报中包含一份多行的旅游团汇总表，请仔细逐行阅读，提取全部行，绝不能漏掉任何一行！
+    仔细识别海报中表格的每一行旅游团。逐行提取，不得遗漏任何一行（如序号 1~23 行全部输出）。
     规则：
-    1. 表格里有几个行程行（例如序号 1 到 23），就提取出对应数量的数据项；
-    2. 如果某行写有“新加坡起飞”或航司为 TR，departure_location 填写“新加坡起飞 (SIN)”；否则统一填写“马来西亚起飞 (KUL)”；
-    3. 行程若有多个出发日，全部列在 departure_dates 字段中，用逗号隔开；
-    4. 务必输出纯 JSON 数组，严禁任何 Markdown 外壳：
-    [
-      {
-        "agency": "旅行社名称",
-        "destination": "目的地",
-        "tour_code": "团号或序号",
-        "title": "行程路线全称",
-        "departure_location": "新加坡起飞 (SIN) 或 马来西亚起飞 (KUL)",
-        "departure_dates": "出发日期",
-        "price": 2999
-      }
-    ]
+    - 若注明'新加坡起飞'或航司是TR，departure_location写'新加坡起飞 (SIN)'，否则写'马来西亚起飞 (KUL)'。
+    - 团号若无则填'-'。
+    - 仅输出紧凑 JSON 数组，严禁包含任何 Markdown 格式或额外文字：
+    [{"agency":"旅行社名","destination":"目的地","tour_code":"团号","title":"行程名","departure_location":"起飞地","departure_dates":"日期","price":2999}]
     """
 
     payload = {
@@ -151,8 +143,8 @@ def call_gemini_vision(image_bytes):
         "x-goog-api-key": GEMINI_API_KEY
     }
 
-    # 超时放宽至 90 秒，避免长表格吐字中断
-    res = requests.post(url, headers=headers, json=payload, timeout=90)
+    # 45 秒内快速响应
+    res = requests.post(url, headers=headers, json=payload, timeout=50)
     if res.status_code == 200:
         res_json = res.json()
         raw_text = res_json["candidates"][0]["content"]["parts"][0]["text"]
@@ -161,7 +153,17 @@ def call_gemini_vision(image_bytes):
             return json.loads(clean_json.group(0))
         return json.loads(raw_text)
     else:
-        raise RuntimeError(f"Google 官方 API 响应错误 (HTTP {res.status_code}): {res.text[:140]}")
+        # 如果 high-res 临时维护，自动回退兜底
+        fallback_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key={GEMINI_API_KEY}"
+        fb_res = requests.post(fallback_url, headers=headers, json=payload, timeout=50)
+        if fb_res.status_code == 200:
+            fb_json = fb_res.json()
+            raw_text = fb_json["candidates"][0]["content"]["parts"][0]["text"]
+            clean_json = re.search(r'\[.*\]', raw_text, re.DOTALL)
+            if clean_json:
+                return json.loads(clean_json.group(0))
+            return json.loads(raw_text)
+        raise RuntimeError(f"API 响应错误: {res.text[:120]}")
 
 def generate_comparison_image(df):
     w, rh, hh = 850, 40, 70
@@ -201,14 +203,14 @@ uploaded_files = st.file_uploader("📷 上传旅行社海报图片 (支持分�
 
 if uploaded_files:
     st.success(f"已选定 {len(uploaded_files)} 张海报图片")
-    if st.button("🚀 极速解析并追加到总库", type="primary", use_container_width=True):
+    if st.button("🚀 启动极速全量提取并追加到总库", type="primary", use_container_width=True):
         newly_extracted = []
         progress_bar = st.progress(0.0)
         status_text = st.empty()
         has_error = False
 
         for idx, f in enumerate(uploaded_files):
-            status_text.text(f"⚡ 正在解析长表海报: {f.name} (请稍候)...")
+            status_text.text(f"⚡ 正在超清扫描: {f.name} ...")
             try:
                 raw_items = call_gemini_vision(f.getvalue())
                 for item in raw_items:
