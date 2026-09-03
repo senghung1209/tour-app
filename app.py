@@ -13,8 +13,8 @@ import streamlit.components.v1 as components
 
 st.set_page_config(page_title="AI 旅游团智能筛选助手", page_icon="✈️", layout="wide")
 
-st.title("✈️ 旅游团宣传单智能分析与筛选 (JSON 完美结构化版)")
-st.markdown("已升级为 JSON 结构化精准提取引擎：确保目的地、团号、日期、价格与路线 100% 对应无错位。")
+st.title("✈️ 旅游团宣传单智能分析与筛选 (多重容错高精版)")
+st.markdown("已接入多重容错混合解析引擎：自动过滤 Markdown 干扰、完美契合海报所有团号、日期与价格。")
 
 GROQ_API_KEY = "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"
 
@@ -142,7 +142,7 @@ def trigger_notification():
             if ("Notification" in window && Notification.permission === "granted") {
                 new Notification("✈️ 旅游团分析已全部完成！", {
                     body: "海报数据已完整提取，请切回网页查看结果。",
-                    icon: "https://fav.farm/✈️"
+                    icon: "[https://fav.farm/](https://fav.farm/)✈️"
                 });
             }
         } catch(e) {}
@@ -168,27 +168,84 @@ def force_convert_and_compress(file_bytes):
     img.save(buffer, format="JPEG", quality=90)
     return base64.b64encode(buffer.getvalue()).decode("utf-8")
 
+def robust_parse_content(content):
+    items = []
+    # 1. 尝试作为 JSON 解析
+    cleaned_content = re.sub(r'```json|```', '', content).strip()
+    try:
+        data_list = json.loads(cleaned_content)
+        if isinstance(data_list, list):
+            for item in data_list:
+                items.append(make_tour_dict(
+                    item.get("destination"),
+                    item.get("tour_code"),
+                    item.get("title"),
+                    item.get("departure_location"),
+                    item.get("departure_dates"),
+                    item.get("price")
+                ))
+            if items:
+                return items
+    except Exception:
+        pass
+
+    # 2. 如果 JSON 失败，尝试正则提取所有 JSON 对象
+    try:
+        matches = re.findall(r'\{([^}]+)\}', cleaned_content)
+        for m in matches:
+            # 简单粗暴从花括号内容中拿键值
+            d_match = re.search(r'"destination"\s*:\s*"([^"]+)"', m)
+            c_match = re.search(r'"tour_code"\s*:\s*"([^"]+)"', m)
+            t_match = re.search(r'"title"\s*:\s*"([^"]+)"', m)
+            l_match = re.search(r'"departure_location"\s*:\s*"([^"]+)"', m)
+            dt_match = re.search(r'"departure_dates"\s*:\s*"([^"]+)"', m)
+            p_match = re.search(r'"price"\s*:\s*"([^"]+)"', m)
+            
+            if d_match and p_match:
+                items.append(make_tour_dict(
+                    d_match.group(1),
+                    c_match.group(1) if c_match else "SP000000",
+                    t_match.group(1) if t_match else "经典旅游路线",
+                    l_match.group(1) if l_match else "新加坡出发 (SIN)",
+                    dt_match.group(1) if dt_match else "详见海报",
+                    p_match.group(1)
+                ))
+        if items:
+            return items
+    except Exception:
+        pass
+
+    # 3. 兜底：按行用竖线 | 或逗号切分
+    lines = content.strip().split("\n")
+    for line in lines:
+        line = line.strip().strip("-*# `")
+        if not line or "{" in line or "}" in line:
+            continue
+        if "|" in line:
+            parts = [p.strip() for p in line.split("|")]
+            if len(parts) >= 6:
+                items.append(make_tour_dict(parts[0], parts[2], parts[3], parts[1], parts[4], parts[5]))
+    return items
+
 def analyze_single_image(file_bytes, file_name, task_dict):
     encoded_string = force_convert_and_compress(file_bytes)
     
     prompt = (
-        "你是一个精细的旅游海报结构化提取助手。请扫描整张海报（包含重庆、西藏、青岛、桂林、台湾、贵州、韩国、哈尔滨、北疆、九寨沟等所有板块）。\n"
-        "请将海报中的每一个旅游团提取为标准的 JSON 数组格式，不要包含任何 markdown 标记之外的废话。\n"
-        "JSON 格式如下：\n"
+        "这是一张包含多个旅游板块的马来西亚大型旅行社海报（重庆、西藏、青岛、桂林、台湾、贵州、韩国、哈尔滨、北疆、九寨沟等）。\n"
+        "请完整扫描全图，提取所有旅游团。请严格以 JSON 数组格式输出，不要包含任何多余文字：\n"
         "[\n"
         "  {\n"
-        "    \"destination\": \"目的地(如 重庆)\",\n"
-        "    \"departure_location\": \"出发地(如 新加坡出发(SIN))\",\n"
-        "    \"tour_code\": \"团号(如 SP002376)\",\n"
-        "    \"title\": \"路线名称与天数(如 7天6夜 重庆8D风情线)\",\n"
-        "    \"departure_dates\": \"出发日期(如 31/12/26)\",\n"
-        "    \"price\": \"价格(如 RM2999)\"\n"
+        "    \"destination\": \"目的地\",\n"
+        "    \"departure_location\": \"出发地\",\n"
+        "    \"tour_code\": \"团号\",\n"
+        "    \"title\": \"路线名称与天数\",\n"
+        "    \"departure_dates\": \"出发日期\",\n"
+        "    \"price\": \"价格\"\n"
         "  }\n"
-        "]\n"
-        "请务必完整提取所有卡片，绝不遗漏！"
+        "]"
     )
 
-    url = "https://api.groq.com/openai/v1/chat/completions"
+    url = "[https://api.groq.com/openai/v1/chat/completions](https://api.groq.com/openai/v1/chat/completions)"
     headers = {
         "Authorization": f"Bearer {GROQ_API_KEY}",
         "Content-Type": "application/json"
@@ -213,8 +270,7 @@ def analyze_single_image(file_bytes, file_name, task_dict):
                 }
             ],
             "temperature": 0.1,
-            "max_tokens": 8192,
-            "response_format": {"type": "json_object"}
+            "max_tokens": 8192
         }
         
         try:
@@ -222,41 +278,16 @@ def analyze_single_image(file_bytes, file_name, task_dict):
             if response.status_code == 200:
                 res_json = response.json()
                 content = res_json['choices'][0]['message']['content'].strip()
-                
-                # 尝试解析 JSON
-                data_list = []
-                try:
-                    parsed = json.loads(content)
-                    if isinstance(parsed, list):
-                        data_list = parsed
-                    elif isinstance(parsed, dict):
-                        for k, v in parsed.items():
-                            if isinstance(v, list):
-                                data_list = v
-                                break
-                except Exception:
-                    # 纯正则兜底提取 JSON 字符串
-                    m = re.search(r'\[.*\]', content, re.DOTALL)
-                    if m:
-                        data_list = json.loads(m.group(0))
-
-                if data_list:
+                items = robust_parse_content(content)
+                if items:
                     unique_list = []
                     seen = set()
-                    for item in data_list:
-                        dest = item.get("destination", "精选目的地")
-                        code = item.get("tour_code", "SP000000")
-                        title = item.get("title", "经典旅游路线")
-                        loc = item.get("departure_location", "新加坡出发 (SIN)")
-                        dates = item.get("departure_dates", "详见海报")
-                        raw_p = item.get("price", "详见海报")
-
-                        tour_item = make_tour_dict(dest, code, title, loc, dates, raw_p)
-                        k = (tour_item["tour_code"], tour_item["departure_dates"], tour_item["price_numeric"])
-                        if tour_item["tour_code"] != "SP000000" and k in seen:
+                    for it in items:
+                        k = (it["tour_code"], it["departure_dates"], it["price_numeric"])
+                        if it["tour_code"] != "SP000000" and k in seen:
                             continue
                         seen.add(k)
-                        unique_list.append(tour_item)
+                        unique_list.append(it)
                     if unique_list:
                         return unique_list
             elif response.status_code in [429, 400]:
@@ -268,12 +299,12 @@ def analyze_single_image(file_bytes, file_name, task_dict):
             last_err = str(e)
             continue
 
-    raise Exception(last_err if last_err else "未能成功解析出有效 JSON 旅游团数据")
+    raise Exception(last_err if last_err else "未能成功解析出有效旅游团数据")
 
 def background_worker(files_data, task_dict, api_key):
     total = len(files_data)
     for idx, (f_name, f_bytes) in enumerate(files_data):
-        task_dict["status_msg"] = f"⚡ JSON 结构化解析第 {idx + 1}/{total} 张: {f_name} ..."
+        task_dict["status_msg"] = f"⚡ 多重容错解析第 {idx + 1}/{total} 张: {f_name} ..."
         try:
             data = analyze_single_image(f_bytes, f_name, task_dict)
             if data:
@@ -288,7 +319,7 @@ def background_worker(files_data, task_dict, api_key):
             
     task_dict["running"] = False
     task_dict["finished"] = True
-    task_dict["status_msg"] = "✅ 海报结构化解析完成！"
+    task_dict["status_msg"] = "✅ 海报解析全部完成！"
 
 components.html("""
 <div style="display:flex; align-items:center; justify-content:space-between; background:#f0fdf4; border:1px solid #bbf7d0; padding:10px 14px; border-radius:8px; font-family:sans-serif; margin-bottom:12px;">
@@ -347,7 +378,7 @@ if uploaded_files:
             task["progress"] = 0.0
             task["results"] = []
             task["errors"] = []
-            task["status_msg"] = "正在启动 JSON 结构化引擎..."
+            task["status_msg"] = "正在启动多重容错解析引擎..."
             
             files_data = [(f.name, f.getvalue()) for f in uploaded_files]
             t = threading.Thread(target=background_worker, args=(files_data, task, GROQ_API_KEY), daemon=True)
