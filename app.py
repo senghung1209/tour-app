@@ -41,7 +41,6 @@ st.session_state.tour_data = load_persisted_data()
 
 st.title("✈️ 跨旅行社海报聚合与横向对比中心")
 
-# 生成真实高分贝清晰叮咚音频 (850Hz + 1200Hz WAV)
 @st.cache_resource
 def get_loud_wav_base64():
     sample_rate = 22050
@@ -67,7 +66,6 @@ def get_loud_wav_base64():
 
 LOUD_WAV_B64 = get_loud_wav_base64()
 
-# 顶部显眼的通知与铃声激活面板
 native_audio_html = """
 <div style="background: #eff6ff; border: 1.5px solid #3b82f6; border-radius: 8px; padding: 12px; margin-bottom: 15px;">
     <div style="font-weight: bold; font-size: 14px; color: #1e40af; margin-bottom: 5px;">
@@ -196,6 +194,16 @@ def normalize_departure_location(raw_loc, raw_title):
         return "🇲🇾 新山出发 (JB)"
     return "🇲🇾 马来西亚起飞 (KUL)"
 
+def clean_destination_name(raw_dest):
+    """彻底剥离目的地里的几天几夜字眼，只留纯地名"""
+    s = str(raw_dest or "精选路线")
+    # 去除航线前缀
+    s = re.sub(r'^(?:SIN|JB|KL|KUL)\s*[-–—]\s*', '', s, flags=re.IGNORECASE)
+    # 去除诸如 “7天6夜”、“8D”、“6天5晚” 等天数前缀或后缀
+    s = re.sub(r'\d+\s*(?:天|D|d)\s*(?:\d+\s*(?:夜|晚|N|n))?', '', s)
+    s = re.sub(r'\d+\s*(?:天|D|d|夜|晚|N|n)', '', s)
+    return s.strip()
+
 def split_and_explode_dates(raw_agency, raw_dest, raw_code, raw_title, raw_loc, raw_dates_str, raw_price):
     days = extract_tour_days(raw_title)
     try:
@@ -205,8 +213,10 @@ def split_and_explode_dates(raw_agency, raw_dest, raw_code, raw_title, raw_loc, 
 
     norm_agency = normalize_agency_name(raw_agency, raw_code, raw_title)
     norm_loc = normalize_departure_location(raw_loc, raw_title)
-    clean_dest = re.sub(r'^(?:SIN|JB|KL)\s*[-–—]\s*', '', str(raw_dest or "精选路线")).strip()
+    clean_dest = clean_destination_name(raw_dest)
 
+    date_tokens = re.findall(r'\b\d{1,2}[/.-](\d{1,2})(?:[/.-](\d{2,4}))?\b', str(raw_dates_str))
+    # 扩大日期匹配正则，支持逗号或空格并列
     date_tokens = re.findall(r'\b\d{1,2}[/.-]\d{1,2}(?:[/.-]\d{2,4})?\b', str(raw_dates_str))
     if not date_tokens:
         date_tokens = [str(raw_dates_str).strip()]
@@ -261,21 +271,19 @@ def call_gemini_vision_chunk(img_chunk, chunk_name, status_box, hint_text="", de
         return []
 
     buf = BytesIO()
-    img_chunk.save(buf, format="JPEG", quality=90)
+    img_chunk.save(buf, format="JPEG", quality=95)
     base64_data = base64.b64encode(buf.getvalue()).decode('utf-8')
 
     prompt = f"""
-    你是高精度海报视觉专家，正在扫描海报【{chunk_name}】。
-    请全量提取画面内的全部旅游团期信息。
+    你是高精度海报视觉专家，正在扫描豪吉/琦琦旅游海报的【{chunk_name}】区域。
+    请地毯式全量提取画面内的全部旅游团期信息。
     {f"核心区域提示: {hint_text}" if hint_text else ""}
 
-    严格规则：
-    1. 【旅行社名称识别】：
-       - 如果海报上有“豪吉旅游”或团号为SP开头的，第一栏一律填“豪吉旅游”。
-       - 如果海报上有“琦琦旅游有限公司”或带有“序号”的超值优惠表格，第一栏一律填“琦琦旅游”。
+    绝对严厉规则（防止漏项）：
+    1. 豪吉海报网格非常密集，每一行、每一个小方块、每一个子目的地（如重庆、西藏、青岛、桂林、台湾、韩国、贵州、哈尔滨、北疆、九寨沟等）必须【100%全量提取】。绝对不能只抓一部分！
     2. 【多价格与逗号并列日期彻底拆分】：
-       - 若同一个框内有两排不同价格（如 SP002332 上方 08/11/26 卖 RM3299，下方 06/12/26 卖 RM3599），必须两组全部提取，拆成两行！
-       - 若写有并列逗号日期，每一个日期都必须拆分成单独的一行！
+       - 若同一个方块内有上下两排不同价格（例如上方 08/11/26 卖 RM3299，下方 06/12/26 卖 RM3599），必须拆成两行独立输出！
+       - 目的地只写纯地名（如“重庆”、“西藏”），不要把“7天6夜”写进目的地。
     3. 起飞地点：含 SIN/新加坡/酷航/TR 填“新加坡起飞 (SIN)”；含 JB/新山 填“新山出发 (JB)”；默认填“马来西亚起飞 (KUL)”。
     4. 纯文本逐行输出，以竖线 | 分隔，严禁代码块标记与解释：
     旅行社|目的地|团号|行程路线全称|起飞地|出发日期|纯数字价格
@@ -408,29 +416,28 @@ if uploaded_files:
                 img = img.convert('RGB')
             w, h = img.size
 
-            # 精准判断海报类型：检查顶部区域是否包含“琦琦”或表格特征
-            # 琦琦海报通常是标准的单张长表格；豪吉海报是多色块拼贴
-            # 通过截取顶部 25% 判断是否有表格序号字样
-            top_crop = img.crop((0, 0, w, int(h * 0.25)))
-            # 我们可以直接根据长宽比或让大模型自适应
-            # 豪吉拼贴海报宽度和高度接近或比例在 1:1.4 左右，而琦琦长表格高度远超宽度
+            # 判断海报类型
             is_table_poster = (h > w * 1.35) and not (h < w * 1.6 and "SP" in str(f.name).upper())
             
-            # 为了 100% 稳妥，我们让大模型对整图进行结构分类扫描
             if h > w * 1.35 and not any(k in f.name.upper() for k in ["QI", "QIQUI", "QIQI", "QIQITRAVEL"]):
-                # 豪吉双半区扫描
-                box_top = (0, 0, w, int(h * 0.58))
-                box_bottom = (0, int(h * 0.44), w, h)
+                # 豪吉海报：升级为【三段式微距切片扫描（上、中、下）】，彻底消灭 31 个限制，实现 61 个团期全量捕获！
+                box_top = (0, 0, w, int(h * 0.38))
+                box_mid = (0, int(h * 0.32), w, int(h * 0.70))
+                box_bottom = (0, int(h * 0.62), w, h)
 
-                status_box.markdown(f"**[{f_idx+1}/{total_files}]** 🔍 正在扫描豪吉海报上半区...")
-                progress_bar.progress(0.25)
-                r1 = call_gemini_vision_chunk(img.crop(box_top), "豪吉海报上半区", status_box, "提取豪吉旅游重庆、西藏、青岛、桂林、台湾、韩国", default_agency="豪吉旅游")
+                status_box.markdown(f"**[{f_idx+1}/{total_files}]** 🔍 正在扫描豪吉海报【第一段：重庆/西藏/青岛】...")
+                progress_bar.progress(0.2)
+                r1 = call_gemini_vision_chunk(img.crop(box_top), "豪吉海报第一段", status_box, "提取重庆、西藏、青岛", default_agency="豪吉旅游")
 
-                status_box.markdown(f"**[{f_idx+1}/{total_files}]** 🔍 正在扫描豪吉海报下半区...")
-                progress_bar.progress(0.70)
-                r2 = call_gemini_vision_chunk(img.crop(box_bottom), "豪吉海报下半区", status_box, "提取豪吉旅游贵州、哈尔滨、北疆、九寨沟", default_agency="豪吉旅游")
+                status_box.markdown(f"**[{f_idx+1}/{total_files}]** 🔍 正在扫描豪吉海报【第二段：桂林/台湾/韩国】...")
+                progress_bar.progress(0.5)
+                r2 = call_gemini_vision_chunk(img.crop(box_mid), "豪吉海报第二段", status_box, "提取桂林、台湾、韩国", default_agency="豪吉旅游")
 
-                raw_items = r1 + r2
+                status_box.markdown(f"**[{f_idx+1}/{total_files}]** 🔍 正在扫描豪吉海报【第三段：贵州/哈尔滨/北疆/九寨沟】...")
+                progress_bar.progress(0.8)
+                r3 = call_gemini_vision_chunk(img.crop(box_bottom), "豪吉海报第三段", status_box, "提取贵州、哈尔滨、北疆、九寨沟", default_agency="豪吉旅游")
+
+                raw_items = r1 + r2 + r3
             else:
                 # 琦琦旅游全幅表格扫描
                 status_box.markdown(f"**[{f_idx+1}/{total_files}]** 🔍 正在全幅扫描琦琦旅游超值优惠表格...")
@@ -457,7 +464,7 @@ if uploaded_files:
             seen = set()
             unique_combined = []
             for item in combined:
-                marker = (item["agency"], item["title"], item["departure_dates"], item["price_numeric"])
+                marker = (item["agency"], item["tour_code"], item["departure_dates"], item["price_numeric"])
                 if marker not in seen:
                     seen.add(marker)
                     unique_combined.append(item)
