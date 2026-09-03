@@ -7,7 +7,6 @@ import json
 import threading
 import time
 import urllib.request
-import base64
 import requests
 from io import BytesIO
 from PIL import Image, ImageDraw, ImageFont
@@ -55,17 +54,17 @@ if "tour_data" not in st.session_state:
 
 st.title("✈️ 跨旅行社海报聚合与横向对比中心")
 
-# 醒目的授权卡片与大按钮
+# 醒目一键授权卡片
 auth_card_html = """
-<div style="background: #eff6ff; border: 1.5px solid #3b82f6; border-radius: 10px; padding: 14px; margin-bottom: 15px;">
-    <div style="font-weight: bold; font-size: 16px; color: #1e3a8a; margin-bottom: 6px;">
-        🔔 手机后台通知与提示音授权
+<div style="background: #f0fdf4; border: 1.5px solid #22c55e; border-radius: 10px; padding: 12px; margin-bottom: 15px;">
+    <div style="font-weight: bold; font-size: 15px; color: #15803d; margin-bottom: 5px;">
+        🔔 后台挂机提醒设置
     </div>
-    <div style="font-size: 13px; color: #3b82f6; margin-bottom: 10px;">
-        首次使用请点击下方按钮。授权后，切到抖音/FB，扫描完成时切回浏览器会立即发出声音和通知！
+    <div style="font-size: 13px; color: #166534; margin-bottom: 8px;">
+        点击下方按钮激活手机提醒。上传海报点击提取后，可直接切出刷抖音或FB，全部解析完毕回来看即可！
     </div>
-    <button id="auth_btn" style="background: #2563eb; color: white; border: none; padding: 10px 18px; border-radius: 6px; font-weight: bold; font-size: 14px; cursor: pointer; width: 100%;">
-        👉 点击立即开启通知与提示音权限
+    <button id="auth_btn" style="background: #16a34a; color: white; border: none; padding: 9px 16px; border-radius: 6px; font-weight: bold; font-size: 14px; cursor: pointer; width: 100%;">
+        👉 点击开启通知提醒与声音
     </button>
 </div>
 
@@ -89,15 +88,15 @@ document.getElementById('auth_btn').addEventListener('click', function() {
 
     if ("Notification" in window) {
         Notification.requestPermission().then(function(perm) {
-            alert("提示音已激活！系统通知权限: " + perm);
+            alert("提示音已就绪！系统通知状态: " + perm);
         });
     } else {
-        alert("提示音已激活成功！");
+        alert("提示音激活成功！");
     }
 });
 </script>
 """
-components.html(auth_card_html, height=130)
+components.html(auth_card_html, height=125)
 
 def trigger_notification_js(title, message):
     js_code = f"""
@@ -111,7 +110,7 @@ def trigger_notification_js(title, message):
             osc.type = "triangle";
             osc.frequency.setValueAtTime(587.33, now);
             osc.frequency.setValueAtTime(880, now + 0.18);
-            gain.gain.setValueAtTime(0.35, now);
+            gain.gain.setValueAtTime(0.3, now);
             gain.gain.exponentialRampToValueAtTime(0.01, now + 0.7);
             osc.connect(gain);
             gain.connect(ctx.destination);
@@ -183,6 +182,8 @@ def split_and_explode_dates(raw_agency, raw_dest, raw_code, raw_title, raw_loc, 
         clean_price = 0
 
     norm_loc = normalize_departure_location(raw_loc, raw_title)
+    
+    # 支持形如 26/10, 28/10, 30/10 的批量日期提取
     date_tokens = re.findall(r'\b\d{1,2}[/.-]\d{1,2}(?:[/.-]\d{2,4})?\b', str(raw_dates_str))
     if not date_tokens:
         date_tokens = [str(raw_dates_str).strip()]
@@ -229,23 +230,24 @@ def parse_compact_lines(raw_text):
             })
     return items
 
-def call_gemini_vision_chunk(img_chunk, chunk_name):
+def call_gemini_vision_chunk(img_chunk, chunk_name, expected_blocks_hint):
     if not GEMINI_API_KEY:
         return []
 
     buf = BytesIO()
-    img_chunk.save(buf, format="JPEG", quality=90)
+    img_chunk.save(buf, format="JPEG", quality=92)
     base64_data = base64.b64encode(buf.getvalue()).decode('utf-8')
 
     prompt = f"""
-    你是极其严谨的旅游海报视觉专家。当前正在识别海报的【{chunk_name}】。
-    请地毯式遍历当前图像包含的每一个色块小方块（涵盖重庆、西藏、青岛、桂林、台湾、韩国、贵州、哈尔滨、北疆、九寨沟等），不能漏掉任何一个团期！
+    你是一个高精度旅游海报视觉解析专家。正在扫描海报的【{chunk_name}】。
+    请务必全量提取当前画面中的以下各个板块，一个团期都不允许漏掉！
+    重点核对板块：{expected_blocks_hint}
 
-    规则：
-    1. 多日期拆分：若一个小方块写有多个出发日（例如 12/10/26, 25/5/27 对应 RM6999），必须按每个单独的出发日拆分成独立的一行！
-    2. 旅行社：若海报含 SP 编号或豪吉标志，统一写“豪吉旅游”；表格型海报按其真实标头（如“琦琦旅游”）写。
+    提取规则：
+    1. 【每个日期拆单行】：一个小格子里若列有多个出发日（例如 26/10, 28/10 对应 2699，或者 12/10/26, 25/5/27 对应 6999），必须把每一个出发日单独拆成一行输出！
+    2. 旅行社：若海报含 SP 编号或豪吉标志，统一写“豪吉旅游”；长表格按实际名称写。
     3. 起飞地点：含 SIN/新加坡/酷航 填“新加坡起飞 (SIN)”；含 JB/新山 填“新山出发 (JB)”；默认填“马来西亚起飞 (KUL)”。
-    4. 逐行纯文本输出，字段用竖线 | 分隔，严禁 markdown 标记与额外说明：
+    4. 输出格式：纯文本逐行输出，竖线 | 分隔，不要输出任何代码块标记与解释：
     旅行社|目的地|团号|行程路线全称|起飞地|出发日期|纯数字价格
     """
 
@@ -278,12 +280,13 @@ def call_gemini_vision_chunk(img_chunk, chunk_name):
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={GEMINI_API_KEY}"
         for attempt in range(2):
             try:
-                res = requests.post(url, headers=headers, json=payload, timeout=50)
+                res = requests.post(url, headers=headers, json=payload, timeout=55)
                 if res.status_code == 200:
                     res_json = res.json()
                     raw_text = res_json["candidates"][0]["content"]["parts"][0]["text"]
                     return parse_compact_lines(raw_text)
                 if res.status_code == 503:
+                    time.sleep(2)
                     continue
                 else:
                     break
@@ -303,22 +306,24 @@ def background_worker(files_data):
             w, h = img.size
 
             if h > w * 1.2:
-                overlap = int(h * 0.25)
-                mid_h = h // 2
+                # 黄金切割比例：
+                # 上半区切到 58%（完整包含 重庆、西藏、青岛、桂林、台湾、韩国）
+                # 下半区从 46% 切到 100%（完整包含 韩国底部、贵州全部、哈尔滨全部、北疆全部、九寨沟全部）
+                box_top = (0, 0, w, int(h * 0.58))
+                box_bottom = (0, int(h * 0.46), w, h)
 
-                box_top = (0, 0, w, mid_h + overlap)
-                box_bottom = (0, max(0, mid_h - overlap), w, h)
+                set_task_status(True, "🔍 正在地毯式提取上半区 (重庆/西藏/青岛/桂林/台湾/韩国)...")
+                hint_top = "必须提取：SIN-重庆(约12条)、SIN-西藏(约5条)、青岛(约3条)、SIN-桂林(约3条)、SIN-台湾(约6条)、SIN-韩国(约4条)"
+                r1 = call_gemini_vision_chunk(img.crop(box_top), "上半区", hint_top)
 
-                set_task_status(True, "🔍 正在扫描上半区 (重庆/西藏/青岛/桂林/台湾/韩国)...")
-                r1 = call_gemini_vision_chunk(img.crop(box_top), "上半区")
-
-                set_task_status(True, "🔍 正在扫描下半区 (韩国/贵州/哈尔滨/北疆/九寨沟)...")
-                r2 = call_gemini_vision_chunk(img.crop(box_bottom), "下半区")
+                set_task_status(True, "🔍 正在地毯式提取下半区 (贵州/哈尔滨/北疆/九寨沟)...")
+                hint_bottom = "必须提取：JB-贵州(约13条全部日期)、SIN-哈尔滨(约9条全部日期)、KL-北疆(约4条全部日期)、SIN-九寨沟(约2条全部日期)"
+                r2 = call_gemini_vision_chunk(img.crop(box_bottom), "下半区", hint_bottom)
 
                 raw_items = r1 + r2
             else:
-                set_task_status(True, "🔍 正在全幅扫描表格海报...")
-                raw_items = call_gemini_vision_chunk(img, "全图")
+                set_task_status(True, "🔍 正在全幅扫描长表海报...")
+                raw_items = call_gemini_vision_chunk(img, "全图", "所有表格行")
 
             for item in raw_items:
                 rows = split_and_explode_dates(
@@ -350,20 +355,20 @@ def background_worker(files_data):
 
 task_info = get_task_status()
 if task_info["running"]:
-    st.warning(f"⚡ **后台正在自动运算中**：{task_info['msg']}")
-    st.caption("你可以直接切去刷抖音/FB，服务器后台正在运算！20秒后切回来即可。")
+    st.warning(f"⚡ **后台任务运算中**：{task_info['msg']}")
+    st.caption("你可以随意切去刷抖音/FB，服务器后台正在持续扫描！20~30秒后切回来即可。")
     time.sleep(3)
     st.rerun()
 
-# 刚完成任务返回前台时的声音提醒
 if task_info.get("done_alert", False):
     set_task_status(False, "", done_alert=False)
-    trigger_notification_js("🎉 扫描成功完成！", "海报已全量提取完毕，数据已持久化保存。")
+    trigger_notification_js("🎉 扫描成功完成！", "海报所有团期已提取入库。")
     st.balloons()
     st.success("🎉 恭喜！后台已完成全部扫描并写入总库！")
 
+# 字体加载引擎
 @st.cache_resource
-def get_chinese_font(font_size=14):
+def get_chinese_font(font_size=15):
     font_paths = [
         "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
         "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
@@ -387,43 +392,66 @@ def get_chinese_font(font_size=14):
             pass
     return ImageFont.load_default()
 
+# 导出高清专业对比长图
 def generate_comparison_image(df):
-    w, rh, hh = 920, 38, 70
-    h = hh + len(df) * rh + 30
-    img = Image.new("RGB", (w, max(h, 200)), color=(248, 250, 252))
+    w = 1000
+    rh = 44
+    hh = 80
+    h = hh + (len(df) + 1) * rh + 40
+    img = Image.new("RGB", (w, max(h, 250)), color=(255, 255, 255))
     draw = ImageDraw.Draw(img)
-    font = get_chinese_font(13)
-    title_font = get_chinese_font(20)
 
-    draw.rectangle([0, 0, w, hh], fill=(15, 23, 42))
-    draw.text((25, 22), f"旅游团比价汇总清单 (共 {len(df)} 项有效出发日期)", fill=(255, 255, 255), font=title_font)
+    f_head = get_chinese_font(22)
+    f_col = get_chinese_font(15)
+    f_body = get_chinese_font(14)
+    f_price = get_chinese_font(15)
 
-    y = hh + 10
-    draw.rectangle([15, y, w - 15, y + 28], fill=(226, 232, 240))
-    cols = [("旅行社", 25), ("目的地", 160), ("团号", 250), ("出发日期", 350), ("价格", 460), ("起飞地", 550), ("行程名称", 700)]
+    # 顶栏头部
+    draw.rectangle([0, 0, w, hh], fill=(30, 41, 59))
+    draw.text((30, 26), f"✈️ 跨旅行社旅游团比价汇总清单 (精选有效团期 {len(df)} 项)", fill=(255, 255, 255), font=f_head)
+
+    # 表头
+    y = hh + 12
+    draw.rectangle([20, y, w - 20, y + 36], fill=(241, 245, 249))
+    cols = [
+        ("旅行社", 35),
+        ("目的地", 160),
+        ("团号", 250),
+        ("起飞地", 360),
+        ("出发日期", 500),
+        ("团费价格", 610),
+        ("行程路线全称", 730)
+    ]
     for name, x in cols:
-        draw.text((x, y + 6), name, fill=(30, 41, 59), font=font)
+        draw.text((x, y + 8), name, fill=(71, 85, 105), font=f_col)
 
-    y += 35
-    for _, r in df.iterrows():
-        draw.text((25, y), str(r['agency'])[:9], fill=(71, 85, 105), font=font)
-        draw.text((160, y), str(r['destination'])[:6], fill=(15, 23, 42), font=font)
-        draw.text((240, y), str(r['tour_code'])[:10], fill=(71, 85, 105), font=font)
-        draw.text((330, y), str(r['departure_dates'])[:12], fill=(30, 41, 59), font=font)
-        draw.text((460, y), str(r['price_text']), fill=(220, 38, 38), font=font)
-        draw.text((550, y), str(r['departure_location'])[:12], fill=(2, 132, 199), font=font)
-        draw.text((700, y), str(r['title'])[:16], fill=(71, 85, 105), font=font)
+    y += 44
+    for idx, r in df.iterrows():
+        bg = (248, 250, 252) if idx % 2 == 0 else (255, 255, 255)
+        draw.rectangle([20, y, w - 20, y + rh - 2], fill=bg)
+
+        draw.text((35, y + 12), str(r['agency'])[:8], fill=(71, 85, 105), font=f_body)
+        draw.text((160, y + 12), str(r['destination'])[:6], fill=(15, 23, 42), font=f_body)
+        draw.text((250, y + 12), str(r['tour_code'])[:10], fill=(100, 116, 139), font=f_body)
+
+        loc_txt = "🇸🇬 新加坡" if "SIN" in str(r['departure_location']) else ("🇲🇾 新山" if "JB" in str(r['departure_location']) else "🇲🇾 马来西亚")
+        draw.text((360, y + 12), loc_txt, fill=(2, 132, 199), font=f_body)
+
+        draw.text((500, y + 12), str(r['departure_dates'])[:12], fill=(15, 23, 42), font=f_body)
+        draw.text((610, y + 11), str(r['price_text']), fill=(220, 38, 38), font=f_price)
+        draw.text((730, y + 12), str(r['title'])[:16], fill=(71, 85, 105), font=f_body)
+
         y += rh
 
     buf = BytesIO()
-    img.save(buf, format="PNG")
+    img.save(buf, format="PNG", quality=95)
     return buf.getvalue()
 
-uploaded_files = st.file_uploader("📷 上传旅行社海报图片 (支持后台托管运行，可自由切出网页)", type=["jpg", "jpeg", "png"], accept_multiple_files=True)
+uploaded_files = st.file_uploader("📷 上传旅行社海报图片 (已支持后台脱机托管，可自由切出网页)", type=["jpg", "jpeg", "png"], accept_multiple_files=True)
 
 if uploaded_files:
     st.info(f"已选择 {len(uploaded_files)} 张海报图片")
-    if st.button("🚀 启动后台离线提取 (点完即可切走刷抖音/FB)", type="primary", use_container_width=True):
+    if st.button("🚀 启动后台全量提取 (点完直接切走刷抖音/FB)", type="primary", use_container_width=True):
         files_data = [f.getvalue() for f in uploaded_files]
         t = threading.Thread(target=background_worker, args=(files_data,), daemon=True)
         t.start()
@@ -455,7 +483,7 @@ if st.session_state.tour_data:
     clean_dests = sorted(list({str(d) for d in df['destination'] if pd.notna(d) and str(d).strip()}))
     selected_dest = st.sidebar.selectbox("选择目的地", ["全部"] + clean_dests)
 
-    loc_options = ["全部", "🇲🇾 马来西亚起飞 (KUL)", "🇸🇬 新加坡起飞 (SIN)", "🇲🇾 新山出发 (JB)"]
+    loc_options = ["全部", "🇸🇬 新加坡起飞 (SIN)", "🇲🇾 新山出发 (JB)", "🇲🇾 马来西亚起飞 (KUL)"]
     selected_loc = st.sidebar.selectbox("选择起飞地点", loc_options)
 
     selected_hol = st.sidebar.selectbox("🗓️ 学校假期筛选", ["全部日期", "🎒 包含学校假期 (含超出2天内)", "✨ 严格在学校假期内 (0超出)", "💼 仅平时非假期"])
@@ -487,7 +515,7 @@ if st.session_state.tour_data:
     with col1:
         st.download_button("📊 下载 CSV 比价清单", data=filtered_df.to_csv(index=False).encode('utf-8-sig'), file_name="智能比价清单.csv", mime="text/csv", use_container_width=True)
     with col2:
-        st.download_button("🖼️ 下载精美长图 (.png)", data=generate_comparison_image(filtered_df), file_name="智能比价长图.png", mime="image/png", use_container_width=True)
+        st.download_button("🖼️ 下载高清长图 (.png)", data=generate_comparison_image(filtered_df), file_name="智能比价长图.png", mime="image/png", use_container_width=True)
 
     st.dataframe(filtered_df[['agency', 'destination', 'tour_code', 'departure_location', 'departure_dates', 'price_text', 'title']], use_container_width=True)
 
