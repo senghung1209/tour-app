@@ -14,7 +14,7 @@ import streamlit.components.v1 as components
 st.set_page_config(page_title="AI 旅游团智能筛选助手", page_icon="✈️", layout="wide")
 
 st.title("✈️ 旅游团宣传单智能分析与筛选")
-st.markdown("支持后台运行、全局多目的地解析与去重、学校假期判定与超期提醒！")
+st.markdown("支持后台不中断运行、2026/2027官方学校假期精确判定与超期提醒！")
 
 GROQ_API_KEY = "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"
 
@@ -104,8 +104,51 @@ if "task_state" not in st.session_state:
         "errors": []
     }
 
+# 浏览器通知与多重唤醒组件
 def trigger_notification():
-    js = "<script>try{var c=new(window.AudioContext||window.webkitAudioContext)();var o=c.createOscillator();var g=c.createGain();o.type='sine';o.frequency.setValueAtTime(587.33,c.currentTime);o.frequency.setValueAtTime(880,c.currentTime+0.15);g.gain.setValueAtTime(0.3,c.currentTime);g.gain.exponentialRampToValueAtTime(0.01,c.currentTime+0.6);o.connect(g);g.connect(c.destination);o.start();o.stop(c.currentTime+0.6);}catch(e){}if('Notification' in window){if(Notification.permission==='granted'){new Notification('✈️ 旅游团分析完成！',{body:'海报数据已全部提取完毕！'});}else if(Notification.permission!=='denied'){Notification.requestPermission().then(function(p){if(p==='granted'){new Notification('✈️ 旅游团分析完成！',{body:'海报数据已全部提取完毕！'});}});}}</script>"
+    js = """
+    <script>
+    (function() {
+        // 1. 声音提示 (蜂鸣双音)
+        try {
+            var ctx = new (window.AudioContext || window.webkitAudioContext)();
+            var osc = ctx.createOscillator();
+            var gain = ctx.createGain();
+            osc.type = 'sine';
+            osc.frequency.setValueAtTime(587.33, ctx.currentTime);
+            osc.frequency.setValueAtTime(880, ctx.currentTime + 0.15);
+            gain.gain.setValueAtTime(0.3, ctx.currentTime);
+            gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.7);
+            osc.connect(gain);
+            gain.connect(ctx.destination);
+            osc.start();
+            osc.stop(ctx.currentTime + 0.7);
+        } catch(e) {}
+
+        // 2. 手机振动 (如果设备支持)
+        try {
+            if (navigator.vibrate) {
+                navigator.vibrate([200, 100, 200]);
+            }
+        } catch(e) {}
+
+        // 3. 网页标题强提醒
+        try {
+            parent.document.title = "【已完成!】✈️ 旅游团智能筛选";
+        } catch(e) {}
+
+        // 4. 系统通知弹窗
+        try {
+            if ("Notification" in window && Notification.permission === "granted") {
+                new Notification("✈️ 旅游团分析已完成！", {
+                    body: "海报数据已全部提取完毕，快回来看结果吧！",
+                    icon: "https://fav.farm/✈️"
+                });
+            }
+        } catch(e) {}
+    })();
+    </script>
+    """
     components.html(js, height=0)
 
 def compress_image(uploaded_file, max_size=750, quality=65):
@@ -160,14 +203,13 @@ def extract_partial_items(content):
 def analyze_single_image(file_bytes, file_name, task_dict):
     encoded_string = compress_image(BytesIO(file_bytes))
     
-    # 明确禁止循环重复，强化多城市板块扫描
     prompt = (
         "仔细扫描整张海报中的所有不同城市板块与旅游路线。"
         "提取所有不同的旅游团，返回合法的 JSON 数组。"
         "严格注意：\n"
-        "1. 不要局限于某一个城市（如重庆），海报中若有其他不同目的地必须全部提取！\n"
+        "1. 不要局限于某一个城市，海报中若有其他不同目的地必须全部提取！\n"
         "2. destination 只填具体目的城市/国家（例如：北京/武汉/内蒙古/沙坝/重庆/江南/张家界/韩国等）。\n"
-        "3. 同一个团如果有多个出发日期，请把日期合并写在 departure_dates（如 '08/11/26, 08/12/26'），严禁生成数十个一模一样的重复项！\n"
+        "3. 同一个团如果有多个出发日期，请把日期合并写在 departure_dates（如 '08/11/26, 08/12/26'），严禁生成重复项！\n"
         "4. 输出纯 JSON 数组，包含 destination, departure_location, tour_code, title, departure_dates, price_numeric, price_text。"
     )
 
@@ -248,7 +290,6 @@ def analyze_single_image(file_bytes, file_name, task_dict):
                     else:
                         final_price_str = "详见海报"
 
-                    # 智能去重：同一团号、同一价格不再疯狂重复刷屏
                     unique_key = (code_str, dest_str, p_val, date_str)
                     if code_str and unique_key in seen_keys:
                         continue
@@ -302,6 +343,33 @@ def background_worker(files_data, task_dict):
     task_dict["running"] = False
     task_dict["finished"] = True
     task_dict["status_msg"] = "✅ 全部图片已在后台分析完成！"
+
+# 页面顶部常驻：点击开启浏览器系统权限（只需点一次即可允许声音和横幅）
+components.html("""
+<div style="display:flex; align-items:center; justify-content:space-between; background:#f0fdf4; border:1px solid #bbf7d0; padding:10px 14px; border-radius:8px; font-family:sans-serif; margin-bottom:10px;">
+    <span style="font-size:14px; color:#166534;">🔔 开启完成声音与系统通知提示：</span>
+    <button onclick="enableNotification()" style="background:#16a34a; color:#fff; border:none; padding:6px 14px; border-radius:6px; font-weight:bold; cursor:pointer; font-size:13px;">点击授权启用</button>
+</div>
+<script>
+function enableNotification() {
+    try {
+        var ctx = new (window.AudioContext || window.webkitAudioContext)();
+        ctx.resume();
+    } catch(e) {}
+    if ("Notification" in window) {
+        Notification.requestPermission().then(function(perm) {
+            if (perm === "granted") {
+                alert("✅ 通知权限已成功开启！任务完成后将弹窗并播放提示音。");
+            } else {
+                alert("⚠️ 未能获得通知权限，请在浏览器地址栏左侧设置为允许通知。");
+            }
+        });
+    } else {
+        alert("当前浏览器不支持系统通知，但仍会通过网页标题和声音提醒。");
+    }
+}
+</script>
+""", height=56)
 
 uploaded_files = st.file_uploader(
     "批量上传宣传图 (支持 JPG/PNG，可多选)", 
@@ -428,4 +496,14 @@ if task["results"]:
                 st.markdown("### 📍 **" + str(row.get('destination', '未知')) + "**")
                 st.write("**路线：** " + str(row.get('title', '无')))
                 st.write("**团号：** `" + str(row.get('tour_code', '无')) + "`")
-            with c2
+            with c2:
+                st.markdown("🛫 **出发地：** `" + str(row.get('departure_location', '详见海报')) + "`")
+                st.write("📅 **出发日期：** " + str(row.get('departure_dates', '见海报')))
+                
+                h_status = row.get('holiday_status')
+                if h_status == 'exact':
+                    st.success("🎒 完美在校假内 (" + str(row.get('holiday_name')) + ")")
+                elif h_status == 'slight_over':
+                    st.warning("⚠️ 包含校假，但超出 " + str(row.get('over_days')) + " 天（需请假）")
+            with c3:
+                st.markdown("### 💰 **" + str(row.get('price_text', '无')) + "**")
