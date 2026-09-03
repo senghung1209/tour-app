@@ -49,8 +49,13 @@ def get_loud_wav_base64():
     for freq, duration in tones:
         n_samples = int(sample_rate * duration)
         for i in range(n_samples):
-            val = int(128 + 118 * math.sin(2 * math.pi * freq * i / sample_rate)) if freq > 0 else 128
+            if freq == 0:
+                val = 128
+            else:
+                val = int(128 + 118 * math.sin(2 * math.pi * freq * i / sample_rate))
+                val = max(0, min(255, val))
             raw_samples.append(val)
+            
     data_size = len(raw_samples)
     header = struct.pack(
         '<4sI4s4sIHHIIHH4sI',
@@ -63,9 +68,15 @@ LOUD_WAV_B64 = get_loud_wav_base64()
 
 native_audio_html = """
 <div style="background: #eff6ff; border: 1.5px solid #3b82f6; border-radius: 8px; padding: 12px; margin-bottom: 15px;">
-    <div style="font-weight: bold; font-size: 14px; color: #1e40af; margin-bottom: 5px;">🔊 手机状态栏通知与完成提示音设置</div>
-    <audio id="real_alert_sound" preload="auto"><source src="data:audio/wav;base64,AUDIO_PLACEHOLDER" type="audio/wav"></audio>
-    <button id="direct_play_btn" style="background: #2563eb; color: white; border: none; padding: 10px 20px; border-radius: 6px; font-weight: bold; font-size: 14px; width: 100%; cursor: pointer;">👉 点击开启系统通知与测试铃声</button>
+    <div style="font-weight: bold; font-size: 14px; color: #1e40af; margin-bottom: 5px;">
+        🔊 手机状态栏通知与完成提示音设置
+    </div>
+    <audio id="real_alert_sound" preload="auto">
+        <source src="data:audio/wav;base64,AUDIO_PLACEHOLDER" type="audio/wav">
+    </audio>
+    <button id="direct_play_btn" style="background: #2563eb; color: white; border: none; padding: 10px 20px; border-radius: 6px; font-weight: bold; font-size: 14px; width: 100%; cursor: pointer;">
+        👉 点击开启系统通知与测试铃声
+    </button>
 </div>
 <script>
 document.getElementById('direct_play_btn').addEventListener('click', function(e) {
@@ -189,7 +200,7 @@ def split_and_explode_dates(raw_agency, raw_dest, raw_code, raw_title, raw_loc, 
     norm_loc = normalize_departure_location(raw_loc, raw_title)
     clean_dest = clean_destination_name(raw_dest)
 
-    # 完整匹配 DD/MM/YY 格式日期，防止日期被截断成纯数字
+    # 精准匹配形如 DD/MM/YY 或 DD/MM/YYYY 的完整日期
     date_tokens = re.findall(r'\b\d{1,2}[/.-]\d{1,2}(?:[/.-]\d{2,4})?\b', str(raw_dates_str))
     if not date_tokens:
         date_tokens = [str(raw_dates_str).strip()]
@@ -212,76 +223,70 @@ def split_and_explode_dates(raw_agency, raw_dest, raw_code, raw_title, raw_loc, 
         })
     return exploded
 
-def parse_full_poster_lines(raw_text, default_agency="豪吉旅游"):
+def parse_compact_lines(raw_text, default_agency="豪吉旅游"):
     clean_lines = raw_text.strip().splitlines()
     items = []
     for line in clean_lines:
         line = line.strip().replace("```", "").replace("`", "")
-        if not line or line.startswith("#") or "|" not in line or "旅行社" in line or "目的地" in line:
+        if not line or line.startswith("#") or "旅行社|目的地" in line:
             continue
         parts = [p.strip() for p in line.split("|") if p.strip()]
-        try:
-            if len(parts) >= 6:
-                dest = parts[0]
-                tour_code = parts[1]
-                title = parts[2]
-                loc = parts[3]
-                dates = parts[4]
-                price_str = parts[5]
-                
+        if len(parts) >= 6:
+            try:
+                price_val = int(re.sub(r'[^\d]', '', parts[5]))
+            except Exception:
                 price_val = 0
-                match_p = re.search(r'\d+', price_str.replace(",", ""))
-                if match_p:
-                    price_val = int(match_p.group(0))
 
-                items.append({
-                    "agency": default_agency,
-                    "destination": dest,
-                    "tour_code": tour_code,
-                    "title": title,
-                    "departure_location": loc,
-                    "departure_dates": dates,
-                    "price": price_val
-                })
-        except Exception:
-            continue
+            items.append({
+                "agency": default_agency,
+                "destination": parts[0] or "精选目的地",
+                "tour_code": parts[1] or "-",
+                "title": parts[2] or "",
+                "departure_location": parts[3] or "",
+                "departure_dates": parts[4] or "",
+                "price": price_val
+            })
     return items
 
-def call_gemini_full_poster(img, poster_type):
+def call_gemini_vision_chunk(img_chunk, chunk_name, hint_text="", default_agency="豪吉旅游"):
     if not GEMINI_API_KEY:
         return []
 
     buf = BytesIO()
-    img.save(buf, format="JPEG", quality=95)
+    img_chunk.save(buf, format="JPEG", quality=95)
     base64_data = base64.b64encode(buf.getvalue()).decode('utf-8')
 
-    if poster_type == "豪吉旅游":
-        prompt = """
-        你是顶尖海报视觉专家。请完整扫描这张豪吉旅游拼贴海报，必须把画面中所有的 61 个团期【全部、逐个、无一遗漏】地提取出来！
-        注意：每一个方块里的所有出发日期（例如 31/12/26, 30/11/26 等）和不同价格必须完整提取。
-        纯文本逐行输出，严格使用竖线 | 分隔，绝对不要使用代码块标记：
-        目的地纯地名|团号(SP开头)|路线全称|起飞地|出发日期(如DD/MM/YY)|价格数字
-        """
-    else:
-        prompt = """
-        请提取琦琦旅游表格内第 1 项到第 23 项的全部团期。
-        纯文本逐行输出，严格使用竖线 | 分隔，绝对不要使用代码块标记：
-        目的地纯地名|团号或序号|行程路线全称|起飞地|出发日期|价格数字
-        """
+    prompt = f"""
+    你是高精度海报视觉专家，正在扫描豪吉旅游海报的【{chunk_name}】区域。
+    核心提示：{hint_text}
+    请把该区域内所有的团期【100%全量提取】。如果一个方块里有多个不同价格的出发日期，必须拆成独立的多行！
+    绝对不要遗漏任何一个小方块。
+    纯文本逐行输出，严格使用竖线 | 分隔，严禁代码块标记：
+    目的地纯地名|团号(SP开头)|行程路线全称|起飞地|完整出发日期(格式如DD/MM/YY)|纯数字价格
+    """
 
     payload = {
         "contents": [{"parts": [{"text": prompt}, {"inline_data": {"mime_type": "image/jpeg", "data": base64_data}}]}],
         "generationConfig": {"temperature": 0.0, "maxOutputTokens": 8192}
     }
 
-    url = f"[https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=](https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=){GEMINI_API_KEY}"
-    try:
-        res = requests.post(url, headers={"Content-Type": "application/json"}, json=payload, timeout=60)
-        if res.status_code == 200:
-            raw_text = res.json()["candidates"][0]["content"]["parts"][0]["text"]
-            return parse_full_poster_lines(raw_text, default_agency=poster_type)
-    except Exception:
-        pass
+    headers = {"Content-Type": "application/json", "x-goog-api-key": GEMINI_API_KEY}
+
+    for model_name in [PRIMARY_MODEL, BACKUP_MODEL]:
+        url = f"[https://generativelanguage.googleapis.com/v1beta/models/](https://generativelanguage.googleapis.com/v1beta/models/){model_name}:generateContent?key={GEMINI_API_KEY}"
+        for attempt in range(2):
+            try:
+                res = requests.post(url, headers=headers, json=payload, timeout=60)
+                if res.status_code == 200:
+                    raw_text = res.json()["candidates"][0]["content"]["parts"][0]["text"]
+                    items = parse_compact_lines(raw_text, default_agency=default_agency)
+                    if items:
+                        return items
+                if res.status_code == 503:
+                    time.sleep(2)
+                    continue
+            except Exception:
+                time.sleep(2)
     return []
 
 @st.cache_resource
@@ -348,7 +353,7 @@ uploaded_file = st.file_uploader("📷 上传单张海报图片 (请一张一张
 if uploaded_file is not None:
     agency_choice = st.radio("请为这张海报选择对应的旅行社：", ["豪吉旅游", "琦琦旅游"], horizontal=True)
 
-    if st.button("🚀 立即开始全量深度精准分析并入库", type="primary", use_container_width=True):
+    if st.button("🚀 立即开始三段式微距精准分析并入库", type="primary", use_container_width=True):
         newly_extracted = []
         progress_bar = st.progress(0.0)
         status_box = st.empty()
@@ -356,12 +361,31 @@ if uploaded_file is not None:
         img = Image.open(BytesIO(uploaded_file.getvalue()))
         if img.mode != 'RGB':
             img = img.convert('RGB')
+        w, h = img.size
 
-        status_box.markdown(f"🔍 正在整张图全幅深度扫描【{agency_choice}】海报，确保全量提取不漏项...")
-        progress_bar.progress(0.5)
+        if agency_choice == "琦琦旅游":
+            status_box.markdown("🔍 正在全幅扫描琦琦旅游超值优惠表格...")
+            progress_bar.progress(0.5)
+            raw_items = call_gemini_vision_chunk(img, "琦琦旅游表格", "提取琦琦旅游 1 到 23 项超值优惠团", default_agency="琦琦旅游")
+        else:
+            # 豪吉旅游：采用三段式精确微距扫描（上、中、下），完美覆盖所有 61 个团期，绝不漏掉中间的桂林、韩国、台湾
+            box_top = (0, 0, w, int(h * 0.36))
+            box_mid = (0, int(h * 0.32), w, int(h * 0.68))
+            box_bottom = (0, int(h * 0.64), w, h)
 
-        # 取消切片，整张原图一次性丢给大模型处理
-        raw_items = call_gemini_full_poster(img, agency_choice)
+            status_box.markdown("🔍 豪吉海报【第一段：重庆、西藏、青岛】...")
+            progress_bar.progress(0.25)
+            r1 = call_gemini_vision_chunk(img.crop(box_top), "豪吉海报上半区", "提取重庆、西藏、青岛等顶部区域的全部团期", default_agency="豪吉旅游")
+
+            status_box.markdown("🔍 豪吉海报【第二段：桂林、台湾、韩国】...")
+            progress_bar.progress(0.60)
+            r2 = call_gemini_vision_chunk(img.crop(box_mid), "豪吉海报中半区", "提取桂林、台湾、韩国等中间区域的全部团期", default_agency="豪吉旅游")
+
+            status_box.markdown("🔍 豪吉海报【第三段：贵州、哈尔滨、北疆、九寨沟】...")
+            progress_bar.progress(0.90)
+            r3 = call_gemini_vision_chunk(img.crop(box_bottom), "豪吉海报下半区", "提取贵州、哈尔滨、北疆、九寨沟等底部区域的全部团期", default_agency="豪吉旅游")
+
+            raw_items = r1 + r2 + r3
 
         progress_bar.progress(1.0)
         status_box.markdown("✨ 正在清洗并追加到总库...")
@@ -392,7 +416,7 @@ if uploaded_file is not None:
             st.session_state.tour_data = unique_combined
             save_persisted_data(unique_combined)
             trigger_play_on_done(len(st.session_state.tour_data))
-            st.success(f"🎉 成功为【{agency_choice}】提取 {len(newly_extracted)} 项！总库现有 **{len(st.session_state.tour_data)}** 项团期。")
+            st.success(f"🎉 成功为【{agency_choice}】精准提取 {len(newly_extracted)} 项！总库现有 **{len(st.session_state.tour_data)}** 项团期。")
             time.sleep(1.0)
             st.rerun()
         else:
