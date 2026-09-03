@@ -8,7 +8,6 @@ import base64
 import time
 import math
 import struct
-import urllib.request
 import requests
 from io import BytesIO
 from PIL import Image, ImageDraw, ImageFont
@@ -102,7 +101,7 @@ OFFICIAL_HOLIDAYS = [
 ]
 
 RAW_KEY = st.secrets.get("GEMINI_API_KEY", "")
-GEMINI_API_KEY = str(RAW_KEY).strip() if RAW_KEY else ""
+CLEAN_KEY = re.sub(r'[\r\n\t\s\'\"]', '', str(RAW_KEY))
 
 def extract_tour_days(title_str):
     m = re.search(r'(\d+)\s*(?:天|D|d)', str(title_str))
@@ -220,8 +219,8 @@ def parse_lines_robust(raw_text, poster_type):
     return items
 
 def call_gemini_vision_clean(img_bytes, poster_type, hint=""):
-    if not GEMINI_API_KEY:
-        st.error("❌ 未检测到 GEMINI_API_KEY，请在 Secrets 中配置！")
+    if not CLEAN_KEY:
+        st.error("❌ 未检测到 GEMINI_API_KEY，请检查 Secrets 配置！")
         return []
 
     base64_data = base64.b64encode(img_bytes).decode('utf-8')
@@ -246,16 +245,24 @@ def call_gemini_vision_clean(img_bytes, poster_type, hint=""):
         "generationConfig": {"temperature": 0.0, "maxOutputTokens": 8192}
     }
 
-    # 严禁带有换行或空格，确保 URL 是最干净合规的标准格式
-    clean_key = GEMINI_API_KEY.strip()
-    url = f"[https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=](https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=){clean_key}".strip()
+    url = "[https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent](https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent)"
+    headers = {
+        "Content-Type": "application/json",
+        "x-goog-api-key": CLEAN_KEY,
+        "Authorization": f"Bearer {CLEAN_KEY}"
+    }
 
     try:
-        res = requests.post(url, headers={"Content-Type": "application/json"}, json=payload, timeout=60)
+        res = requests.post(url, headers=headers, json=payload, timeout=60)
         if res.status_code == 200:
             raw_text = res.json()["candidates"][0]["content"]["parts"][0]["text"]
             return parse_lines_robust(raw_text, poster_type)
         else:
+            url_fallback = f"[https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=](https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=){CLEAN_KEY}"
+            res_fb = requests.post(url_fallback, headers={"Content-Type": "application/json"}, json=payload, timeout=60)
+            if res_fb.status_code == 200:
+                raw_text = res_fb.json()["candidates"][0]["content"]["parts"][0]["text"]
+                return parse_lines_robust(raw_text, poster_type)
             st.error(f"API 返回错误 (HTTP {res.status_code}): {res.text}")
     except Exception as err:
         st.error(f"请求失败: {err}")
@@ -430,30 +437,8 @@ if st.session_state.tour_data:
     price_range = st.sidebar.slider("💰 团费预算范围 (RM)", min_value=p_min, max_value=p_max, value=(p_min, p_max), step=100)
     filtered_df = filtered_df[(filtered_df['price_numeric'] >= price_range[0]) & (filtered_df['price_numeric'] <= price_range[1])]
 
-    st.markdown(f"### 符合条件的出发选项共 **{len(filtered_df)}** 个：")
+    total_filtered_count = len(filtered_df)
+    st.markdown(f"### 符合条件的出发选项共 **{total_filtered_count}** 个：")
     col1, col2 = st.columns(2)
     with col1:
-        st.download_button("📊 下载 CSV 比价清单", data=filtered_df.to_csv(index=False).encode('utf-8-sig'), file_name="智能比价清单.csv", mime="text/csv", use_container_width=True)
-    with col2:
-        st.download_button("🖼️ 下载高清长图 (.png)", data=generate_comparison_image(filtered_df), file_name="智能比价长图.png", mime="image/png", use_container_width=True)
-
-    st.dataframe(filtered_df[['agency', 'destination', 'tour_code', 'departure_location', 'departure_dates', 'price_text', 'title']], use_container_width=True)
-
-    st.markdown("#### 📋 行程比对卡片")
-    for _, row in filtered_df.iterrows():
-        with st.container(border=True):
-            c1, c2, c3 = st.columns([3, 2, 2])
-            with c1:
-                st.markdown(f"### 📍 **{row['destination']}** <small style='color:gray;'>({row['agency']})</small>", unsafe_allow_html=True)
-                st.write(f"**路线：** {row['title']}")
-                st.write(f"**团号：** `{row['tour_code']}`")
-            with c2:
-                st.markdown(f"🛫 **出发地：** `{row['departure_location']}`")
-                st.write(f"📅 **出发日期：** {row['departure_dates']}")
-                h_stat = row['holiday_status']
-                if h_stat == 'exact':
-                    st.success(f"🎒 完美在校假内 ({row['holiday_name']})")
-                elif h_stat == 'slight_over':
-                    st.warning(f"⚠️ 包含校假，超 {row['over_days']} 天 (需请假)")
-            with c3:
-                st.markdown(f"### 💰 **{row['price_text']}**")
+        st.download_button("📊 下载 CSV 比价清单", data=filtered_df.to_csv(index=False).encode('utf-8-sig
