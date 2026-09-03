@@ -49,13 +49,8 @@ def get_loud_wav_base64():
     for freq, duration in tones:
         n_samples = int(sample_rate * duration)
         for i in range(n_samples):
-            if freq == 0:
-                val = 128
-            else:
-                val = int(128 + 118 * math.sin(2 * math.pi * freq * i / sample_rate))
-                val = max(0, min(255, val))
+            val = int(128 + 118 * math.sin(2 * math.pi * freq * i / sample_rate)) if freq > 0 else 128
             raw_samples.append(val)
-            
     data_size = len(raw_samples)
     header = struct.pack(
         '<4sI4s4sIHHIIHH4sI',
@@ -68,15 +63,9 @@ LOUD_WAV_B64 = get_loud_wav_base64()
 
 native_audio_html = """
 <div style="background: #eff6ff; border: 1.5px solid #3b82f6; border-radius: 8px; padding: 12px; margin-bottom: 15px;">
-    <div style="font-weight: bold; font-size: 14px; color: #1e40af; margin-bottom: 5px;">
-        🔊 手机状态栏通知与完成提示音设置
-    </div>
-    <audio id="real_alert_sound" preload="auto">
-        <source src="data:audio/wav;base64,AUDIO_PLACEHOLDER" type="audio/wav">
-    </audio>
-    <button id="direct_play_btn" style="background: #2563eb; color: white; border: none; padding: 10px 20px; border-radius: 6px; font-weight: bold; font-size: 14px; width: 100%; cursor: pointer;">
-        👉 点击开启系统通知与测试铃声
-    </button>
+    <div style="font-weight: bold; font-size: 14px; color: #1e40af; margin-bottom: 5px;">🔊 手机状态栏通知与完成提示音设置</div>
+    <audio id="real_alert_sound" preload="auto"><source src="data:audio/wav;base64,AUDIO_PLACEHOLDER" type="audio/wav"></audio>
+    <button id="direct_play_btn" style="background: #2563eb; color: white; border: none; padding: 10px 20px; border-radius: 6px; font-weight: bold; font-size: 14px; width: 100%; cursor: pointer;">👉 点击开启系统通知与测试铃声</button>
 </div>
 <script>
 document.getElementById('direct_play_btn').addEventListener('click', function(e) {
@@ -88,17 +77,14 @@ document.getElementById('direct_play_btn').addEventListener('click', function(e)
 });
 </script>
 """.replace("AUDIO_PLACEHOLDER", LOUD_WAV_B64)
-
 components.html(native_audio_html, height=100)
 
 def trigger_play_on_done(count_num):
     js = """
-    <audio id="done_alert_sound" autoplay>
-        <source src="data:audio/wav;base64,AUDIO_PLACEHOLDER" type="audio/wav">
-    </audio>
+    <audio id="done_alert_sound" autoplay><source src="data:audio/wav;base64,AUDIO_PLACEHOLDER" type="audio/wav"></audio>
     <script>
     (function() {
-        document.title = "🔔【队列分析完成! 共COUNT_PLACEHOLDER项】跨社比价";
+        document.title = "🔔【分析完成! 共COUNT_PLACEHOLDER项】跨社比价";
         if ("vibrate" in navigator) { navigator.vibrate([250, 100, 250, 100, 400]); }
         var aud = document.getElementById('done_alert_sound');
         if (aud) { aud.play().catch(function(){}); }
@@ -226,7 +212,20 @@ def parse_lines_strict(raw_text, poster_type):
 def call_gemini_vision(img_bytes, poster_type):
     if not GEMINI_API_KEY:
         return []
-    base64_data = base64.b64encode(img_bytes).decode('utf-8')
+    
+    # 强制将大图片缩放到最大 1600px 宽度，防止 payload 过大导致 API 超时卡死
+    try:
+        img_obj = Image.open(BytesIO(img_bytes))
+        if img_obj.mode != 'RGB':
+            img_obj = img_obj.convert('RGB')
+        max_dim = 1600
+        if max(img_obj.size) > max_dim:
+            img_obj.thumbnail((max_dim, max_dim), Image.Resampling.LANCZOS)
+        buf_compressed = BytesIO()
+        img_obj.save(buf_compressed, format="JPEG", quality=90)
+        base64_data = base64.b64encode(buf_compressed.getvalue()).decode('utf-8')
+    except Exception:
+        base64_data = base64.b64encode(img_bytes).decode('utf-8')
     
     if poster_type == "haoji":
         prompt = """
@@ -246,9 +245,11 @@ def call_gemini_vision(img_bytes, poster_type):
         "contents": [{"parts": [{"text": prompt}, {"inline_data": {"mime_type": "image/jpeg", "data": base64_data}}]}],
         "generationConfig": {"temperature": 0.0, "maxOutputTokens": 8192}
     }
-    url = f"[https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=](https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=){GEMINI_API_KEY}"
+    url = f"[https://generativelanguage.googleapis.com/v1beta/models/](https://generativelanguage.googleapis.com/v1beta/models/){PRIMARY_MODEL}:generateContent?key={GEMINI_API_KEY}"
+    
     try:
-        res = requests.post(url, headers={"Content-Type": "application/json"}, json=payload, timeout=60)
+        # 强制 30 秒超时保护，绝不卡死
+        res = requests.post(url, headers={"Content-Type": "application/json"}, json=payload, timeout=30)
         if res.status_code == 200:
             raw_text = res.json()["candidates"][0]["content"]["parts"][0]["text"]
             return parse_lines_strict(raw_text, poster_type)
@@ -315,12 +316,11 @@ def generate_comparison_image(df):
     img.save(buf, format="PNG", quality=95)
     return buf.getvalue()
 
-# 支持一次选择多张图片
-uploaded_files = st.file_uploader("📷 上传海报图片 (可一次多选多张，系统将按顺序自动排队一张一张跑)", type=["jpg", "jpeg", "png"], accept_multiple_files=True)
+uploaded_files = st.file_uploader("📷 上传海报图片 (支持多选，后台将自动排队逐张安全处理)", type=["jpg", "jpeg", "png"], accept_multiple_files=True)
 
 if uploaded_files:
-    st.info(f"已选择 {len(uploaded_files)} 张海报图片，点击下方按钮将自动排队逐张分析。")
-    if st.button("🚀 启动队列自动化逐张扫描", type="primary", use_container_width=True):
+    st.info(f"已选择 {len(uploaded_files)} 张海报图片")
+    if st.button("🚀 启动防卡死安全队列扫描", type="primary", use_container_width=True):
         total_files = len(uploaded_files)
         progress_bar = st.progress(0.0)
         status_box = st.empty()
@@ -328,6 +328,130 @@ if uploaded_files:
         all_new_items = []
         
         for idx, uploaded_file in enumerate(uploaded_files):
-            status_box.markdown(f"**[正在处理第 {idx+1}/{total_files} 张海报]**：`{uploaded_file.name}` ...")
+            status_box.markdown(f"**[正在处理第 {idx+1}/{total_files} 张]**：`{uploaded_file.name}` (已加入超时防卡死保护)...")
             img_bytes = uploaded_file.getvalue()
             img = Image.open(BytesIO(img_bytes))
+            w, h = img.size
+            
+            filename_upper = uploaded_file.name.upper()
+            if "QIQI" in filename_upper or h > w * 1.5 or "QI" in filename_upper:
+                poster_type = "qiqi"
+            else:
+                poster_type = "haoji"
+            
+            single_extracted = call_gemini_vision(img_bytes, poster_type)
+            if single_extracted:
+                all_new_items.extend(single_extracted)
+            
+            progress_bar.progress((idx + 1) / total_files)
+
+        if all_new_items:
+            combined = st.session_state.tour_data + all_new_items
+            seen = set()
+            unique_combined = []
+            for item in combined:
+                marker = (item["agency"], item["tour_code"], item["departure_dates"], item["price_numeric"])
+                if marker not in seen:
+                    seen.add(marker)
+                    unique_combined.append(item)
+
+            st.session_state.tour_data = unique_combined
+            save_persisted_data(unique_combined)
+            trigger_play_on_done(len(st.session_state.tour_data))
+            status_box.success(f"🎉 队列海报全部扫描完毕！总库现有 **{len(st.session_state.tour_data)}** 项团期。")
+            time.sleep(1.0)
+            st.rerun()
+        else:
+            status_box.warning("⚠️ 队列中的海报处理超时或未能解析出有效团期。")
+
+if st.session_state.tour_data:
+    if st.button("🗑️ 清空总库全部数据 (永久重置)", use_container_width=True):
+        save_persisted_data([])
+        st.session_state.tour_data = []
+        st.rerun()
+
+    st.markdown("---")
+    df = pd.DataFrame(st.session_state.tour_data)
+    df['price_numeric'] = pd.to_numeric(df['price_numeric'], errors='coerce').fillna(0).astype(int)
+
+    with st.expander(f"🛠️ 快速数据校对面板 (当前总库共有 {len(df)} 项)", expanded=False):
+        edited_df = st.data_editor(df, num_rows="dynamic", use_container_width=True)
+        if not edited_df.equals(df):
+            st.session_state.tour_data = edited_df.to_dict('records')
+            save_persisted_data(st.session_state.tour_data)
+            st.rerun()
+
+    st.sidebar.header("🎛️ 筛选条件")
+    clean_agencies = sorted(list({str(a) for a in df['agency'] if pd.notna(a) and str(a).strip()}))
+    selected_agency = st.sidebar.selectbox("选择旅行社", ["全部"] + clean_agencies)
+
+    clean_dests = sorted(list({str(d) for d in df['destination'] if pd.notna(d) and str(d).strip()}))
+    selected_dest = st.sidebar.selectbox("选择目的地", ["全部"] + clean_dests)
+
+    loc_options = [
+        "全部",
+        "🇲🇾 马来西亚全部地区 (包含吉隆坡KUL / 新山JB)",
+        "🇲🇾 马来西亚起飞 (KUL)",
+        "🇲🇾 新山出发 (JB)",
+        "🇸🇬 新加坡起飞 (SIN)"
+    ]
+    selected_loc = st.sidebar.selectbox("选择起飞地点", loc_options)
+
+    selected_hol = st.sidebar.selectbox("🗓️ 学校假期筛选", ["全部日期", "🎒 包含学校假期 (含超出2天内)", "✨ 严格在学校假期内 (0超出)", "💼 仅平时非假期"])
+
+    filtered_df = df.copy()
+    if selected_agency != "全部":
+        filtered_df = filtered_df[filtered_df['agency'] == selected_agency]
+    if selected_dest != "全部":
+        filtered_df = filtered_df[filtered_df['destination'] == selected_dest]
+
+    if selected_loc == "🇲🇾 马来西亚全部地区 (包含吉隆坡KUL / 新山JB)":
+        filtered_df = filtered_df[filtered_df['departure_location'].str.contains("马来西亚|新山|KUL|JB", na=False)]
+    elif selected_loc == "🇲🇾 马来西亚起飞 (KUL)":
+        filtered_df = filtered_df[filtered_df['departure_location'].str.contains("KUL", na=False)]
+    elif selected_loc == "🇲🇾 新山出发 (JB)":
+        filtered_df = filtered_df[filtered_df['departure_location'].str.contains("JB|新山", na=False)]
+    elif selected_loc == "🇸🇬 新加坡起飞 (SIN)":
+        filtered_df = filtered_df[filtered_df['departure_location'].str.contains("SIN|新加坡", na=False)]
+
+    if selected_hol == "🎒 包含学校假期 (含超出2天内)":
+        filtered_df = filtered_df[filtered_df['holiday_status'].isin(['exact', 'slight_over'])]
+    elif selected_hol == "✨ 严格在学校假期内 (0超出)":
+        filtered_df = filtered_df[filtered_df['holiday_status'] == 'exact']
+    elif selected_hol == "💼 仅平时非假期":
+        filtered_df = filtered_df[filtered_df['holiday_status'] == 'none']
+
+    p_min = int(df['price_numeric'].min()) if not df.empty else 1000
+    p_max = int(df['price_numeric'].max()) if not df.empty else 9000
+    if p_min >= p_max:
+        p_max = p_min + 100
+    price_range = st.sidebar.slider("💰 团费预算范围 (RM)", min_value=p_min, max_value=p_max, value=(p_min, p_max), step=100)
+    filtered_df = filtered_df[(filtered_df['price_numeric'] >= price_range[0]) & (filtered_df['price_numeric'] <= price_range[1])]
+
+    st.markdown(f"### 符合条件的出发选项共 **{len(filtered_df)}** 个：")
+    col1, col2 = st.columns(2)
+    with col1:
+        st.download_button("📊 下载 CSV 比价清单", data=filtered_df.to_csv(index=False).encode('utf-8-sig'), file_name="智能比价清单.csv", mime="text/csv", use_container_width=True)
+    with col2:
+        st.download_button("🖼️ 下载高清长图 (.png)", data=generate_comparison_image(filtered_df), file_name="智能比价长图.png", mime="image/png", use_container_width=True)
+
+    st.dataframe(filtered_df[['agency', 'destination', 'tour_code', 'departure_location', 'departure_dates', 'price_text', 'title']], use_container_width=True)
+
+    st.markdown("#### 📋 行程比对卡片")
+    for _, row in filtered_df.iterrows():
+        with st.container(border=True):
+            c1, c2, c3 = st.columns([3, 2, 2])
+            with c1:
+                st.markdown(f"### 📍 **{row['destination']}** <small style='color:gray;'>({row['agency']})</small>", unsafe_allow_html=True)
+                st.write(f"**路线：** {row['title']}")
+                st.write(f"**团号：** `{row['tour_code']}`")
+            with c2:
+                st.markdown(f"🛫 **出发地：** `{row['departure_location']}`")
+                st.write(f"📅 **出发日期：** {row['departure_dates']}")
+                h_stat = row['holiday_status']
+                if h_stat == 'exact':
+                    st.success(f"🎒 完美在校假内 ({row['holiday_name']})")
+                elif h_stat == 'slight_over':
+                    st.warning(f"⚠️ 包含校假，超 {row['over_days']} 天 (需请假)")
+            with c3:
+                st.markdown(f"### 💰 **{row['price_text']}**")
