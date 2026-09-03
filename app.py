@@ -11,8 +11,8 @@ from PIL import Image, ImageDraw, ImageFont
 
 st.set_page_config(page_title="跨社旅游团比价筛选中心", page_icon="✈️", layout="wide")
 
-st.title("✈️ 跨旅行社海报聚合与横向对比中心 (OpenRouter 动态免费版)")
-st.markdown("通过 OpenRouter 官方免费路由驱动，自动调度可用免费视觉模型解析海报。")
+st.title("✈️ 跨旅行社海报聚合与横向对比中心 (Gemini 官方直连版)")
+st.markdown("已接入 Google 官方多模态视觉通道，支持识别任意全新排版海报并自动秒级拆解团期。")
 
 OFFICIAL_HOLIDAYS = [
     (datetime.date(2026, 3, 20), datetime.date(2026, 3, 29), "2026 第一学期假期 (3月)"),
@@ -22,23 +22,8 @@ OFFICIAL_HOLIDAYS = [
     (datetime.date(2027, 1, 23), datetime.date(2027, 2, 16), "2027 农历新年与跨年假期")
 ]
 
-OPENROUTER_API_KEY = st.secrets.get("OPENROUTER_API_KEY", "")
-OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
-
-def compress_image_for_api(image_bytes):
-    img = Image.open(BytesIO(image_bytes))
-    if img.mode != 'RGB':
-        img = img.convert('RGB')
-    
-    w, h = img.size
-    max_dim = 1200
-    if max(w, h) > max_dim:
-        scale = max_dim / float(max(w, h))
-        img = img.resize((int(w * scale), int(h * scale)), Image.Resampling.LANCZOS)
-        
-    buf = BytesIO()
-    img.save(buf, format="JPEG", quality=80)
-    return buf.getvalue()
+GEMINI_API_KEY = st.secrets.get("GEMINI_API_KEY", "")
+GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent"
 
 def extract_tour_days(title_str):
     m = re.search(r'(\d+)\s*(?:天|D|d)', str(title_str))
@@ -96,29 +81,33 @@ def split_and_explode_dates(raw_agency, raw_dest, raw_code, raw_title, raw_loc, 
         })
     return exploded
 
-def call_openrouter_free_router(image_bytes):
-    if not OPENROUTER_API_KEY:
-        raise ValueError("未检测到 OPENROUTER_API_KEY，请在 Streamlit 后台 Secrets 中配置")
+def call_gemini_official_vision(image_bytes):
+    if not GEMINI_API_KEY:
+        raise ValueError("未检测到 GEMINI_API_KEY，请在 Streamlit 后台 Secrets 中配置")
 
-    compressed_bytes = compress_image_for_api(image_bytes)
-    base64_image = base64.b64encode(compressed_bytes).decode('utf-8')
-    headers = {
-        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-        "Content-Type": "application/json",
-        "HTTP-Referer": "https://streamlit.io",
-        "X-Title": "Tour Aggregator"
-    }
+    # 规范化压缩：控制图片尺寸与体积，加速传输
+    img = Image.open(BytesIO(image_bytes))
+    if img.mode != 'RGB':
+        img = img.convert('RGB')
+    w, h = img.size
+    if max(w, h) > 1600:
+        scale = 1600.0 / max(w, h)
+        img = img.resize((int(w * scale), int(h * scale)), Image.Resampling.LANCZOS)
+
+    buf = BytesIO()
+    img.save(buf, format="JPEG", quality=85)
+    base64_data = base64.b64encode(buf.getvalue()).decode('utf-8')
 
     prompt = """
-    你是一个专业旅游海报解析引擎。请仔细阅读海报并完整提取所有旅游团信息。
+    你是一个专业旅游海报解析引擎。请仔细阅读海报并提取所有旅游团信息。
     重要规则：
     1. 一个行程若有多个出发日期（例如 '14/10, 18/10, 24/10'），必须在 departure_dates 字段中把它们全部完整列出，用逗号分隔，绝不能漏掉任何一个。
     2. 只输出纯 JSON 数组，严禁包含任何 Markdown 格式或额外文字说明：
     [
       {
-        "agency": "旅行社名称",
-        "destination": "目的地",
-        "tour_code": "团号",
+        "agency": "旅行社名称(如 豪吉旅游/琦琦旅游)",
+        "destination": "目的地(如 重庆/云南/台湾)",
+        "tour_code": "团号(如 SP002376/QQ001)",
         "title": "完整路线标题",
         "departure_location": "起飞机场(如 SIN/KUL/JB出发)",
         "departure_dates": "全部出发日期(如 26/10, 28/10)",
@@ -128,30 +117,41 @@ def call_openrouter_free_router(image_bytes):
     """
 
     payload = {
-        "model": "openrouter/free",
-        "messages": [
+        "contents": [
             {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": prompt},
+                "parts": [
+                    {"text": prompt},
                     {
-                        "type": "image_url",
-                        "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}
+                        "inline_data": {
+                            "mime_type": "image/jpeg",
+                            "data": base64_data
+                        }
                     }
                 ]
             }
-        ]
+        ],
+        "generationConfig": {
+            "temperature": 0.1,
+            "response_mime_type": "application/json"
+        }
     }
 
-    res = requests.post(OPENROUTER_URL, headers=headers, json=payload, timeout=60)
+    headers = {
+        "Content-Type": "application/json",
+        "x-goog-api-key": GEMINI_API_KEY
+    }
+    url_with_key = f"{GEMINI_URL}?key={GEMINI_API_KEY}"
+
+    res = requests.post(url_with_key, headers=headers, json=payload, timeout=60)
     if res.status_code == 200:
-        content = res.json()["choices"][0]["message"]["content"]
-        clean_json = re.search(r'\[.*\]', content, re.DOTALL)
+        res_json = res.json()
+        raw_text = res_json["candidates"][0]["content"]["parts"][0]["text"]
+        clean_json = re.search(r'\[.*\]', raw_text, re.DOTALL)
         if clean_json:
             return json.loads(clean_json.group(0))
-        return json.loads(content)
+        return json.loads(raw_text)
     else:
-        raise RuntimeError(f"HTTP {res.status_code}: {res.text}")
+        raise RuntimeError(f"Google 官方 API 错误 (状态码 {res.status_code}): {res.text}")
 
 def generate_comparison_image(df):
     w, rh, hh = 850, 40, 70
@@ -188,7 +188,7 @@ if "tour_data" not in st.session_state:
 
 c_up, c_rst = st.columns([4, 1])
 with c_up:
-    uploaded_files = st.file_uploader("📷 上传海报图片 (支持任意新海报，可多选)", type=["jpg", "jpeg", "png"], accept_multiple_files=True)
+    uploaded_files = st.file_uploader("📷 上传旅行社海报图片 (支持任意新海报，可多选)", type=["jpg", "jpeg", "png"], accept_multiple_files=True)
 with c_rst:
     st.write("")
     st.write("")
@@ -198,16 +198,16 @@ with c_rst:
 
 if uploaded_files:
     st.success(f"已选择 {len(uploaded_files)} 张海报图片")
-    if st.button("🚀 启动视觉 AI 智能解析比价", type="primary"):
+    if st.button("🚀 启动 Google 官方视觉极速比价", type="primary"):
         all_exploded = []
         progress_bar = st.progress(0.0)
         status_text = st.empty()
         has_error = False
 
         for idx, f in enumerate(uploaded_files):
-            status_text.text(f"🔍 正在由 OpenRouter 免费通道解析海报: {f.name} ...")
+            status_text.text(f"🔍 正在由 Gemini 官方引擎秒级解析: {f.name} ...")
             try:
-                raw_items = call_openrouter_free_router(f.getvalue())
+                raw_items = call_gemini_official_vision(f.getvalue())
                 for item in raw_items:
                     rows = split_and_explode_dates(
                         item.get("agency", "精选旅行社"),
@@ -221,14 +221,14 @@ if uploaded_files:
                     all_exploded.extend(rows)
             except Exception as e:
                 has_error = True
-                st.error(f"处理 {f.name} 时发生错误: {e}")
+                st.error(f"解析 {f.name} 时提示: {e}")
 
             progress_bar.progress((idx + 1) / len(uploaded_files))
 
         if not has_error and all_exploded:
             unique_dict = {(x["agency"], x["tour_code"], x["departure_dates"]): x for x in all_exploded}
             st.session_state.tour_data = list(unique_dict.values())
-            status_text.text("✅ 解析完成！")
+            status_text.text("✅ 全部海报解析完成！")
             st.rerun()
         elif not has_error and not all_exploded:
             status_text.text("⚠️ 未能从海报提取到有效团期数据。")
