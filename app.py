@@ -14,13 +14,17 @@ import streamlit.components.v1 as components
 
 st.set_page_config(page_title="跨社旅游团比价筛选中心", page_icon="✈️", layout="wide")
 
-DB_FILE = "tour_database.json"
+# 采用绝对路径锁定持久化存储文件，确保刷新/重启均不丢数据
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DB_FILE = os.path.join(BASE_DIR, "tour_database.json")
 
 def load_persisted_data():
     if os.path.exists(DB_FILE):
         try:
             with open(DB_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
+                data = json.load(f)
+                if isinstance(data, list):
+                    return data
         except Exception:
             return []
     return []
@@ -29,22 +33,22 @@ def save_persisted_data(data):
     try:
         with open(DB_FILE, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
-    except Exception:
-        pass
+    except Exception as e:
+        st.error(f"本地保存失败: {e}")
 
-if "tour_data" not in st.session_state:
-    st.session_state.tour_data = load_persisted_data()
+# 无论何时加载或刷新，均以磁盘持久化数据为准
+st.session_state.tour_data = load_persisted_data()
 
 st.title("✈️ 跨旅行社海报聚合与横向对比中心")
 
-# 响亮提示音激活模块 (双音步进警报音)
+# 强音量提示音与通知权限
 auth_html = """
 <div style="background: #eff6ff; border: 1.5px solid #3b82f6; border-radius: 8px; padding: 12px; margin-bottom: 15px;">
     <div style="font-weight: bold; font-size: 14px; color: #1e40af; margin-bottom: 5px;">
         🔊 强提醒音频设置
     </div>
     <div style="font-size: 13px; color: #2563eb; margin-bottom: 8px;">
-        请点击下方测试响度。开启后，扫描完成时会连续鸣响高音提醒：
+        请点击下方按钮测试响度并开启浏览器提醒（解析完成自动触发）：
     </div>
     <button id="auth_btn" style="background: #2563eb; color: white; border: none; padding: 9px 18px; border-radius: 6px; font-weight: bold; font-size: 13px; cursor: pointer;">
         🔊 点击测试并激活高音提醒
@@ -69,7 +73,7 @@ function playLoudAlert() {
             const gain = ctx.createGain();
             osc.type = "sine";
             osc.frequency.setValueAtTime(t.f, ctx.currentTime + t.start);
-            gain.gain.setValueAtTime(0.3, ctx.currentTime + t.start);
+            gain.gain.setValueAtTime(0.35, ctx.currentTime + t.start);
             gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + t.start + t.dur);
             osc.connect(gain);
             gain.connect(ctx.destination);
@@ -282,10 +286,7 @@ def call_gemini_vision_chunk(img_chunk, chunk_name, status_box, hint_text=""):
                     status_box.warning(f"⚠️ [{model_name}] 算力排队(503)，2秒后重试...")
                     time.sleep(2)
                     continue
-                else:
-                    status_box.warning(f"⚠️ 响应异常 (HTTP {res.status_code})，正在重试...")
             except Exception as e:
-                status_box.warning(f"⚠️ 网络波动 ({e})，正在重连...")
                 time.sleep(2)
     return []
 
@@ -353,7 +354,6 @@ def generate_comparison_image(df):
         draw.text((160, y + 10), str(r['destination'])[:6], fill=(15, 23, 42), font=f_body)
         draw.text((250, y + 10), str(r['tour_code'])[:10], fill=(100, 116, 139), font=f_body)
 
-        # 彻底去除 Emoji 符号，纯文本输出避免乱码方块
         loc_str = str(r['departure_location']).replace("🇸🇬", "").replace("🇲🇾", "").strip()
         draw.text((360, y + 10), loc_str[:12], fill=(2, 132, 199), font=f_body)
 
@@ -384,7 +384,6 @@ if uploaded_files:
             w, h = img.size
 
             if h > w * 1.2:
-                # 宽幅接缝切片：上半区 58%，下半区从 44% 切到底部
                 box_top = (0, 0, w, int(h * 0.58))
                 box_bottom = (0, int(h * 0.44), w, h)
 
@@ -436,8 +435,7 @@ if uploaded_files:
             st.success(f"🎉 扫描全部完成！本次成功提取出 **{len(newly_extracted)}** 条团期，已安全写入总库。")
             st.rerun()
 
-st.session_state.tour_data = load_persisted_data()
-
+# 页面底端数据视图渲染
 if st.session_state.tour_data:
     if st.button("🗑️ 清空总库全部数据 (永久重置)", use_container_width=True):
         save_persisted_data([])
