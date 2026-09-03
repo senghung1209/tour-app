@@ -10,7 +10,6 @@ import urllib.request
 import requests
 from io import BytesIO
 from PIL import Image, ImageDraw, ImageFont
-import streamlit.components.v1 as components
 
 st.set_page_config(page_title="跨社旅游团比价筛选中心", page_icon="✈️", layout="wide")
 
@@ -39,89 +38,34 @@ st.session_state.tour_data = load_persisted_data()
 
 st.title("✈️ 跨旅行社海报聚合与横向对比中心")
 
-# 铃声与震动双保险激活区
-auth_html = """
-<div style="background: #eff6ff; border: 1.5px solid #3b82f6; border-radius: 8px; padding: 12px; margin-bottom: 15px;">
-    <div style="font-weight: bold; font-size: 14px; color: #1e40af; margin-bottom: 5px;">
-        🔊 强提醒音频与震动激活
-    </div>
-    <div style="font-size: 13px; color: #2563eb; margin-bottom: 8px;">
-        请点击下方按钮测试响度（扫描完成自动响铃 + 手机震动）：
-    </div>
-    <button id="auth_btn" style="background: #2563eb; color: white; border: none; padding: 9px 18px; border-radius: 6px; font-weight: bold; font-size: 13px; cursor: pointer;">
-        🔊 点击测试铃声与震动
-    </button>
-</div>
-<script>
-function playLoudNotification() {
-    try {
-        if ("vibrate" in navigator) { navigator.vibrate([200, 100, 200]); }
-        const ctx = new (window.AudioContext || window.webkitAudioContext)();
-        if (ctx.state === 'suspended') { ctx.resume(); }
+# 标准清脆响亮的叮咚提示音 (Base64 编码的微型 WAV 音频)
+DING_DONG_WAV_B64 = (
+    "UklGRjQBAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YRAAAAAA////AAAA////AAAA////"
+    "AAAA////AAAA////AAAA////AAAA////AAAA////AAAA////AAAA////AAAA////AAAA////AAAA////"
+    "AAAA////AAAA////AAAA////AAAA////AAAA////AAAA////AAAA////AAAA////AAAA////AAAA////"
+    "AAAA////AAAA////AAAA////AAAA////AAAA////AAAA////AAAA////AAAA////AAAA////AAAA////"
+)
 
-        const tones = [
-            { f: 784, start: 0, dur: 0.15 },
-            { f: 1046.5, start: 0.18, dur: 0.35 }
-        ];
+# 顶部显眼的权限测试与预激活
+with st.container(border=True):
+    col_t1, col_t2 = st.columns([3, 1])
+    with col_t1:
+        st.markdown("🔊 **手机完成提示音 & 震动服务**")
+        st.caption("提示：在手机端首次使用，请先点右侧按钮测试响度，激活手机浏览器音频通道。")
+    with col_t2:
+        test_clicked = st.button("🔊 测试铃声与震动", use_container_width=True)
 
-        tones.forEach(t => {
-            const osc = ctx.createOscillator();
-            const gain = ctx.createGain();
-            osc.type = "sine";
-            osc.frequency.setValueAtTime(t.f, ctx.currentTime + t.start);
-            gain.gain.setValueAtTime(0.4, ctx.currentTime + t.start);
-            gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + t.start + t.dur);
-            osc.connect(gain);
-            gain.connect(ctx.destination);
-            osc.start(ctx.currentTime + t.start);
-            osc.stop(ctx.currentTime + t.start + t.dur);
-        });
-    } catch(e) {}
-}
-
-document.getElementById('auth_btn').addEventListener('click', function() {
-    playLoudNotification();
-    if ("Notification" in window) { Notification.requestPermission(); }
-});
-</script>
-"""
-components.html(auth_html, height=115)
-
-def trigger_loud_alert_js(count_num):
-    js = f"""
+if test_clicked:
+    st.markdown(f"""
+    <audio autoplay>
+        <source src="data:audio/wav;base64,{DING_DONG_WAV_B64}" type="audio/wav">
+    </audio>
     <script>
-    (function() {{
-        try {{
-            if ("vibrate" in navigator) {{ navigator.vibrate([250, 100, 250, 100, 400]); }}
-            const ctx = new (window.AudioContext || window.webkitAudioContext)();
-            const tones = [
-                {{ f: 784, start: 0, dur: 0.18 }},
-                {{ f: 1046.5, start: 0.22, dur: 0.45 }}
-            ];
-            tones.forEach(t => {{
-                const osc = ctx.createOscillator();
-                const gain = ctx.createGain();
-                osc.type = "sine";
-                osc.frequency.setValueAtTime(t.f, ctx.currentTime + t.start);
-                gain.gain.setValueAtTime(0.5, ctx.currentTime + t.start);
-                gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + t.start + t.dur);
-                osc.connect(gain);
-                gain.connect(ctx.destination);
-                osc.start(ctx.currentTime + t.start);
-                osc.stop(ctx.currentTime + t.start + t.dur);
-            }});
-        }} catch(e) {{}}
-
-        if ("Notification" in window && Notification.permission === "granted") {{
-            new Notification("🎉 旅游海报扫描完成！", {{
-                body: "成功提取全量数据，总库共有 " + {count_num} + " 条团期！",
-                icon: "✈️"
-            }});
-        }}
-    }})();
+        if ("vibrate" in navigator) {{ navigator.vibrate([200, 100, 200]); }}
+        if ("Notification" in window) {{ Notification.requestPermission(); }}
     </script>
-    """
-    components.html(js, height=0)
+    """, unsafe_allow_html=True)
+    st.toast("🔔 提示音与震动已触发！", icon="🔊")
 
 OFFICIAL_HOLIDAYS = [
     (datetime.date(2026, 3, 20), datetime.date(2026, 3, 29), "2026 第一学期假期 (3月)"),
@@ -163,13 +107,22 @@ def evaluate_holiday_fit(departure_date_str, duration_days):
         pass
     return 'none', 0, ""
 
+def normalize_agency_name(raw_name, title_str=""):
+    s = f"{raw_name} {title_str}".upper()
+    if "琦琦" in s or "QI QI" in s:
+        return "琦琦旅游"
+    if "豪吉" in s or "SP" in s:
+        return "豪吉旅游"
+    clean = re.sub(r'\(.*?\)|（.*?）', '', str(raw_name)).strip()
+    return clean if clean else "精选旅行社"
+
 def normalize_departure_location(raw_loc, raw_title):
     s = f"{raw_loc} {raw_title}".upper()
     if any(k in s for k in ["SIN", "新加坡", "CHANGI", "SCOOT", "TR"]):
-        return "新加坡起飞 (SIN)"
+        return "🇸🇬 新加坡起飞 (SIN)"
     if any(k in s for k in ["JB", "新山"]):
-        return "新山出发 (JB)"
-    return "马来西亚起飞 (KUL)"
+        return "🇲🇾 新山出发 (JB)"
+    return "🇲🇾 马来西亚起飞 (KUL)"
 
 def split_and_explode_dates(raw_agency, raw_dest, raw_code, raw_title, raw_loc, raw_dates_str, raw_price):
     days = extract_tour_days(raw_title)
@@ -178,7 +131,10 @@ def split_and_explode_dates(raw_agency, raw_dest, raw_code, raw_title, raw_loc, 
     except Exception:
         clean_price = 0
 
+    norm_agency = normalize_agency_name(raw_agency, raw_title)
     norm_loc = normalize_departure_location(raw_loc, raw_title)
+    clean_dest = re.sub(r'^(?:SIN|JB|KL)\s*[-–—]\s*', '', str(raw_dest or "精选路线")).strip()
+
     date_tokens = re.findall(r'\b\d{1,2}[/.-]\d{1,2}(?:[/.-]\d{2,4})?\b', str(raw_dates_str))
     if not date_tokens:
         date_tokens = [str(raw_dates_str).strip()]
@@ -187,8 +143,8 @@ def split_and_explode_dates(raw_agency, raw_dest, raw_code, raw_title, raw_loc, 
     for d_token in date_tokens:
         status, over_days, hol_name = evaluate_holiday_fit(d_token, days)
         exploded.append({
-            "agency": str(raw_agency or "精选旅行社"),
-            "destination": str(raw_dest or "精选路线"),
+            "agency": norm_agency,
+            "destination": clean_dest,
             "tour_code": str(raw_code or "-"),
             "title": str(raw_title or ""),
             "departure_location": norm_loc,
@@ -201,7 +157,7 @@ def split_and_explode_dates(raw_agency, raw_dest, raw_code, raw_title, raw_loc, 
         })
     return exploded
 
-def parse_compact_lines(raw_text):
+def parse_compact_lines(raw_text, fallback_agency="精选旅行社"):
     clean_lines = raw_text.strip().splitlines()
     items = []
     for line in clean_lines:
@@ -214,8 +170,10 @@ def parse_compact_lines(raw_text):
                 price_val = int(re.sub(r'[^\d]', '', parts[6]))
             except Exception:
                 price_val = 0
+
+            cur_agency = parts[0] if parts[0] else fallback_agency
             items.append({
-                "agency": parts[0] or "精选旅行社",
+                "agency": cur_agency,
                 "destination": parts[1] or "精选目的地",
                 "tour_code": parts[2] or "-",
                 "title": parts[3] or "",
@@ -225,7 +183,7 @@ def parse_compact_lines(raw_text):
             })
     return items
 
-def call_gemini_vision_chunk(img_chunk, chunk_name, status_box, hint_text=""):
+def call_gemini_vision_chunk(img_chunk, chunk_name, status_box, hint_text="", default_agency="精选旅行社"):
     if not GEMINI_API_KEY:
         st.error("未检测到 GEMINI_API_KEY，请在 Secrets 中配置")
         return []
@@ -240,9 +198,9 @@ def call_gemini_vision_chunk(img_chunk, chunk_name, status_box, hint_text=""):
     {f"核心区域提示: {hint_text}" if hint_text else ""}
 
     特别注意：
-    1. 【并列日期拆单行】：海报中经常用逗号并列多个日期（例如 01/11, 19/11 对应 2999；05/11, 26/11, 29/12 对应 3099；23/10, 06/11 对应 4999；18/12 对应 5199），**每一个逗号隔开的日期都必须单独拆成一行输出！绝不能只提取第一个日期！**
-    2. 旅行社：若海报含 SP 编号或豪吉标志，填“豪吉旅游”；若是表格型海报写其实际标头。
-    3. 起飞地点：含 SIN/新加坡/酷航 填“新加坡起飞 (SIN)”；含 JB/新山 填“新山出发 (JB)”；默认填“马来西亚起飞 (KUL)”。
+    1. 【旅行社名称统一】：如果是琦琦旅游表格海报，每一行第1个字段一律填“琦琦旅游”；如果是豪吉拼贴海报，一律填“豪吉旅游”。绝不能留空或带月份杂质！
+    2. 【逗号并列日期彻底拆分】：若写有并列日期（如 01/11, 19/11 对应 2999；05/11, 26/11, 29/12 对应 3099；23/10, 06/11 对应 4999；18/12 对应 5199），每一个逗号隔开的日期都必须拆分成单独一行！
+    3. 起飞地点：含 SIN/新加坡/酷航/TR 填“新加坡起飞 (SIN)”；含 JB/新山 填“新山出发 (JB)”；默认填“马来西亚起飞 (KUL)”。
     4. 纯文本逐行输出，以竖线 | 分隔，严禁代码块标记与解释：
     旅行社|目的地|团号|行程路线全称|起飞地|出发日期|纯数字价格
     """
@@ -271,11 +229,10 @@ def call_gemini_vision_chunk(img_chunk, chunk_name, status_box, hint_text=""):
                 res = requests.post(url, headers=headers, json=payload, timeout=60)
                 if res.status_code == 200:
                     raw_text = res.json()["candidates"][0]["content"]["parts"][0]["text"]
-                    items = parse_compact_lines(raw_text)
+                    items = parse_compact_lines(raw_text, fallback_agency=default_agency)
                     if items:
                         return items
                 if res.status_code == 503:
-                    status_box.warning(f"⚠️ [{model_name}] 算力排队(503)，2秒后重试...")
                     time.sleep(2)
                     continue
             except Exception:
@@ -346,8 +303,8 @@ def generate_comparison_image(df):
         draw.text((160, y + 10), str(r['destination'])[:6], fill=(15, 23, 42), font=f_body)
         draw.text((250, y + 10), str(r['tour_code'])[:10], fill=(100, 116, 139), font=f_body)
 
-        loc_str = str(r['departure_location']).replace("🇸🇬", "").replace("🇲🇾", "").strip()
-        draw.text((360, y + 10), loc_str[:12], fill=(2, 132, 199), font=f_body)
+        loc_clean = str(r['departure_location']).replace("🇸🇬", "").replace("🇲🇾", "").strip()
+        draw.text((360, y + 10), loc_clean[:12], fill=(2, 132, 199), font=f_body)
 
         draw.text((500, y + 10), str(r['departure_dates'])[:12], fill=(15, 23, 42), font=f_body)
         draw.text((620, y + 9), str(r['price_text']), fill=(220, 38, 38), font=f_price)
@@ -358,7 +315,7 @@ def generate_comparison_image(df):
     img.save(buf, format="PNG", quality=95)
     return buf.getvalue()
 
-uploaded_files = st.file_uploader("📷 上传旅行社海报图片 (支持任意版式，自动追加保存)", type=["jpg", "jpeg", "png"], accept_multiple_files=True)
+uploaded_files = st.file_uploader("📷 上传旅行社海报图片 (支持长表/拼贴海报，自动追加保存)", type=["jpg", "jpeg", "png"], accept_multiple_files=True)
 
 if uploaded_files:
     st.info(f"已选择 {len(uploaded_files)} 张海报图片")
@@ -375,32 +332,30 @@ if uploaded_files:
                 img = img.convert('RGB')
             w, h = img.size
 
-            if h > w * 1.2:
+            if h > w * 1.3:
                 box_top = (0, 0, w, int(h * 0.58))
                 box_bottom = (0, int(h * 0.44), w, h)
 
-                status_box.markdown(f"**[{f_idx+1}/{total_files}]** 🔍 正在扫描上半区 (重庆 / 西藏 / 青岛 / 桂林 / 台湾 / 韩国)...")
+                status_box.markdown(f"**[{f_idx+1}/{total_files}]** 🔍 正在扫描上半区...")
                 progress_bar.progress(0.25)
-                hint_top = "必须提取：SIN-重庆(注意SP002374的19/11和26/11等全部并列日期)、SIN-西藏(注意SP002413的18/12)、青岛、SIN-桂林、SIN-台湾、SIN-韩国"
-                r1 = call_gemini_vision_chunk(img.crop(box_top), "上半区", status_box, hint_top)
+                r1 = call_gemini_vision_chunk(img.crop(box_top), "上半区", status_box, "重庆、西藏、青岛、桂林、台湾、韩国", default_agency="豪吉旅游")
 
-                status_box.markdown(f"**[{f_idx+1}/{total_files}]** 🔍 正在扫描下半区 (贵州 / 哈尔滨 / 北疆 / 九寨沟)...")
+                status_box.markdown(f"**[{f_idx+1}/{total_files}]** 🔍 正在扫描下半区...")
                 progress_bar.progress(0.70)
-                hint_bottom = "必须提取：JB-贵州全部日期、SIN-哈尔滨全部9条、KL-北疆全部4条、SIN-九寨沟"
-                r2 = call_gemini_vision_chunk(img.crop(box_bottom), "下半区", status_box, hint_bottom)
+                r2 = call_gemini_vision_chunk(img.crop(box_bottom), "下半区", status_box, "贵州全部、哈尔滨全部、北疆全部、九寨沟全部", default_agency="豪吉旅游")
 
                 raw_items = r1 + r2
             else:
-                status_box.markdown(f"**[{f_idx+1}/{total_files}]** 🔍 正在扫描全幅表格海报...")
+                status_box.markdown(f"**[{f_idx+1}/{total_files}]** 🔍 正在全幅扫描长表格...")
                 progress_bar.progress(0.5)
-                raw_items = call_gemini_vision_chunk(img, "全幅表格", status_box, "所有表格行")
+                raw_items = call_gemini_vision_chunk(img, "全幅表格", status_box, "所有表格行", default_agency="琦琦旅游")
 
             progress_bar.progress(1.0)
             status_box.markdown("✨ 正在汇总并去重入库...")
 
             for item in raw_items:
                 rows = split_and_explode_dates(
-                    item.get("agency", "精选旅行社"),
+                    item.get("agency", ""),
                     item.get("destination", "精选路线"),
                     item.get("tour_code", "-"),
                     item.get("title", ""),
@@ -422,8 +377,22 @@ if uploaded_files:
 
             st.session_state.tour_data = unique_combined
             save_persisted_data(unique_combined)
-            trigger_loud_alert_js(len(st.session_state.tour_data))
+            
+            # 使用原生真实音频标签挂载播放，并同步触发手机物理振动
+            st.markdown(f"""
+            <audio autoplay>
+                <source src="data:audio/wav;base64,{DING_DONG_WAV_B64}" type="audio/wav">
+            </audio>
+            <script>
+                if ("vibrate" in navigator) {{ navigator.vibrate([250, 100, 250, 100, 400]); }}
+                if ("Notification" in window && Notification.permission === "granted") {{
+                    new Notification("🎉 旅游海报扫描完成！", {{ body: "成功提取全量数据！", icon: "✈️" }});
+                }}
+            </script>
+            """, unsafe_allow_html=True)
+            
             st.success(f"🎉 扫描全部完成！总库已更新至 **{len(st.session_state.tour_data)}** 条团期。")
+            time.sleep(1.2)
             st.rerun()
 
 if st.session_state.tour_data:
@@ -450,7 +419,13 @@ if st.session_state.tour_data:
     clean_dests = sorted(list({str(d) for d in df['destination'] if pd.notna(d) and str(d).strip()}))
     selected_dest = st.sidebar.selectbox("选择目的地", ["全部"] + clean_dests)
 
-    loc_options = ["全部", "新加坡起飞 (SIN)", "新山出发 (JB)", "马来西亚起飞 (KUL)"]
+    loc_options = [
+        "全部",
+        "🇲🇾 马来西亚全部地区 (包含吉隆坡KUL / 新山JB)",
+        "🇲🇾 马来西亚起飞 (KUL)",
+        "🇲🇾 新山出发 (JB)",
+        "🇸🇬 新加坡起飞 (SIN)"
+    ]
     selected_loc = st.sidebar.selectbox("选择起飞地点", loc_options)
 
     selected_hol = st.sidebar.selectbox("🗓️ 学校假期筛选", ["全部日期", "🎒 包含学校假期 (含超出2天内)", "✨ 严格在学校假期内 (0超出)", "💼 仅平时非假期"])
@@ -460,8 +435,15 @@ if st.session_state.tour_data:
         filtered_df = filtered_df[filtered_df['agency'] == selected_agency]
     if selected_dest != "全部":
         filtered_df = filtered_df[filtered_df['destination'] == selected_dest]
-    if selected_loc != "全部":
-        filtered_df = filtered_df[filtered_df['departure_location'] == selected_loc]
+
+    if selected_loc == "🇲🇾 马来西亚全部地区 (包含吉隆坡KUL / 新山JB)":
+        filtered_df = filtered_df[filtered_df['departure_location'].str.contains("马来西亚|新山|KUL|JB", na=False)]
+    elif selected_loc == "🇲🇾 马来西亚起飞 (KUL)":
+        filtered_df = filtered_df[filtered_df['departure_location'].str.contains("KUL", na=False)]
+    elif selected_loc == "🇲🇾 新山出发 (JB)":
+        filtered_df = filtered_df[filtered_df['departure_location'].str.contains("JB|新山", na=False)]
+    elif selected_loc == "🇸🇬 新加坡起飞 (SIN)":
+        filtered_df = filtered_df[filtered_df['departure_location'].str.contains("SIN|新加坡", na=False)]
 
     if selected_hol == "🎒 包含学校假期 (含超出2天内)":
         filtered_df = filtered_df[filtered_df['holiday_status'].isin(['exact', 'slight_over'])]
