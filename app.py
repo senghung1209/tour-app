@@ -378,11 +378,28 @@ if task["results"]:
     ]
     selected_hol = st.sidebar.selectbox("🗓️ 学校假期筛选", holiday_options)
     
-    min_val = int(df['price_numeric'].min()) if not df.empty else 0
-    max_val = int(df['price_numeric'].max()) if not df.empty else 10000
+    # --- 修复滑块边界：过滤掉 0 元异常值，防止 StreamlitJSNumberBoundsError ---
+    valid_prices = df[df['price_numeric'] > 0]['price_numeric']
+    if not valid_prices.empty:
+        min_val = int(valid_prices.min())
+        max_val = int(valid_prices.max())
+    else:
+        min_val = 500
+        max_val = 15000
+
     if min_val >= max_val:
         max_val = min_val + 1000
-    price_range = st.sidebar.slider("价格预算范围 (RM)", min_val, max_val, (min_val, max_val))
+
+    # 规范化整型并设置安全步长
+    min_val = int(min_val)
+    max_val = int(max_val)
+    price_range = st.sidebar.slider(
+        "价格预算范围 (RM)", 
+        min_value=min_val, 
+        max_value=max_val, 
+        value=(min_val, max_val),
+        step=50
+    )
     
     filtered_df = df.copy()
     if selected_dest != "全部":
