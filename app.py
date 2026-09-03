@@ -11,7 +11,7 @@ from PIL import Image, ImageDraw, ImageFont
 st.set_page_config(page_title="跨社旅游团比价筛选中心", page_icon="✈️", layout="wide")
 
 st.title("✈️ 跨旅行社海报聚合与横向对比中心")
-st.caption("🚀 已直连 gemini-3.5-flash 极速通道，支持长表全量提取与分批增量累加。")
+st.caption("🚀 已适配豪吉旅游拼贴海报与琦琦长表，支持分批增量累加。")
 
 OFFICIAL_HOLIDAYS = [
     (datetime.date(2026, 3, 20), datetime.date(2026, 3, 29), "2026 第一学期假期 (3月)"),
@@ -54,8 +54,10 @@ def evaluate_holiday_fit(departure_date_str, duration_days):
 
 def normalize_departure_location(raw_loc, raw_title):
     s = f"{raw_loc} {raw_title}".upper()
-    if any(k in s for k in ["新加坡", "SIN", "CHANGI", "TR"]):
+    if any(k in s for k in ["SIN", "新加坡", "CHANGI", "SCOOT", "TR"]):
         return "🇸🇬 新加坡起飞 (SIN)"
+    if any(k in s for k in ["JB", "新山"]):
+        return "🇲🇾 新山出发 (JB)"
     return "🇲🇾 马来西亚起飞 (KUL)"
 
 def split_and_explode_dates(raw_agency, raw_dest, raw_code, raw_title, raw_loc, raw_dates_str, raw_price):
@@ -88,6 +90,21 @@ def split_and_explode_dates(raw_agency, raw_dest, raw_code, raw_title, raw_loc, 
         })
     return exploded
 
+def safe_parse_json(raw_text):
+    clean_text = raw_text.strip()
+    clean_text = re.sub(r'^```json\s*', '', clean_text, flags=re.MULTILINE)
+    clean_text = re.sub(r'^```\s*', '', clean_text, flags=re.MULTILINE)
+    
+    match = re.search(r'\[.*\]', clean_text, re.DOTALL)
+    if match:
+        clean_text = match.group(0)
+    
+    try:
+        return json.loads(clean_text)
+    except Exception:
+        clean_text_fixed = re.sub(r',\s*([\]}])', r'\1', clean_text)
+        return json.loads(clean_text_fixed)
+
 def call_gemini_vision_direct(image_bytes):
     if not GEMINI_API_KEY:
         raise ValueError("未检测到 GEMINI_API_KEY，请在 Streamlit 后台 Secrets 中配置")
@@ -101,15 +118,30 @@ def call_gemini_vision_direct(image_bytes):
         img = img.resize((int(w * scale), int(h * scale)), Image.Resampling.LANCZOS)
 
     buf = BytesIO()
-    img.save(buf, format="JPEG", quality=82)
+    img.save(buf, format="JPEG", quality=85)
     base64_data = base64.b64encode(buf.getvalue()).decode('utf-8')
 
     prompt = """
-    你是一个专业高精度旅游海报提取引擎。请仔细逐行阅读海报表格中的每一行（如 1~23 行完整提取）：
-    1. 若写有“新加坡起飞”或航司为 TR，departure_location 填写“新加坡起飞 (SIN)”，否则填写“马来西亚起飞 (KUL)”；
-    2. 团号若无则填写'-'；
-    3. 只输出纯 JSON 数组，严禁包含任何 Markdown 格式符号：
-    [{"agency":"旅行社名","destination":"目的地","tour_code":"团号","title":"行程名","departure_location":"起飞地","departure_dates":"日期","price":2999}]
+    你是一个专业高精度旅游海报提取引擎。
+    海报特征识别：
+    1. 旅行社识别：若海报包含多格拼贴团期（例如包含 SP 开头的团号、或者联系人SIONG/ALEX），该海报旅行社统一命名为“豪吉旅游”；若是表格型海报（如琦琦），则按其实际标题命名。
+    2. 多价格拆分规则：一个小方块里如果有不同的出发日期对应不同价格（例如某个团期写着 17/11/26 卖 3299，15/12/26 卖 3999），请务必拆分为多条独立数据项输出！
+    3. 出发地点判断：
+       - 标题带 SIN、新加坡、或航司酷航(Scoot)的，写“新加坡起飞 (SIN)”
+       - 标题带 JB、新山的，写“新山出发 (JB)”
+       - 标题带 KL 或默认的，写“马来西亚起飞 (KUL)”
+    4. 务必输出标准 JSON 数组，严禁任何 markdown 标签，字符串内不要包含未经转义的双引号：
+    [
+      {
+        "agency": "旅行社名称(如 豪吉旅游 / 琦琦旅游)",
+        "destination": "目的地(如 重庆/贵州/北疆/西藏/哈尔滨/九寨沟)",
+        "tour_code": "团号(如 SP002376)",
+        "title": "行程路线名(如 7天6夜 重庆8D风采线)",
+        "departure_location": "起飞地",
+        "departure_dates": "出发日期(如 31/12/2026)",
+        "price": 2999
+      }
+    ]
     """
 
     payload = {
@@ -139,15 +171,12 @@ def call_gemini_vision_direct(image_bytes):
     }
 
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{LOCKED_MODEL}:generateContent?key={GEMINI_API_KEY}"
-    res = requests.post(url, headers=headers, json=payload, timeout=45)
+    res = requests.post(url, headers=headers, json=payload, timeout=60)
     
     if res.status_code == 200:
         res_json = res.json()
         raw_text = res_json["candidates"][0]["content"]["parts"][0]["text"]
-        clean_json = re.search(r'\[.*\]', raw_text, re.DOTALL)
-        if clean_json:
-            return json.loads(clean_json.group(0))
-        return json.loads(raw_text)
+        return safe_parse_json(raw_text)
     else:
         raise RuntimeError(f"API 响应错误 (HTTP {res.status_code}): {res.text[:120]}")
 
@@ -185,7 +214,7 @@ def generate_comparison_image(df):
 if "tour_data" not in st.session_state:
     st.session_state.tour_data = []
 
-uploaded_files = st.file_uploader("📷 上传旅行社海报图片 (支持分批多次上传，自动追加)", type=["jpg", "jpeg", "png"], accept_multiple_files=True)
+uploaded_files = st.file_uploader("📷 上传旅行社海报图片 (支持长表/拼贴海报，分批多次追加)", type=["jpg", "jpeg", "png"], accept_multiple_files=True)
 
 if uploaded_files:
     st.info(f"已选择 {len(uploaded_files)} 张海报图片")
@@ -196,7 +225,7 @@ if uploaded_files:
         has_error = False
 
         for idx, f in enumerate(uploaded_files):
-            status_text.info(f"⚡ [{idx+1}/{len(uploaded_files)}] 正在由 **{LOCKED_MODEL}** 提取: `{f.name}` ...")
+            status_text.info(f"⚡ [{idx+1}/{len(uploaded_files)}] 正在解析: `{f.name}` ...")
             try:
                 raw_items = call_gemini_vision_direct(f.getvalue())
                 for item in raw_items:
@@ -227,7 +256,7 @@ if uploaded_files:
                     unique_combined.append(item)
 
             st.session_state.tour_data = unique_combined
-            st.success(f"🎉 解析完成！成功提取并追加数据，当前总库共计 {len(st.session_state.tour_data)} 项出发日期。")
+            st.success(f"🎉 解析完成！成功追加数据，当前总库共计 {len(st.session_state.tour_data)} 项出发日期。")
             st.rerun()
 
 if st.session_state.tour_data:
@@ -252,7 +281,7 @@ if st.session_state.tour_data:
     clean_dests = sorted(list({str(d) for d in df['destination'] if pd.notna(d) and str(d).strip()}))
     selected_dest = st.sidebar.selectbox("选择目的地", ["全部"] + clean_dests)
 
-    loc_options = ["全部", "🇲🇾 马来西亚起飞 (KUL)", "🇸🇬 新加坡起飞 (SIN)"]
+    loc_options = ["全部", "🇲🇾 马来西亚起飞 (KUL)", "🇸🇬 新加坡起飞 (SIN)", "🇲🇾 新山出发 (JB)"]
     selected_loc = st.sidebar.selectbox("选择起飞地点", loc_options)
 
     selected_hol = st.sidebar.selectbox("🗓️ 学校假期筛选", ["全部日期", "🎒 包含学校假期 (含超出2天内)", "✨ 严格在学校假期内 (0超出)", "💼 仅平时非假期"])
