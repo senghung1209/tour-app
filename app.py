@@ -14,11 +14,11 @@ import streamlit.components.v1 as components
 st.set_page_config(page_title="AI 旅游团智能筛选助手", page_icon="✈️", layout="wide")
 
 st.title("✈️ 旅游团宣传单智能分析与筛选")
-st.markdown("支持后台不中断运行、2026/2027官方学校假期精确判定与超期提醒！")
+st.markdown("支持后台运行、全局多目的地解析与去重、学校假期判定与超期提醒！")
 
 GROQ_API_KEY = "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"
 
-# 严格匹配官方学年日历
+# 2026 官方学年日历
 OFFICIAL_HOLIDAYS = [
     (datetime.date(2026, 3, 20), datetime.date(2026, 3, 29), "2026 第一学期假期 (3月)"),
     (datetime.date(2026, 5, 22), datetime.date(2026, 6, 7), "2026 年中假期 (5/6月)"),
@@ -108,7 +108,7 @@ def trigger_notification():
     js = "<script>try{var c=new(window.AudioContext||window.webkitAudioContext)();var o=c.createOscillator();var g=c.createGain();o.type='sine';o.frequency.setValueAtTime(587.33,c.currentTime);o.frequency.setValueAtTime(880,c.currentTime+0.15);g.gain.setValueAtTime(0.3,c.currentTime);g.gain.exponentialRampToValueAtTime(0.01,c.currentTime+0.6);o.connect(g);g.connect(c.destination);o.start();o.stop(c.currentTime+0.6);}catch(e){}if('Notification' in window){if(Notification.permission==='granted'){new Notification('✈️ 旅游团分析完成！',{body:'海报数据已全部提取完毕！'});}else if(Notification.permission!=='denied'){Notification.requestPermission().then(function(p){if(p==='granted'){new Notification('✈️ 旅游团分析完成！',{body:'海报数据已全部提取完毕！'});}});}}</script>"
     components.html(js, height=0)
 
-def compress_image(uploaded_file, max_size=650, quality=55):
+def compress_image(uploaded_file, max_size=750, quality=65):
     img = Image.open(uploaded_file)
     if img.mode in ("RGBA", "P"):
         img = img.convert("RGB")
@@ -159,7 +159,17 @@ def extract_partial_items(content):
 
 def analyze_single_image(file_bytes, file_name, task_dict):
     encoded_string = compress_image(BytesIO(file_bytes))
-    prompt = "分析图片提取所有旅游团项目，返回纯JSON数组，包含字段：destination, departure_location, tour_code, title, departure_dates, price_numeric, price_text。严禁输出任何多余说明。"
+    
+    # 明确禁止循环重复，强化多城市板块扫描
+    prompt = (
+        "仔细扫描整张海报中的所有不同城市板块与旅游路线。"
+        "提取所有不同的旅游团，返回合法的 JSON 数组。"
+        "严格注意：\n"
+        "1. 不要局限于某一个城市（如重庆），海报中若有其他不同目的地必须全部提取！\n"
+        "2. destination 只填具体目的城市/国家（例如：北京/武汉/内蒙古/沙坝/重庆/江南/张家界/韩国等）。\n"
+        "3. 同一个团如果有多个出发日期，请把日期合并写在 departure_dates（如 '08/11/26, 08/12/26'），严禁生成数十个一模一样的重复项！\n"
+        "4. 输出纯 JSON 数组，包含 destination, departure_location, tour_code, title, departure_dates, price_numeric, price_text。"
+    )
 
     url = "https://api.groq.com/openai/v1/chat/completions"
     headers = {
@@ -177,7 +187,7 @@ def analyze_single_image(file_bytes, file_name, task_dict):
                 ]
             }
         ],
-        "temperature": 0.0,
+        "temperature": 0.1,
         "max_tokens": 4096,
         "reasoning_effort": "none"
     }
@@ -201,50 +211,60 @@ def analyze_single_image(file_bytes, file_name, task_dict):
                 content = content.split("</think>")[-1].strip()
             content = re.sub(r'```(?:json)?', '', content).strip()
             
+            items_raw = []
             json_match = re.search(r'\[\s*\{.*\}\s*\]', content, re.DOTALL)
             if json_match:
                 try:
                     parsed = json.loads(json_match.group(0))
                     if isinstance(parsed, list) and len(parsed) > 0:
-                        std_list = []
-                        for it in parsed:
-                            p_raw = it.get("price_numeric", 0)
-                            try:
-                                p_val = int(re.sub(r'[^\d]', '', str(p_raw)))
-                            except Exception:
-                                p_val = 0
-                            
-                            dest_str = str(it.get("destination", "精选目的地")).strip()
-                            code_str = str(it.get("tour_code", "")).strip()
-                            title_str = str(it.get("title", "")).strip()
-                            loc_str = str(it.get("departure_location", "详见海报")).strip()
-                            date_str = str(it.get("departure_dates", "见海报")).strip()
-                            
-                            raw_price_str = it.get("price_text")
-                            if raw_price_str:
-                                final_price_str = str(raw_price_str).strip()
-                            elif p_val > 0:
-                                final_price_str = "RM " + str(p_val)
-                            else:
-                                final_price_str = "详见海报"
-
-                            entry = make_tour_dict(
-                                dest_str,
-                                code_str,
-                                title_str,
-                                loc_str,
-                                date_str,
-                                p_val,
-                                final_price_str
-                            )
-                            std_list.append(entry)
-                        return std_list
+                        items_raw = parsed
                 except Exception:
                     pass
             
-            rescued_items = extract_partial_items(content)
-            if rescued_items:
-                return rescued_items
+            if not items_raw:
+                items_raw = extract_partial_items(content)
+                
+            if items_raw:
+                std_list = []
+                seen_keys = set()
+                for it in items_raw:
+                    p_raw = it.get("price_numeric", 0)
+                    try:
+                        p_val = int(re.sub(r'[^\d]', '', str(p_raw)))
+                    except Exception:
+                        p_val = 0
+                    
+                    dest_str = str(it.get("destination", "精选目的地")).strip()
+                    code_str = str(it.get("tour_code", "")).strip()
+                    title_str = str(it.get("title", "")).strip()
+                    loc_str = str(it.get("departure_location", "详见海报")).strip()
+                    date_str = str(it.get("departure_dates", "见海报")).strip()
+                    
+                    raw_price_str = it.get("price_text")
+                    if raw_price_str:
+                        final_price_str = str(raw_price_str).strip()
+                    elif p_val > 0:
+                        final_price_str = "RM " + str(p_val)
+                    else:
+                        final_price_str = "详见海报"
+
+                    # 智能去重：同一团号、同一价格不再疯狂重复刷屏
+                    unique_key = (code_str, dest_str, p_val, date_str)
+                    if code_str and unique_key in seen_keys:
+                        continue
+                    seen_keys.add(unique_key)
+
+                    entry = make_tour_dict(
+                        dest_str,
+                        code_str,
+                        title_str,
+                        loc_str,
+                        date_str,
+                        p_val,
+                        final_price_str
+                    )
+                    std_list.append(entry)
+                return std_list
                 
             last_error = "未能识别出旅游团格式"
         elif response.status_code == 429:
@@ -408,14 +428,4 @@ if task["results"]:
                 st.markdown("### 📍 **" + str(row.get('destination', '未知')) + "**")
                 st.write("**路线：** " + str(row.get('title', '无')))
                 st.write("**团号：** `" + str(row.get('tour_code', '无')) + "`")
-            with c2:
-                st.markdown("🛫 **出发地：** `" + str(row.get('departure_location', '详见海报')) + "`")
-                st.write("📅 **出发日期：** " + str(row.get('departure_dates', '见海报')))
-                
-                h_status = row.get('holiday_status')
-                if h_status == 'exact':
-                    st.success("🎒 完美在校假内 (" + str(row.get('holiday_name')) + ")")
-                elif h_status == 'slight_over':
-                    st.warning("⚠️ 包含校假，但超出 " + str(row.get('over_days')) + " 天（需请假）")
-            with c3:
-                st.markdown("### 💰 **" + str(row.get('price_text', '无')) + "**")
+            with c2
