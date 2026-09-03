@@ -111,38 +111,47 @@ def evaluate_holiday_fit(departure_date_str, duration_days):
         pass
     return 'none', 0, ""
 
-def parse_text_robust(raw_text, default_agency="豪吉旅游"):
+def parse_flexible_text(raw_text, default_agency="豪吉旅游"):
     items = []
     for line in raw_text.strip().splitlines():
-        line = line.strip().replace("```", "")
-        if not line or line.startswith("#") or "|" not in line or "旅行社" in line or "序号" in line:
+        line = line.strip().replace("```", "").replace("`", "")
+        if not line or line.startswith("#") or len(line) < 5:
             continue
-        parts = [p.strip() for p in line.split("|")]
-        try:
-            if len(parts) >= 7:
-                price_val = int(re.sub(r'[^\d]', '', parts[6]))
+        
+        # 尝试按竖线分割，如果不行则按空格或逗号
+        parts = [p.strip() for p in line.split("|") if p.strip()]
+        if len(parts) >= 5:
+            try:
+                # 寻找价格（含有数字和RM的项）
+                price_val = 0
+                for p in parts:
+                    clean_p = re.sub(r'[^\d]', '', p)
+                    if clean_p and len(clean_p) >= 3:
+                        price_val = int(clean_p)
+                        break
+                
+                tour_code = "-"
+                for p in parts:
+                    if "SP" in p.upper() or "QIQI" in p.upper() or len(p) == 8 and p.isalnum():
+                        tour_code = p
+                        break
+                
+                dest = parts[1] if len(parts) > 1 else "精选目的地"
+                title = parts[3] if len(parts) > 3 else parts[0]
+                date_str = parts[5] if len(parts) > 5 else (parts[4] if len(parts) > 4 else "待定")
+                loc = "🇸🇬 新加坡起飞 (SIN)" if any(k in line.upper() for k in ["SIN", "新加坡", "TR"]) else "🇲🇾 马来西亚起飞 (KUL)"
+
                 items.append({
                     "agency": default_agency,
-                    "destination": parts[1] or "精选目的地",
-                    "tour_code": parts[2] or "-",
-                    "title": parts[3] or "",
-                    "departure_location": "🇸🇬 新加坡起飞 (SIN)" if "SIN" in parts[4].upper() or "新加坡" in parts[4] else "🇲🇾 马来西亚起飞 (KUL)",
-                    "departure_dates": parts[5],
-                    "price": price_val
+                    "destination": dest,
+                    "tour_code": tour_code,
+                    "title": title,
+                    "departure_location": loc,
+                    "departure_dates": date_str,
+                    "price": price_val if price_val > 0 else 2999
                 })
-            elif len(parts) >= 6:
-                price_val = int(re.sub(r'[^\d]', '', parts[5]))
-                items.append({
-                    "agency": default_agency,
-                    "destination": parts[1] or "精选目的地",
-                    "tour_code": parts[2] if len(parts) > 2 else "-",
-                    "title": parts[3] if len(parts) > 3 else "",
-                    "departure_location": "🇲🇾 马来西亚起飞 (KUL)",
-                    "departure_dates": parts[4] if len(parts) > 4 else parts[1],
-                    "price": price_val
-                })
-        except Exception:
-            continue
+            except Exception:
+                continue
     return items
 
 def call_gemini_vision(img_bytes, hint_text="", default_agency="豪吉旅游"):
@@ -150,9 +159,10 @@ def call_gemini_vision(img_bytes, hint_text="", default_agency="豪吉旅游"):
         return []
     base64_data = base64.b64encode(img_bytes).decode('utf-8')
     prompt = f"""
-    请全量提取图中的所有旅游团期。{hint_text}
-    格式要求：每一行纯文本输出，竖线 | 分隔，不要带代码块标记：
-    目的地纯地名|团号(SP开头)|行程路线全称|起飞地|出发日期|纯数字价格
+    请详细提取海报中的所有旅游团期。{hint_text}
+    请按以下格式输出每一行，字段之间用竖线 | 隔开：
+    旅行社名称|纯目的地|团号|路线名称|起飞地|出发日期|价格数字
+    例如：豪吉旅游|重庆|SP002376|7天6夜 重庆8D风暴线|新加坡起飞|31/12/26|2999
     """
     payload = {
         "contents": [{"parts": [{"text": prompt}, {"inline_data": {"mime_type": "image/jpeg", "data": base64_data}}]}],
@@ -163,7 +173,7 @@ def call_gemini_vision(img_bytes, hint_text="", default_agency="豪吉旅游"):
         res = requests.post(url, headers={"Content-Type": "application/json"}, json=payload, timeout=60)
         if res.status_code == 200:
             raw_text = res.json()["candidates"][0]["content"]["parts"][0]["text"]
-            return parse_text_robust(raw_text, default_agency=default_agency)
+            return parse_flexible_text(raw_text, default_agency=default_agency)
     except Exception:
         pass
     return []
@@ -231,7 +241,7 @@ uploaded_file = st.file_uploader("📷 上传单张海报图片（免预览，�
 
 if uploaded_file is not None:
     if st.button("🚀 立即开始分析并入库", type="primary"):
-        with st.spinner("🔍 正在采用双半区高清微距扫描中..."):
+        with st.spinner("🔍 正在智能微距扫描中..."):
             img_bytes = uploaded_file.getvalue()
             img = Image.open(BytesIO(img_bytes))
             if img.mode != 'RGB':
@@ -365,4 +375,31 @@ if st.session_state.tour_data:
     price_range = st.sidebar.slider("💰 团费预算范围 (RM)", min_value=p_min, max_value=p_max, value=(p_min, p_max), step=100)
     filtered_df = filtered_df[(filtered_df['price_numeric'] >= price_range[0]) & (filtered_df['price_numeric'] <= price_range[1])]
 
-    total_filtered
+    total_filtered_count = len(filtered_df)
+    st.markdown(f"### 符合条件的出发选项共 **{total_filtered_count}** 个：")
+    col1, col2 = st.columns(2)
+    with col1:
+        st.download_button("📊 下载 CSV 比价清单", data=filtered_df.to_csv(index=False).encode('utf-8-sig'), file_name="智能比价清单.csv", mime="text/csv", use_container_width=True)
+    with col2:
+        st.download_button("🖼️ 下载高清长图 (.png)", data=generate_comparison_image(filtered_df), file_name="智能比价长图.png", mime="image/png", use_container_width=True)
+
+    st.dataframe(filtered_df[['agency', 'destination', 'tour_code', 'departure_location', 'departure_dates', 'price_text', 'title']], use_container_width=True)
+
+    st.markdown("#### 📋 行程比对卡片")
+    for _, row in filtered_df.iterrows():
+        with st.container(border=True):
+            c1, c2, c3 = st.columns([3, 2, 2])
+            with c1:
+                st.markdown(f"### 📍 **{row['destination']}** <small style='color:gray;'>({row['agency']})</small>", unsafe_allow_html=True)
+                st.write(f"**路线：** {row['title']}")
+                st.write(f"**团号：** `{row['tour_code']}`")
+            with c2:
+                st.markdown(f"🛫 **出发地：** `{row['departure_location']}`")
+                st.write(f"📅 **出发日期：** {row['departure_dates']}")
+                h_stat = row['holiday_status']
+                if h_stat == 'exact':
+                    st.success(f"🎒 完美在校假内 ({row['holiday_name']})")
+                elif h_stat == 'slight_over':
+                    st.warning(f"⚠️ 包含校假，超 {row['over_days']} 天 (需请假)")
+            with c3:
+                st.markdown(f"### 💰 **{row['price_text']}**")
