@@ -12,8 +12,8 @@ import streamlit.components.v1 as components
 
 st.set_page_config(page_title="AI 旅游团智能筛选助手", page_icon="✈️", layout="wide")
 
-st.title("✈️ 旅游团宣传单智能分析与筛选 (三账号高可用版)")
-st.markdown("已接入 3 组 OpenRouter 独立密钥池：每日 150 次高精解析、自动故障容灾与 2026 学校假期精准核验。")
+st.title("✈️ 旅游团宣传单智能分析与筛选 (动态自适应版)")
+st.markdown("已接入 3 组 OpenRouter 密钥池：价格预算范围随实际提取结果全动态自适应、精准识别出发机场与 2026 学校假期。")
 
 # 3 个不同账号创建的 OpenRouter 密钥轮换池
 OPENROUTER_API_KEYS = [
@@ -98,9 +98,10 @@ def clean_and_parse_price(price_str):
     digits = re.findall(r'\d+', str(price_str))
     if not digits:
         return 0, str(price_str)
+    # 精准剔除电话号码与微信号，只保留真实机票团费区间（300 ~ 50,000）
     for d in digits:
         val = int(d)
-        if 400 <= val <= 50000:
+        if 300 <= val <= 50000:
             return val, f"RM {val}"
     val = int(digits[0])
     if val > 50000:
@@ -223,7 +224,6 @@ def analyze_single_image(file_bytes, file_name, task_dict):
     url = "https://openrouter.ai/api/v1/chat/completions"
     last_error = ""
 
-    # 循环遍历 3 个 Key，一个耗尽无缝切下一个
     for key_idx, key in enumerate(OPENROUTER_API_KEYS):
         api_key = key.strip()
         headers = {
@@ -377,15 +377,18 @@ if task["results"]:
         df['price_numeric'] = pd.to_numeric(df['price_numeric'], errors='coerce').fillna(0).astype(int)
         
     st.header("🔍 旅游团智能筛选面板")
-    
     st.sidebar.header("🎛️ 筛选条件")
+
+    # 1. 目的地筛选
     dest_list = ["全部"] + sorted([d for d in df['destination'].unique() if d and d != "nan"])
     selected_dest = st.sidebar.selectbox("选择目的地", dest_list)
     
+    # 2. 出发地筛选
     raw_locs = sorted([l for l in df['departure_location'].unique() if l and l != "nan"])
     loc_list = ["全部", "🇲🇾 全马来西亚出发 (包含吉隆坡/新山/槟城)"] + raw_locs
     selected_loc = st.sidebar.selectbox("选择起飞地点", loc_list)
     
+    # 3. 学校假期筛选
     holiday_options = [
         "全部日期",
         "🎒 包含学校假期 (含最多超出2天)",
@@ -393,55 +396,71 @@ if task["results"]:
         "💼 仅平时非假期出发"
     ]
     selected_hol = st.sidebar.selectbox("🗓️ 学校假期筛选", holiday_options)
-    
-    # 彻底过滤异常天价，预算区间限制在合理旅游费内
-    valid_prices = df[(df['price_numeric'] >= 400) & (df['price_numeric'] <= 50000)]['price_numeric']
-    if not valid_prices.empty:
-        min_val = int(valid_prices.min())
-        max_val = int(valid_prices.max())
-    else:
-        min_val = 1000
-        max_val = 15000
 
-    if min_val >= max_val:
-        max_val = min_val + 1000
-
-    min_val = int(min_val)
-    max_val = int(max_val)
-    price_range = st.sidebar.slider(
-        "价格预算范围 (RM)", 
-        min_value=min_val, 
-        max_value=max_val, 
-        value=(min_val, max_val),
-        step=50
-    )
-    
-    filtered_df = df.copy()
+    # 基础条件过滤（目的地、起飞地、假期）
+    base_filtered_df = df.copy()
     if selected_dest != "全部":
-        filtered_df = filtered_df[filtered_df['destination'] == selected_dest]
+        base_filtered_df = base_filtered_df[base_filtered_df['destination'] == selected_dest]
         
     if selected_loc == "🇲🇾 全马来西亚出发 (包含吉隆坡/新山/槟城)":
         malaysia_keywords = ["吉隆坡", "新山", "JB", "槟城", "柔佛", "KUL", "PEN", "JHB", "马来西亚"]
-        filtered_df = filtered_df[filtered_df['departure_location'].apply(
+        base_filtered_df = base_filtered_df[base_filtered_df['departure_location'].apply(
             lambda loc: any(kw in loc for kw in malaysia_keywords)
         )]
     elif selected_loc != "全部":
-        filtered_df = filtered_df[filtered_df['departure_location'] == selected_loc]
+        base_filtered_df = base_filtered_df[base_filtered_df['departure_location'] == selected_loc]
         
     if selected_hol == "🎒 包含学校假期 (含最多超出2天)":
-        filtered_df = filtered_df[filtered_df['holiday_status'].isin(['exact', 'slight_over'])]
+        base_filtered_df = base_filtered_df[base_filtered_df['holiday_status'].isin(['exact', 'slight_over'])]
     elif selected_hol == "✨ 严格在学校假期内 (0超出)":
-        filtered_df = filtered_df[filtered_df['holiday_status'] == 'exact']
+        base_filtered_df = base_filtered_df[base_filtered_df['holiday_status'] == 'exact']
     elif selected_hol == "💼 仅平时非假期出发":
-        filtered_df = filtered_df[filtered_df['holiday_status'] == 'none']
-        
-    filtered_df = filtered_df[
-        (filtered_df['price_numeric'] >= price_range[0]) & 
-        (filtered_df['price_numeric'] <= price_range[1])
+        base_filtered_df = base_filtered_df[base_filtered_df['holiday_status'] == 'none']
+
+    # --- 核心更新：价格范围完全根据当前已提取的数据动态自适应 ---
+    valid_prices = base_filtered_df[base_filtered_df['price_numeric'] > 0]['price_numeric']
+    
+    # 如果当前条件无有效价格，退回使用全局有效价格
+    if valid_prices.empty:
+        valid_prices = df[df['price_numeric'] > 0]['price_numeric']
+
+    if not valid_prices.empty:
+        dynamic_min = int(valid_prices.min())
+        dynamic_max = int(valid_prices.max())
+    else:
+        dynamic_min = 1000
+        dynamic_max = 5000
+
+    # 如果最低价和最高价完全相同（如只搜出了一个团），安全浮动 100 以允许滑动
+    if dynamic_min >= dynamic_max:
+        slider_min = max(dynamic_min - 100, 0)
+        slider_max = dynamic_max + 100
+        default_range = (dynamic_min, dynamic_max)
+    else:
+        slider_min = dynamic_min
+        slider_max = dynamic_max
+        default_range = (dynamic_min, dynamic_max)
+
+    # 动态滑块：key 包含当前起止值，确保换海报或换选项时滑块立刻精准重置贴合
+    slider_key = f"price_slider_{selected_dest}_{selected_loc}_{slider_min}_{slider_max}"
+    
+    price_range = st.sidebar.slider(
+        f"价格预算范围 (RM) [当前范围: {slider_min} ~ {slider_max}]", 
+        min_value=slider_min, 
+        max_value=slider_max, 
+        value=default_range,
+        step=50,
+        key=slider_key
+    )
+    
+    # 应用最终价格范围筛选
+    final_filtered_df = base_filtered_df[
+        (base_filtered_df['price_numeric'] >= price_range[0]) & 
+        (base_filtered_df['price_numeric'] <= price_range[1])
     ]
     
     st.markdown("### 📥 导出筛选结果")
-    csv_bytes = filtered_df.to_csv(index=False).encode('utf-8-sig')
+    csv_bytes = final_filtered_df.to_csv(index=False).encode('utf-8-sig')
     st.download_button(
         label="📊 下载 Excel / CSV 表格",
         data=csv_bytes,
@@ -450,12 +469,12 @@ if task["results"]:
         type="primary"
     )
         
-    st.markdown(f"### 符合条件的旅游团共 **{len(filtered_df)}** 个：")
+    st.markdown(f"### 符合条件的旅游团共 **{len(final_filtered_df)}** 个：")
     
-    display_cols = [c for c in ['destination', 'tour_code', 'departure_location', 'departure_dates', 'price_text', 'title'] if c in filtered_df.columns]
-    st.dataframe(filtered_df[display_cols], use_container_width=True)
+    display_cols = [c for c in ['destination', 'tour_code', 'departure_location', 'departure_dates', 'price_text', 'title'] if c in final_filtered_df.columns]
+    st.dataframe(final_filtered_df[display_cols], use_container_width=True)
     
-    for _, row in filtered_df.iterrows():
+    for _, row in final_filtered_df.iterrows():
         with st.container(border=True):
             c1, c2, c3 = st.columns([3, 2, 2])
             with c1:
