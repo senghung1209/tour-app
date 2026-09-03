@@ -219,23 +219,23 @@ def parse_lines_robust(raw_text, poster_type):
             continue
     return items
 
-def call_gemini_vision_debug(img_bytes, poster_type, hint=""):
+def call_gemini_vision_clean(img_bytes, poster_type, hint=""):
     if not GEMINI_API_KEY:
-        st.error("❌ 未检测到 GEMINI_API_KEY，请在 Streamlit 平台的 Secrets 中检查！")
+        st.error("❌ 未检测到 GEMINI_API_KEY，请在 Secrets 中配置！")
         return []
-        
+
     base64_data = base64.b64encode(img_bytes).decode('utf-8')
 
     if poster_type == "haoji":
         prompt = f"""
-        你是高精度视觉专家。请提取海报中的所有旅游团期信息。{hint}
-        每一行纯文本输出，必须用竖线 | 严格分隔，严禁使用代码块：
+        请提取海报中的所有旅游团期。{hint}
+        每一行纯文本输出，必须用竖线 | 严格分隔，严禁代码块：
         目的地纯地名|团号(SP开头)|路线全称|起飞地|出发日期|纯数字价格
         例如：重庆|SP002376|7天6夜 重庆8D风暴线|新加坡起飞|31/12/26|2999
         """
     else:
         prompt = """
-        你是琦琦旅游表格专家。请提取表格内第 1 项到第 23 项的全部团期。
+        请提取琦琦旅游表格内第 1 项到第 23 项全部团期。
         每一行纯文本输出，竖线 | 分隔，严禁代码块：
         序号|出发日期|天数|行程亮点|航空|纯数字团费
         例如：1|13/09/2026|6天5夜|江南+上海迪士尼|TR|2999
@@ -246,28 +246,19 @@ def call_gemini_vision_debug(img_bytes, poster_type, hint=""):
         "generationConfig": {"temperature": 0.0, "maxOutputTokens": 8192}
     }
 
-    # 优先尝试稳定模型版本，若失败则切换备用
-    candidate_models = ["gemini-2.5-flash", "gemini-1.5-flash", "gemini-3.5-flash"]
-    last_error_text = ""
+    # 严禁带有换行或空格，确保 URL 是最干净合规的标准格式
+    clean_key = GEMINI_API_KEY.strip()
+    url = f"[https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=](https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=){clean_key}".strip()
 
-    for model_name in candidate_models:
-        url = f"[https://generativelanguage.googleapis.com/v1beta/models/](https://generativelanguage.googleapis.com/v1beta/models/){model_name}:generateContent?key={GEMINI_API_KEY}"
-        try:
-            res = requests.post(url, headers={"Content-Type": "application/json"}, json=payload, timeout=45)
-            if res.status_code == 200:
-                raw_text = res.json()["candidates"][0]["content"]["parts"][0]["text"]
-                items = parse_lines_robust(raw_text, poster_type)
-                if items:
-                    return items
-                else:
-                    last_error_text = f"API 成功返回但解析行为空。模型原始回复前200字：\n{raw_text[:200]}"
-            else:
-                last_error_text = f"HTTP {res.status_code}：{res.text}"
-        except Exception as err:
-            last_error_text = f"请求异常：{str(err)}"
-
-    # 将真实报错直接输出在屏幕上
-    st.error(f"⚠️ 调试详情：{last_error_text}")
+    try:
+        res = requests.post(url, headers={"Content-Type": "application/json"}, json=payload, timeout=60)
+        if res.status_code == 200:
+            raw_text = res.json()["candidates"][0]["content"]["parts"][0]["text"]
+            return parse_lines_robust(raw_text, poster_type)
+        else:
+            st.error(f"API 返回错误 (HTTP {res.status_code}): {res.text}")
+    except Exception as err:
+        st.error(f"请求失败: {err}")
     return []
 
 @st.cache_resource
@@ -347,16 +338,16 @@ if uploaded_file is not None:
                 box_top = (0, 0, w, int(h * 0.58))
                 buf_top = BytesIO()
                 img.crop(box_top).save(buf_top, format="JPEG", quality=90)
-                r1 = call_gemini_vision_debug(buf_top.getvalue(), "haoji", "上半区：重庆、西藏、青岛、桂林、台湾、韩国")
+                r1 = call_gemini_vision_clean(buf_top.getvalue(), "haoji", "上半区：重庆、西藏、青岛、桂林、台湾、韩国")
 
                 box_bottom = (0, int(h * 0.44), w, h)
                 buf_bottom = BytesIO()
                 img.crop(box_bottom).save(buf_bottom, format="JPEG", quality=90)
-                r2 = call_gemini_vision_debug(buf_bottom.getvalue(), "haoji", "下半区：贵州、哈尔滨、北疆、九寨沟")
+                r2 = call_gemini_vision_clean(buf_bottom.getvalue(), "haoji", "下半区：贵州、哈尔滨、北疆、九寨沟")
 
                 newly_extracted = r1 + r2
             else:
-                newly_extracted = call_gemini_vision_debug(img_bytes, "qiqi")
+                newly_extracted = call_gemini_vision_clean(img_bytes, "qiqi")
 
             if newly_extracted:
                 combined = st.session_state.tour_data + newly_extracted
@@ -439,8 +430,7 @@ if st.session_state.tour_data:
     price_range = st.sidebar.slider("💰 团费预算范围 (RM)", min_value=p_min, max_value=p_max, value=(p_min, p_max), step=100)
     filtered_df = filtered_df[(filtered_df['price_numeric'] >= price_range[0]) & (filtered_df['price_numeric'] <= price_range[1])]
 
-    total_filtered_count = len(filtered_df)
-    st.markdown(f"### 符合条件的出发选项共 **{total_filtered_count}** 个：")
+    st.markdown(f"### 符合条件的出发选项共 **{len(filtered_df)}** 个：")
     col1, col2 = st.columns(2)
     with col1:
         st.download_button("📊 下载 CSV 比价清单", data=filtered_df.to_csv(index=False).encode('utf-8-sig'), file_name="智能比价清单.csv", mime="text/csv", use_container_width=True)
