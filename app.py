@@ -38,8 +38,7 @@ def get_global_task_store():
         "progress": 0.0,
         "status_msg": "",
         "results": [],
-        "errors": [],
-        "current_key_idx": 0
+        "errors": []
     }
 
 task = get_global_task_store()
@@ -95,7 +94,6 @@ def evaluate_holiday_fit(departure_date_str, duration_days):
     return 'none', 0, ""
 
 def clean_and_parse_price(price_str):
-    # 彻底杜绝长串电话号码（仅匹配 3-5 位数，且数值必须在 300 到 35000 之间）
     candidates = re.findall(r'\b\d{3,5}\b', str(price_str))
     for c in candidates:
         val = int(c)
@@ -198,7 +196,7 @@ def analyze_single_image(file_bytes, file_name, task_dict):
         "1. 价格必须是真实团费（如 RM2999），严禁将海报上的电话号码、牌照号混入价格！\n"
         "2. 严格精确区分『新加坡出发 (SIN)』还是『新山出发 (JB)』还是『吉隆坡出发 (KL)』！\n"
         "3. 同一个团号如有多个出发日期，合并在同一行用逗号分隔，不要输出任何重复行。\n"
-        "4. 只输出有效数据行，绝不输出任何多余废话或表头！"
+        "4. 只输出有效数据行，绝不输出任何多余说明或表头！"
     )
 
     models_to_try = [
@@ -209,14 +207,9 @@ def analyze_single_image(file_bytes, file_name, task_dict):
     
     url = "https://openrouter.ai/api/v1/chat/completions"
     
-    total_keys = len(OPENROUTER_API_KEYS)
-    start_key_idx = task_dict.get("current_key_idx", 0)
-    
-    # 轮询 3 个账号 Key
-    for key_offset in range(total_keys):
-        current_idx = (start_key_idx + key_offset) % total_keys
-        active_key = OPENROUTER_API_KEYS[current_idx].strip()
-        
+    # 遍历 3 个账号密钥
+    for key_idx, key in enumerate(OPENROUTER_API_KEYS):
+        active_key = key.strip()
         headers = {
             "Authorization": f"Bearer {active_key}",
             "Content-Type": "application/json",
@@ -243,7 +236,6 @@ def analyze_single_image(file_bytes, file_name, task_dict):
                 response = requests.post(url, headers=headers, json=payload, timeout=65)
                 
                 if response.status_code == 200:
-                    task_dict["current_key_idx"] = current_idx
                     content = response.json()['choices'][0]['message']['content'].strip()
                     items = parse_pipe_lines(content)
                     if items:
@@ -257,19 +249,19 @@ def analyze_single_image(file_bytes, file_name, task_dict):
                             unique_list.append(it)
                         return unique_list
                 elif response.status_code == 429:
-                    # 仅为瞬时并发超限，缓冲 2 秒继续
-                    time.sleep(2)
+                    # 频率限制：平滑等待 3 秒后尝试备选模型，绝不轻易报用完切号
+                    time.sleep(3)
                     continue
                 elif response.status_code == 402:
-                    # 真实额度耗尽，跳出模型循环，直接换下一个账号 Key
-                    task_dict["status_msg"] = f"🔄 账号 {current_idx + 1} 额度已尽，正在切换至账号 {(current_idx + 1) % total_keys + 1}..."
+                    # 仅当确认账户无额度时才切号
+                    task_dict["status_msg"] = f"🔄 账号 {key_idx + 1} 额度已用完，无缝切入账号 {key_idx + 2} ..."
                     break
                 elif response.status_code == 404:
                     continue
             except Exception:
                 continue
 
-    raise Exception("三组 API 密钥均暂时无法返回数据，请检查网络或稍后重试")
+    raise Exception("三组 API 密钥均暂时无法响应，请稍候重试")
 
 def background_worker(files_data, task_dict):
     total = len(files_data)
@@ -348,7 +340,7 @@ if uploaded_files:
             task["progress"] = 0.0
             task["results"] = []
             task["errors"] = []
-            task["status_msg"] = "正在启动多账号负载池..."
+            task["status_msg"] = "正在调用账号 1 启动多模态引擎..."
             
             files_data = [(f.name, f.getvalue()) for f in uploaded_files]
             t = threading.Thread(target=background_worker, args=(files_data, task), daemon=True)
@@ -402,7 +394,6 @@ if task["results"]:
     ]
     selected_hol = st.sidebar.selectbox("🗓️ 学校假期筛选", holiday_options)
 
-    # 预筛选联动
     base_filtered_df = df.copy()
     if selected_dest != "全部":
         base_filtered_df = base_filtered_df[base_filtered_df['destination'] == selected_dest]
@@ -422,7 +413,6 @@ if task["results"]:
     elif selected_hol == "💼 仅平时非假期出发":
         base_filtered_df = base_filtered_df[base_filtered_df['holiday_status'] == 'none']
 
-    # --- 严格价格动态范围适配 ---
     valid_prices = base_filtered_df[base_filtered_df['price_numeric'] > 0]['price_numeric']
     if valid_prices.empty:
         valid_prices = df[df['price_numeric'] > 0]['price_numeric']
