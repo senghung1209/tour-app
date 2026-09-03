@@ -14,11 +14,11 @@ import streamlit.components.v1 as components
 st.set_page_config(page_title="AI 旅游团智能筛选助手", page_icon="✈️", layout="wide")
 
 st.title("✈️ 旅游团宣传单智能分析与筛选")
-st.markdown("支持后台不中断运行、2026/2027官方学校假期精确判定与超期提醒！")
+st.markdown("高精细度全板块识别，支持精准区分出发机场、2026学校假期超期校验与后台完成提醒。")
 
 GROQ_API_KEY = "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"
 
-# 2026 官方学年日历
+# 2026 马来西亚官方教育部学年假期
 OFFICIAL_HOLIDAYS = [
     (datetime.date(2026, 3, 20), datetime.date(2026, 3, 29), "2026 第一学期假期 (3月)"),
     (datetime.date(2026, 5, 22), datetime.date(2026, 6, 7), "2026 年中假期 (5/6月)"),
@@ -28,6 +28,7 @@ OFFICIAL_HOLIDAYS = [
 ]
 
 def extract_tour_days(title_str):
+    """从标题提取天数（如 8天6夜, 8D6N -> 8）"""
     m = re.search(r'(\d+)\s*(?:天|D|d)', str(title_str))
     if m:
         try:
@@ -37,6 +38,10 @@ def extract_tour_days(title_str):
     return 1
 
 def evaluate_holiday_fit(departure_date_str, duration_days):
+    """
+    匹配 2026 官方假期：
+    返回 (状态: exact/slight_over/none, 超期天数, 假期名称)
+    """
     matches = re.findall(r'(\d{1,2})[/.-](\d{1,2})(?:[/.-](\d{2,4}))?', str(departure_date_str))
     if not matches:
         return 'none', 0, ""
@@ -59,9 +64,11 @@ def evaluate_holiday_fit(departure_date_str, duration_days):
             ret_date = dep_date + datetime.timedelta(days=max(duration_days - 1, 0))
             
             for h_start, h_end, h_name in OFFICIAL_HOLIDAYS:
+                # 完全在假期内
                 if dep_date >= h_start and ret_date <= h_end:
                     return 'exact', 0, h_name
                 
+                # 存在重叠但稍有超出
                 if not (ret_date < h_start or dep_date > h_end):
                     early_days = max((h_start - dep_date).days, 0)
                     late_days = max((ret_date - h_end).days, 0)
@@ -104,44 +111,42 @@ if "task_state" not in st.session_state:
         "errors": []
     }
 
-# 浏览器通知与多重唤醒组件
 def trigger_notification():
+    """多通道强提醒：连续振动 + 和弦音响 + 浏览器标题闪烁"""
     js = """
     <script>
     (function() {
-        // 1. 声音提示 (蜂鸣双音)
-        try {
-            var ctx = new (window.AudioContext || window.webkitAudioContext)();
-            var osc = ctx.createOscillator();
-            var gain = ctx.createGain();
-            osc.type = 'sine';
-            osc.frequency.setValueAtTime(587.33, ctx.currentTime);
-            osc.frequency.setValueAtTime(880, ctx.currentTime + 0.15);
-            gain.gain.setValueAtTime(0.3, ctx.currentTime);
-            gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.7);
-            osc.connect(gain);
-            gain.connect(ctx.destination);
-            osc.start();
-            osc.stop(ctx.currentTime + 0.7);
-        } catch(e) {}
-
-        // 2. 手机振动 (如果设备支持)
         try {
             if (navigator.vibrate) {
-                navigator.vibrate([200, 100, 200]);
+                navigator.vibrate([300, 150, 300, 150, 500]);
             }
         } catch(e) {}
 
-        // 3. 网页标题强提醒
         try {
-            parent.document.title = "【已完成!】✈️ 旅游团智能筛选";
+            var ctx = new (window.AudioContext || window.webkitAudioContext)();
+            var freqs = [523.25, 659.25, 783.99, 1046.50]; // C5, E5, G5, C6
+            freqs.forEach(function(f, i) {
+                var osc = ctx.createOscillator();
+                var gain = ctx.createGain();
+                osc.type = 'triangle';
+                osc.frequency.setValueAtTime(f, ctx.currentTime + i * 0.15);
+                gain.gain.setValueAtTime(0.35, ctx.currentTime + i * 0.15);
+                gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + i * 0.15 + 0.4);
+                osc.connect(gain);
+                gain.connect(ctx.destination);
+                osc.start(ctx.currentTime + i * 0.15);
+                osc.stop(ctx.currentTime + i * 0.15 + 0.4);
+            });
         } catch(e) {}
 
-        // 4. 系统通知弹窗
+        try {
+            parent.document.title = "【🔔 已完成分析！请查看结果】";
+        } catch(e) {}
+
         try {
             if ("Notification" in window && Notification.permission === "granted") {
-                new Notification("✈️ 旅游团分析已完成！", {
-                    body: "海报数据已全部提取完毕，快回来看结果吧！",
+                new Notification("✈️ 旅游团分析已全部完成！", {
+                    body: "海报数据已完整提取，请切回网页查看结果。",
                     icon: "https://fav.farm/✈️"
                 });
             }
@@ -151,7 +156,8 @@ def trigger_notification():
     """
     components.html(js, height=0)
 
-def compress_image(uploaded_file, max_size=750, quality=65):
+def compress_image(uploaded_file, max_size=1100, quality=80):
+    """采用 1100px 高分辨率，确保小字与出发机场角标绝对清晰"""
     img = Image.open(uploaded_file)
     if img.mode in ("RGBA", "P"):
         img = img.convert("RGB")
@@ -204,13 +210,20 @@ def analyze_single_image(file_bytes, file_name, task_dict):
     encoded_string = compress_image(BytesIO(file_bytes))
     
     prompt = (
-        "仔细扫描整张海报中的所有不同城市板块与旅游路线。"
-        "提取所有不同的旅游团，返回合法的 JSON 数组。"
-        "严格注意：\n"
-        "1. 不要局限于某一个城市，海报中若有其他不同目的地必须全部提取！\n"
-        "2. destination 只填具体目的城市/国家（例如：北京/武汉/内蒙古/沙坝/重庆/江南/张家界/韩国等）。\n"
-        "3. 同一个团如果有多个出发日期，请把日期合并写在 departure_dates（如 '08/11/26, 08/12/26'），严禁生成重复项！\n"
-        "4. 输出纯 JSON 数组，包含 destination, departure_location, tour_code, title, departure_dates, price_numeric, price_text。"
+        "你必须对这张宣传海报进行高精度、全板块的深度扫描提取，严禁偷懒遗漏！\n"
+        "海报共包含多个不同板块：【SIN-重庆】、【SIN-西藏】、【青岛】、【SIN-桂林】、【SIN-台湾】、【JB-贵州】、【SIN-韩国】、【KL-北疆】、【SIN-哈尔滨】、【SIN-九寨沟】等。\n\n"
+        "【严格提取准则】：\n"
+        "1. 每一个板块、每一个不同的行程标题必须完整提取，返回纯 JSON 数组。\n"
+        "2. 【起飞机场 departure_location 必须极其精准】：\n"
+        "   - 大标题写 SIN- 的是『新加坡出发 (SIN)』；写 KL- 的是『吉隆坡出发 (KL)』。\n"
+        "   - 特别注意【JB-贵州】板块内部必须逐格看右下角标记：\n"
+        "     * SP002809 右下角写着『新山出发』 -> 填『新山出发 (JB)』\n"
+        "     * SP002729 标有酷航 Scoot 图标，右下角写着『新加坡出发』 -> 填『新加坡出发 (SIN)』\n"
+        "     * SP002777 右下角写着『新山出发』 -> 填『新山出发 (JB)』\n"
+        "     * SP002779 标有酷航 Scoot 图标，右下角写着『新加坡出发』 -> 填『新加坡出发 (SIN)』\n"
+        "3. destination 字段：必须是具体城市名称（重庆、西藏、青岛、桂林、台湾、贵州、韩国、北疆、哈尔滨、九寨沟）。\n"
+        "4. departure_dates 字段：同一个团有多个出发日期时，合并写在一起（如 '26/10, 28/10, 30/10'），不要循环生成几十个无意义的重复条目。\n"
+        "输出 JSON 字段包含：destination, departure_location, tour_code, title, departure_dates, price_numeric, price_text。"
     )
 
     url = "https://api.groq.com/openai/v1/chat/completions"
@@ -229,7 +242,7 @@ def analyze_single_image(file_bytes, file_name, task_dict):
                 ]
             }
         ],
-        "temperature": 0.1,
+        "temperature": 0.05,
         "max_tokens": 4096,
         "reasoning_effort": "none"
     }
@@ -290,7 +303,8 @@ def analyze_single_image(file_bytes, file_name, task_dict):
                     else:
                         final_price_str = "详见海报"
 
-                    unique_key = (code_str, dest_str, p_val, date_str)
+                    # 避免 AI 发生幻觉刷屏重复
+                    unique_key = (code_str, dest_str, loc_str, p_val, date_str)
                     if code_str and unique_key in seen_keys:
                         continue
                     seen_keys.add(unique_key)
@@ -326,7 +340,7 @@ def analyze_single_image(file_bytes, file_name, task_dict):
 def background_worker(files_data, task_dict):
     total = len(files_data)
     for idx, (f_name, f_bytes) in enumerate(files_data):
-        task_dict["status_msg"] = "⚡ 后台正在解析第 " + str(idx + 1) + "/" + str(total) + " 张: " + f_name + " ..."
+        task_dict["status_msg"] = "⚡ 后台正在全板块高精度解析第 " + str(idx + 1) + "/" + str(total) + " 张: " + f_name + " ..."
         try:
             data = analyze_single_image(f_bytes, f_name, task_dict)
             if data:
@@ -342,16 +356,16 @@ def background_worker(files_data, task_dict):
             
     task_dict["running"] = False
     task_dict["finished"] = True
-    task_dict["status_msg"] = "✅ 全部图片已在后台分析完成！"
+    task_dict["status_msg"] = "✅ 全部图片已在后台高精度解析完成！"
 
-# 页面顶部常驻：点击开启浏览器系统权限（只需点一次即可允许声音和横幅）
+# 页面顶部常驻：点击开启浏览器系统权限与音频上下文唤醒
 components.html("""
-<div style="display:flex; align-items:center; justify-content:space-between; background:#f0fdf4; border:1px solid #bbf7d0; padding:10px 14px; border-radius:8px; font-family:sans-serif; margin-bottom:10px;">
-    <span style="font-size:14px; color:#166534;">🔔 开启完成声音与系统通知提示：</span>
-    <button onclick="enableNotification()" style="background:#16a34a; color:#fff; border:none; padding:6px 14px; border-radius:6px; font-weight:bold; cursor:pointer; font-size:13px;">点击授权启用</button>
+<div style="display:flex; align-items:center; justify-content:space-between; background:#f0fdf4; border:1px solid #bbf7d0; padding:10px 14px; border-radius:8px; font-family:sans-serif; margin-bottom:12px;">
+    <span style="font-size:14px; color:#166534; font-weight:600;">🔔 开启后台完成声音与振动强提醒：</span>
+    <button onclick="requestAudioAndNotify()" style="background:#16a34a; color:#fff; border:none; padding:7px 16px; border-radius:6px; font-weight:bold; cursor:pointer; font-size:13px;">点击授权启用</button>
 </div>
 <script>
-function enableNotification() {
+function requestAudioAndNotify() {
     try {
         var ctx = new (window.AudioContext || window.webkitAudioContext)();
         ctx.resume();
@@ -359,17 +373,17 @@ function enableNotification() {
     if ("Notification" in window) {
         Notification.requestPermission().then(function(perm) {
             if (perm === "granted") {
-                alert("✅ 通知权限已成功开启！任务完成后将弹窗并播放提示音。");
+                alert("✅ 提醒功能已成功激活！后台运行完毕会自动播放和弦音并振动。");
             } else {
-                alert("⚠️ 未能获得通知权限，请在浏览器地址栏左侧设置为允许通知。");
+                alert("⚠️ 请在浏览器地址栏左侧网站权限中勾选允许通知与音频。");
             }
         });
     } else {
-        alert("当前浏览器不支持系统通知，但仍会通过网页标题和声音提醒。");
+        alert("已激活网页提示音与物理振动通道！");
     }
 }
 </script>
-""", height=56)
+""", height=58)
 
 uploaded_files = st.file_uploader(
     "批量上传宣传图 (支持 JPG/PNG，可多选)", 
@@ -383,7 +397,7 @@ if uploaded_files:
     st.success("已选择 " + str(len(uploaded_files)) + " 张图片")
     
     if not task["running"]:
-        if st.button("🚀 开始后台批量分析", type="primary"):
+        if st.button("🚀 开始后台深度批量分析", type="primary"):
             task["running"] = True
             task["finished"] = False
             task["notified"] = False
@@ -410,7 +424,7 @@ elif task["finished"]:
         task["notified"] = True
 
     if task["results"]:
-        st.success("🎉 提取完成！共准确获取到 " + str(len(task['results'])) + " 条旅游团信息！")
+        st.success("🎉 深度提取完成！共准确获取到 " + str(len(task['results'])) + " 条全板块旅游团信息！")
     if task["errors"]:
         for e in task["errors"]:
             st.warning("⚠️ " + str(e))
