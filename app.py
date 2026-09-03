@@ -21,10 +21,8 @@ OFFICIAL_HOLIDAYS = [
     (datetime.date(2027, 1, 23), datetime.date(2027, 2, 16), "2027 农历新年与跨年假期")
 ]
 
-# 严格剔除可能的换行与空格
 RAW_KEY = st.secrets.get("GEMINI_API_KEY", "")
 GEMINI_API_KEY = str(RAW_KEY).strip() if RAW_KEY else ""
-# 锁定你账号中测试通过的 Flash 永久模型
 ACTIVE_MODEL = "gemini-flash-latest"
 
 def extract_tour_days(title_str):
@@ -68,7 +66,7 @@ def split_and_explode_dates(raw_agency, raw_dest, raw_code, raw_title, raw_loc, 
         clean_price = 0
 
     norm_loc = normalize_departure_location(raw_loc, raw_title)
-    date_tokens = re.findall(r'\b\d{1,2}[/.-]\d{1,2}(?:[/.-]\d{2,4})?\b', str(raw_dates_str))
+    date_tokens = re.findall(r'\b\d{1,2}[/.-]\d{1,2}(?:[/.-](\d{2,4}))?\b', str(raw_dates_str))
     if not date_tokens:
         date_tokens = [str(raw_dates_str).strip()]
 
@@ -98,12 +96,12 @@ def call_gemini_vision(image_bytes):
     if img.mode != 'RGB':
         img = img.convert('RGB')
     w, h = img.size
-    if max(w, h) > 1800:
-        scale = 1800.0 / max(w, h)
+    if max(w, h) > 1600:
+        scale = 1600.0 / max(w, h)
         img = img.resize((int(w * scale), int(h * scale)), Image.Resampling.LANCZOS)
 
     buf = BytesIO()
-    img.save(buf, format="JPEG", quality=88)
+    img.save(buf, format="JPEG", quality=80)
     base64_data = base64.b64encode(buf.getvalue()).decode('utf-8')
 
     prompt = """
@@ -153,7 +151,8 @@ def call_gemini_vision(image_bytes):
         "x-goog-api-key": GEMINI_API_KEY
     }
 
-    res = requests.post(url, headers=headers, json=payload, timeout=30)
+    # 超时放宽至 90 秒，避免长表格吐字中断
+    res = requests.post(url, headers=headers, json=payload, timeout=90)
     if res.status_code == 200:
         res_json = res.json()
         raw_text = res_json["candidates"][0]["content"]["parts"][0]["text"]
@@ -198,7 +197,6 @@ def generate_comparison_image(df):
 if "tour_data" not in st.session_state:
     st.session_state.tour_data = []
 
-# 单列结构避免手机浏览器渲染卡死
 uploaded_files = st.file_uploader("📷 上传旅行社海报图片 (支持分批多次上传，自动累加)", type=["jpg", "jpeg", "png"], accept_multiple_files=True)
 
 if uploaded_files:
@@ -210,7 +208,7 @@ if uploaded_files:
         has_error = False
 
         for idx, f in enumerate(uploaded_files):
-            status_text.text(f"⚡ 正在极速解析: {f.name} ...")
+            status_text.text(f"⚡ 正在解析长表海报: {f.name} (请稍候)...")
             try:
                 raw_items = call_gemini_vision(f.getvalue())
                 for item in raw_items:
@@ -231,7 +229,6 @@ if uploaded_files:
             progress_bar.progress((idx + 1) / len(uploaded_files))
 
         if not has_error and newly_extracted:
-            # 增量追加并智能去重
             combined = st.session_state.tour_data + newly_extracted
             seen = set()
             unique_combined = []
