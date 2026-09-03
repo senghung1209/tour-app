@@ -12,8 +12,8 @@ import streamlit.components.v1 as components
 
 st.set_page_config(page_title="AI 旅游团智能筛选助手", page_icon="✈️", layout="wide")
 
-st.title("✈️ 旅游团宣传单智能分析与筛选 (多账号高可用动态版)")
-st.markdown("已接入 3 组 OpenRouter 独立密钥池：支持额度精准故障转移、海报价格全动态自适应联动与一键重置。")
+st.title("✈️ 旅游团宣传单智能分析与筛选 (极速低延迟版)")
+st.markdown("已切换至低延迟视觉模型：秒级解析密集海报、多账号自动轮换与 2026 学校假期智能匹配。")
 
 OPENROUTER_API_KEYS = [
     "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",
@@ -154,7 +154,7 @@ def trigger_notification():
     """
     components.html(js, height=0)
 
-def compress_image(uploaded_file, max_size=1000, quality=75):
+def compress_image(uploaded_file, max_size=900, quality=70):
     img = Image.open(uploaded_file)
     if img.mode in ("RGBA", "P"):
         img = img.convert("RGB")
@@ -199,15 +199,15 @@ def analyze_single_image(file_bytes, file_name, task_dict):
         "4. 只输出有效数据行，绝不输出任何多余说明或表头！"
     )
 
+    # 优先使用低延迟快速响应模型
     models_to_try = [
-        "qwen/qwen-2.5-vl-72b-instruct",
         "meta-llama/llama-3.2-11b-vision-instruct:free",
-        "google/gemini-2.0-flash-exp:free"
+        "google/gemini-2.0-flash-exp:free",
+        "qwen/qwen-2.5-vl-72b-instruct"
     ]
     
     url = "https://openrouter.ai/api/v1/chat/completions"
     
-    # 遍历 3 个账号密钥
     for key_idx, key in enumerate(OPENROUTER_API_KEYS):
         active_key = key.strip()
         headers = {
@@ -233,7 +233,8 @@ def analyze_single_image(file_bytes, file_name, task_dict):
             }
             
             try:
-                response = requests.post(url, headers=headers, json=payload, timeout=65)
+                # 设定 25 秒超时，避免排队死等
+                response = requests.post(url, headers=headers, json=payload, timeout=25)
                 
                 if response.status_code == 200:
                     content = response.json()['choices'][0]['message']['content'].strip()
@@ -249,24 +250,23 @@ def analyze_single_image(file_bytes, file_name, task_dict):
                             unique_list.append(it)
                         return unique_list
                 elif response.status_code == 429:
-                    # 频率限制：平滑等待 3 秒后尝试备选模型，绝不轻易报用完切号
-                    time.sleep(3)
+                    time.sleep(1)
                     continue
                 elif response.status_code == 402:
-                    # 仅当确认账户无额度时才切号
-                    task_dict["status_msg"] = f"🔄 账号 {key_idx + 1} 额度已用完，无缝切入账号 {key_idx + 2} ..."
+                    task_dict["status_msg"] = f"🔄 账号 {key_idx + 1} 额度已用尽，切换至账号 {key_idx + 2} ..."
                     break
-                elif response.status_code == 404:
-                    continue
+            except requests.exceptions.Timeout:
+                # 当前模型排队超时，直接试下一个模型
+                continue
             except Exception:
                 continue
 
-    raise Exception("三组 API 密钥均暂时无法响应，请稍候重试")
+    raise Exception("多组模型通道目前排队较满，请稍候点击重试")
 
 def background_worker(files_data, task_dict):
     total = len(files_data)
     for idx, (f_name, f_bytes) in enumerate(files_data):
-        task_dict["status_msg"] = f"⚡ 正在深度解析第 {idx + 1}/{total} 张: {f_name} ..."
+        task_dict["status_msg"] = f"⚡ 正在极速分析第 {idx + 1}/{total} 张: {f_name} ..."
         try:
             data = analyze_single_image(f_bytes, f_name, task_dict)
             if data:
@@ -277,11 +277,11 @@ def background_worker(files_data, task_dict):
             task_dict["errors"].append(f"{f_name}: {str(err)}")
             
         task_dict["progress"] = (idx + 1) / total
-        time.sleep(0.5)
+        time.sleep(0.3)
             
     task_dict["running"] = False
     task_dict["finished"] = True
-    task_dict["status_msg"] = "✅ 全部海报已解析完成！"
+    task_dict["status_msg"] = "✅ 分析完成！"
 
 components.html("""
 <div style="display:flex; align-items:center; justify-content:space-between; background:#f0fdf4; border:1px solid #bbf7d0; padding:10px 14px; border-radius:8px; font-family:sans-serif; margin-bottom:12px;">
@@ -340,7 +340,7 @@ if uploaded_files:
             task["progress"] = 0.0
             task["results"] = []
             task["errors"] = []
-            task["status_msg"] = "正在调用账号 1 启动多模态引擎..."
+            task["status_msg"] = "正在启动极速视觉多模态引擎..."
             
             files_data = [(f.name, f.getvalue()) for f in uploaded_files]
             t = threading.Thread(target=background_worker, args=(files_data, task), daemon=True)
