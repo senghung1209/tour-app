@@ -67,7 +67,7 @@ def get_loud_wav_base64():
 
 LOUD_WAV_B64 = get_loud_wav_base64()
 
-# 纯原生即时触摸播放与手机震动卡片（杜绝 f-string 大括号语法冲突）
+# 纯原生即时触摸播放与手机震动卡片（非 f-string 避免语法解析冲突）
 native_audio_html = """
 <div style="background: #eff6ff; border: 1.5px solid #3b82f6; border-radius: 8px; padding: 12px; margin-bottom: 15px;">
     <div style="font-weight: bold; font-size: 14px; color: #1e40af; margin-bottom: 5px;">
@@ -91,7 +91,7 @@ native_audio_html = """
 document.getElementById('direct_play_btn').addEventListener('click', function(e) {
     e.preventDefault();
     
-    // 1. 物理震动（连续震动3下）
+    // 1. 物理震动
     if ("vibrate" in navigator) {
         navigator.vibrate([250, 100, 250, 100, 400]);
     }
@@ -283,7 +283,9 @@ def call_gemini_vision_chunk(img_chunk, chunk_name, status_box, hint_text="", de
 
     特别注意：
     1. 【旅行社名称统一】：如果是琦琦旅游表格海报，每一行第1个字段一律填“琦琦旅游”；如果是豪吉拼贴海报，一律填“豪吉旅游”。绝不能留空！
-    2. 【逗号并列日期彻底拆分】：若写有并列日期（如 01/11, 19/11 对应 2999；05/11, 26/11, 29/12 对应 3099；23/10, 06/11 对应 4999；18/12 对应 5199），每一个逗号隔开的日期都必须拆分成单独一行！
+    2. 【多价格与逗号并列日期彻底拆分】：
+       - 若同一个框内有两排不同价格（如 SP002332 上方 08/11/26 卖 RM3299，下方 06/12/26 卖 RM3599），必须两组全部提取，拆成两行！
+       - 若写有并列逗号日期（如 SP002374 的 01/11, 19/11 以及 05/11, 26/11, 29/12；SP002413 的 23/10, 06/11 卖 4999 与 18/12 卖 5199），每一个日期都必须拆分成单独的一行！
     3. 起飞地点：含 SIN/新加坡/酷航/TR 填“新加坡起飞 (SIN)”；含 JB/新山 填“新山出发 (JB)”；默认填“马来西亚起飞 (KUL)”。
     4. 纯文本逐行输出，以竖线 | 分隔，严禁代码块标记与解释：
     旅行社|目的地|团号|行程路线全称|起飞地|出发日期|纯数字价格
@@ -420,13 +422,15 @@ if uploaded_files:
                 box_top = (0, 0, w, int(h * 0.58))
                 box_bottom = (0, int(h * 0.44), w, h)
 
-                status_box.markdown(f"**[{f_idx+1}/{total_files}]** 🔍 正在扫描上半区...")
+                status_box.markdown(f"**[{f_idx+1}/{total_files}]** 🔍 正在扫描上半区 (重庆 / 西藏 / 青岛 / 桂林 / 台湾 / 韩国)...")
                 progress_bar.progress(0.25)
-                r1 = call_gemini_vision_chunk(img.crop(box_top), "上半区", status_box, "重庆、西藏、青岛、桂林、台湾、韩国", default_agency="豪吉旅游")
+                hint_top = "必须提取SIN-重庆全部12条(注意SP002332包含08/11与06/12两档价格; SP002374包含01/11,19/11,05/11,26/11,29/12全部5个日期)、SIN-西藏全部5条(含SP002413的18/12)、青岛3条、SIN-桂林3条、SIN-台湾6条、SIN-韩国4条"
+                r1 = call_gemini_vision_chunk(img.crop(box_top), "上半区", status_box, hint_top, default_agency="豪吉旅游")
 
-                status_box.markdown(f"**[{f_idx+1}/{total_files}]** 🔍 正在扫描下半区...")
+                status_box.markdown(f"**[{f_idx+1}/{total_files}]** 🔍 正在扫描下半区 (贵州 / 哈尔滨 / 北疆 / 九寨沟)...")
                 progress_bar.progress(0.70)
-                r2 = call_gemini_vision_chunk(img.crop(box_bottom), "下半区", status_box, "贵州全部、哈尔滨全部、北疆全部、九寨沟全部", default_agency="豪吉旅游")
+                hint_bottom = "必须提取：JB-贵州全部13条日期、SIN-哈尔滨全部9条、KL-北疆全部4条、SIN-九寨沟全部2条"
+                r2 = call_gemini_vision_chunk(img.crop(box_bottom), "下半区", status_box, hint_bottom, default_agency="豪吉旅游")
 
                 raw_items = r1 + r2
             else:
