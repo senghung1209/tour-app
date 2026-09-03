@@ -41,7 +41,6 @@ if "tour_data" not in st.session_state:
 
 st.title("✈️ 跨旅行社海报聚合与横向对比中心")
 
-# 铃声与通知组件
 @st.cache_resource
 def get_loud_wav_base64():
     sample_rate = 22050
@@ -121,7 +120,6 @@ def parse_text_robust(raw_text):
         parts = [p.strip() for p in line.split("|")]
         if len(parts) >= 6:
             try:
-                # 判断是豪吉还是琦琦格式
                 if "SP" in parts[2].upper() or "豪吉" in parts[0] or len(parts) >= 7:
                     price_val = int(re.sub(r'[^\d]', '', parts[6] if len(parts) > 6 else parts[5]))
                     items.append({
@@ -173,8 +171,7 @@ def call_gemini_vision(img_bytes):
         pass
     return []
 
-# 文件上传组件
-uploaded_file = st.file_uploader("📷 上传单张海报图片（推荐单张上传以保证秒级响应）", type=["jpg", "jpeg", "png"])
+uploaded_file = st.file_uploader("📷 上传单张海报图片", type=["jpg", "jpeg", "png"])
 
 if uploaded_file is not None:
     st.image(uploaded_file, caption="已上传海报预览", width=300)
@@ -185,3 +182,8 @@ if uploaded_file is not None:
             
             newly_extracted = []
             for item in raw_items:
+                days = extract_tour_days(item.get("title", ""))
+                d_token = item.get("departure_dates", "")
+                status, over_days, hol_name = evaluate_holiday_fit(d_token, days)
+                newly_extracted.append({
+                    "agency
