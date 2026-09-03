@@ -12,12 +12,11 @@ import streamlit.components.v1 as components
 
 st.set_page_config(page_title="AI 旅游团智能筛选助手", page_icon="✈️", layout="wide")
 
-st.title("✈️ 旅游团宣传单智能分析与筛选 (Gemini 官方极速版)")
-st.markdown("已按官方 cURL 接入 Google 原生专线：秒级并发解析、告别排队限流、精准识别各省板块与 2026 学校假期。")
+st.title("✈️ 旅游团宣传单智能分析与筛选 (OpenRouter 极速高精版)")
+st.markdown("搭载前沿视觉多模态引擎：零企业认证墙、秒级多图解析、精准区分出发机场与 2026 学校假期。")
 
-# 你的官方专属 AQ. 密钥
-DEFAULT_GEMINI_KEY = "AQ.Ab8RN6JktT71UH7ZHw6ieP1-Q9EouOO58rnMEBOA7n-hmbHXDA"
-GEMINI_API_KEY = st.secrets.get("GEMINI_API_KEY", DEFAULT_GEMINI_KEY)
+# 已配置你的 OpenRouter 专属密钥
+OPENROUTER_API_KEY = "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"
 
 OFFICIAL_HOLIDAYS = [
     (datetime.date(2026, 3, 20), datetime.date(2026, 3, 29), "2026 第一学期假期 (3月)"),
@@ -151,7 +150,7 @@ def trigger_notification():
     """
     components.html(js, height=0)
 
-def compress_image(uploaded_file, max_size=1100, quality=78):
+def compress_image(uploaded_file, max_size=1000, quality=75):
     img = Image.open(uploaded_file)
     if img.mode in ("RGBA", "P"):
         img = img.convert("RGB")
@@ -199,37 +198,34 @@ def analyze_single_image(file_bytes, file_name, api_key):
         "【关键要求】：\n"
         "1. 仔细观察卡片右下角小字与航空标示，严格精确区分『新加坡出发 (SIN)』还是『新山出发 (JB)』还是『吉隆坡出发 (KL)』！\n"
         "2. 同一个团号如有多个出发日期，合并在同一行用逗号分隔，不要输出任何重复行。\n"
-        "3. 只输出有效数据行，不要输出 Markdown 表头或多余文字。"
+        "3. 只输出有效数据行，绝不输出任何多余废话或表头！"
     )
 
-    # 严格按照官方 cURL 端点与 Header 规范
-    url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent"
+    url = "https://openrouter.ai/api/v1/chat/completions"
     headers = {
-        "Content-Type": "application/json",
-        "X-goog-api-key": api_key.strip()
+        "Authorization": f"Bearer {api_key.strip()}",
+        "Content-Type": "application/json"
     }
     payload = {
-        "contents": [
+        "model": "qwen/qwen-2.5-vl-72b-instruct:free",
+        "messages": [
             {
-                "parts": [
-                    {"text": prompt},
-                    {
-                        "inline_data": {
-                            "mime_type": "image/jpeg",
-                            "data": encoded_string
-                        }
-                    }
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": prompt},
+                    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{encoded_string}"}}
                 ]
             }
-        ]
+        ],
+        "temperature": 0.1
     }
     
-    response = requests.post(url, headers=headers, json=payload, timeout=60)
+    response = requests.post(url, headers=headers, json=payload, timeout=90)
     
     if response.status_code == 200:
         res_json = response.json()
         try:
-            content = res_json['candidates'][0]['content']['parts'][0]['text'].strip()
+            content = res_json['choices'][0]['message']['content'].strip()
             items = parse_pipe_lines(content)
             if items:
                 unique_list = []
@@ -243,19 +239,19 @@ def analyze_single_image(file_bytes, file_name, api_key):
                 return unique_list
         except Exception:
             pass
-        raise Exception("未能成功解析出旅游团数据行")
+        raise Exception("未能成功解析出有效旅游团行")
     else:
         err_msg = response.text
         try:
             err_msg = response.json().get("error", {}).get("message", response.text)
         except Exception:
             pass
-        raise Exception(f"Google 认证报错 ({response.status_code}): {err_msg}")
+        raise Exception(f"接口报错 ({response.status_code}): {err_msg}")
 
 def background_worker(files_data, task_dict, api_key):
     total = len(files_data)
     for idx, (f_name, f_bytes) in enumerate(files_data):
-        task_dict["status_msg"] = f"⚡ Gemini 正在秒速全板块解析第 {idx + 1}/{total} 张: {f_name} ..."
+        task_dict["status_msg"] = f"⚡ 正在极速全板块解析第 {idx + 1}/{total} 张: {f_name} ..."
         try:
             data = analyze_single_image(f_bytes, f_name, api_key)
             if data:
@@ -266,11 +262,11 @@ def background_worker(files_data, task_dict, api_key):
             task_dict["errors"].append(f"{f_name}: {str(err)}")
             
         task_dict["progress"] = (idx + 1) / total
-        time.sleep(0.3)
+        time.sleep(1.0)
             
     task_dict["running"] = False
     task_dict["finished"] = True
-    task_dict["status_msg"] = "✅ 全部图片已在后台极速解析完成！"
+    task_dict["status_msg"] = "✅ 全部海报已解析完成！"
 
 components.html("""
 <div style="display:flex; align-items:center; justify-content:space-between; background:#f0fdf4; border:1px solid #bbf7d0; padding:10px 14px; border-radius:8px; font-family:sans-serif; margin-bottom:12px;">
@@ -315,17 +311,17 @@ if uploaded_files:
             task["progress"] = 0.0
             task["results"] = []
             task["errors"] = []
-            task["status_msg"] = "正在启动 Google 极速引擎..."
+            task["status_msg"] = "正在启动极速视觉多模态引擎..."
             
             files_data = [(f.name, f.getvalue()) for f in uploaded_files]
-            t = threading.Thread(target=background_worker, args=(files_data, task, GEMINI_API_KEY), daemon=True)
+            t = threading.Thread(target=background_worker, args=(files_data, task, OPENROUTER_API_KEY), daemon=True)
             t.start()
             st.rerun()
 
 if task["running"]:
     st.info(task["status_msg"])
     st.progress(task["progress"])
-    st.caption("💡 任务已在服务器持久后台运行，切出应用或息屏不会中断。")
+    st.caption("💡 任务已在服务器后台运行，切出应用或锁屏不会中断。")
     time.sleep(2)
     st.rerun()
 
@@ -335,7 +331,7 @@ elif task["finished"]:
         task["notified"] = True
 
     if task["results"]:
-        st.success(f"🎉 极速提取完成！共准确获取到 {len(task['results'])} 条全板块旅游团信息！")
+        st.success(f"🎉 提取完成！共准确获取到 {len(task['results'])} 条全板块旅游团信息！")
     if task["errors"]:
         for e in task["errors"]:
             st.warning(f"⚠️ {e}")
