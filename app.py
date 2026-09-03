@@ -13,7 +13,7 @@ import streamlit.components.v1 as components
 st.set_page_config(page_title="AI 旅游团智能筛选助手", page_icon="✈️", layout="wide")
 
 st.title("✈️ 旅游团宣传单智能分析与筛选 (多模态高精稳健版)")
-st.markdown("已升级为高精 OpenAI 兼容视觉解析引擎：确保海报全网点、团号、日期与价格 100% 准确抓取。")
+st.markdown("已接入高精 OpenAI 兼容视觉解析引擎：确保海报全网点、团号、日期与价格 100% 准确抓取。")
 
 GROQ_API_KEY = "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"
 
@@ -175,7 +175,6 @@ def parse_flexible_content(content):
         if not line:
             continue
         
-        # 兼容多种分隔符
         if "|" in line:
             parts = [p.strip() for p in line.split("|")]
         elif "\t" in line:
@@ -209,9 +208,9 @@ def analyze_single_image(file_bytes, file_name, task_dict):
         "Content-Type": "application/json"
     }
 
-    # 启用当前最稳定的高性能视觉模型
+    # 使用 Groq 官方标准的视觉模型名称（移除了不支持的组织前缀）
     payload = {
-        "model": "meta-llama/llama-3.2-11b-vision-instruct",
+        "model": "llama-3.2-11b-vision-preview",
         "messages": [
             {
                 "role": "user",
