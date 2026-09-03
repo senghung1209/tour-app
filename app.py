@@ -10,7 +10,7 @@ import math
 import struct
 import requests
 from io import BytesIO
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image
 import streamlit.components.v1 as components
 
 st.set_page_config(page_title="跨社旅游团比价筛选中心", page_icon="✈️", layout="wide")
@@ -173,49 +173,4 @@ def call_gemini_vision_text(img_bytes, hint_text="", default_agency="豪吉旅�
         pass
     return []
 
-@st.cache_resource
-def get_chinese_font(font_size=15):
-    font_paths = [
-        "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
-        "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
-        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
-        "wqy-microhei.ttc"
-    ]
-    for p in font_paths:
-        if os.path.exists(p):
-            try:
-                return ImageFont.truetype(p, font_size)
-            except Exception:
-                pass
-    return ImageFont.load_default()
-
-def generate_comparison_image(df):
-    w = 1020
-    rh = 42
-    hh = 75
-    h = hh + (len(df) + 1) * rh + 35
-    img = Image.new("RGB", (w, max(h, 220)), color=(255, 255, 255))
-    draw = ImageDraw.Draw(img)
-
-    f_head = get_chinese_font(20)
-    f_col = get_chinese_font(15)
-    f_body = get_chinese_font(14)
-    f_price = get_chinese_font(15)
-
-    draw.rectangle([0, 0, w, hh], fill=(30, 41, 59))
-    draw.text((30, 24), f"跨旅行社旅游团比价清单 (精选有效团期 {len(df)} 项)", fill=(255, 255, 255), font=f_head)
-
-    y = hh + 10
-    draw.rectangle([20, y, w - 20, y + 34], fill=(241, 245, 249))
-    cols = [("旅行社", 35), ("目的地", 160), ("团号", 250), ("起飞地", 360), ("出发日期", 500), ("团费价格", 620), ("行程路线", 740)]
-    for name, x in cols:
-        draw.text((x, y + 7), name, fill=(71, 85, 105), font=f_col)
-
-    y += 40
-    for idx, r in df.iterrows():
-        bg = (248, 250, 252) if idx % 2 == 0 else (255, 255, 255)
-        draw.rectangle([20, y, w - 20, y + rh - 2], fill=bg)
-
-        draw.text((35, y + 10), str(r['agency'])[:8], fill=(71, 85, 105), font=f_body)
-        draw.text((160, y + 10), str(r['destination'])[:6], fill=(15, 23, 42), font=f_body)
-        draw.text((250, y + 10), str(r['tour_code'])[:10], fill=(100, 116, 139), font=
+uploaded_file = st.file_uploader("📷 上传单
