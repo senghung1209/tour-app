@@ -11,8 +11,7 @@ from PIL import Image, ImageDraw, ImageFont
 
 st.set_page_config(page_title="跨社旅游团比价筛选中心", page_icon="✈️", layout="wide")
 
-st.title("✈️ 跨旅行社海报聚合与横向对比中心 (Gemini 官方极速累加版)")
-st.markdown("已开启**分批增量累加**：可随时分次上传新海报，历史比价数据永久保留不覆盖。")
+st.title("✈️ 跨旅行社海报聚合与横向对比中心 (模型自选与自检版)")
 
 OFFICIAL_HOLIDAYS = [
     (datetime.date(2026, 3, 20), datetime.date(2026, 3, 29), "2026 第一学期假期 (3月)"),
@@ -23,6 +22,51 @@ OFFICIAL_HOLIDAYS = [
 ]
 
 GEMINI_API_KEY = st.secrets.get("GEMINI_API_KEY", "")
+
+# ----------------- 自动探测与显示用户 Key 下的可用模型 -----------------
+def fetch_account_available_models():
+    if not GEMINI_API_KEY:
+        return []
+    url = f"https://generativelanguage.googleapis.com/v1beta/models?key={GEMINI_API_KEY}"
+    headers = {"x-goog-api-key": GEMINI_API_KEY}
+    found = []
+    try:
+        r = requests.get(url, headers=headers, timeout=10)
+        if r.status_code == 200:
+            for item in r.json().get("models", []):
+                methods = item.get("supportedGenerationMethods", [])
+                if "generateContent" in methods:
+                    # 剥离前缀，只保留模型标识
+                    m_id = item.get("name", "").replace("models/", "")
+                    found.append(m_id)
+    except Exception:
+        pass
+    return found
+
+# 探测并缓存模型
+if "active_model" not in st.session_state:
+    all_avail = fetch_account_available_models()
+    if all_avail:
+        # 优先匹配带有 flash 的快速视觉模型，若无则取第一个
+        flash_candidates = [m for m in all_avail if "flash" in m.lower()]
+        st.session_state.active_model = flash_candidates[0] if flash_candidates else all_avail[0]
+        st.session_state.all_models = all_avail
+    else:
+        # 官方通用动态别名作为备用
+        st.session_state.active_model = "gemini-flash-latest"
+        st.session_state.all_models = ["gemini-flash-latest"]
+
+# 直接在页面顶部清晰展示当前生效的模型
+col_info1, col_info2 = st.columns([3, 2])
+with col_info1:
+    st.info(f"🤖 **当前生效模型**：`{st.session_state.active_model}` （已通过 Google 鉴权）")
+with col_info2:
+    if len(st.session_state.all_models) > 1:
+        # 允许自由切换已开通的模型
+        chosen = st.selectbox("切换备用模型", st.session_state.all_models, index=st.session_state.all_models.index(st.session_state.active_model))
+        if chosen != st.session_state.active_model:
+            st.session_state.active_model = chosen
+            st.rerun()
 
 def extract_tour_days(title_str):
     m = re.search(r'(\d+)\s*(?:天|D|d)', str(title_str))
@@ -88,29 +132,29 @@ def split_and_explode_dates(raw_agency, raw_dest, raw_code, raw_title, raw_loc, 
         })
     return exploded
 
-def call_gemini_fast_vision(image_bytes):
+def call_gemini_vision_selected(image_bytes, model_name):
     if not GEMINI_API_KEY:
         raise ValueError("未检测到 GEMINI_API_KEY，请在 Streamlit 后台 Secrets 中配置")
 
-    # 规范化轻量压缩至 1400px，兼顾辨识度与传输速度
+    # 轻量压缩加快传输
     img = Image.open(BytesIO(image_bytes))
     if img.mode != 'RGB':
         img = img.convert('RGB')
     w, h = img.size
-    if max(w, h) > 1400:
-        scale = 1400.0 / max(w, h)
+    if max(w, h) > 1600:
+        scale = 1600.0 / max(w, h)
         img = img.resize((int(w * scale), int(h * scale)), Image.Resampling.LANCZOS)
 
     buf = BytesIO()
-    img.save(buf, format="JPEG", quality=82)
+    img.save(buf, format="JPEG", quality=85)
     base64_data = base64.b64encode(buf.getvalue()).decode('utf-8')
 
     prompt = """
-    你是一个专业的高精度旅游海报表格提取引擎。请逐行完整阅读海报表格中的每一个行程，不要漏掉任何一行！
+    你是一个专业的高精度旅游海报表格提取引擎。请逐行完整阅读海报表格中的每一个行程，提取所有行，绝不漏掉任何一行！
     规则：
-    1. 逐行提取，包括所有出发日；
-    2. 若写有“新加坡起飞”或属于 TR 航司，departure_location 填写“新加坡起飞 (SIN)”，否则填写“马来西亚起飞 (KUL)”；
-    3. 只输出纯 JSON 列表，严禁 Markdown 标记：
+    1. 逐行提取所有路线和团期；
+    2. 如果写有“新加坡起飞”或属于 TR 航司，departure_location 填写“新加坡起飞 (SIN)”，否则填写“马来西亚起飞 (KUL)”；
+    3. 只输出纯 JSON 数组，不要包含任何 markdown 语法或额外解释：
     [
       {
         "agency": "旅行社名称",
@@ -150,9 +194,8 @@ def call_gemini_fast_vision(image_bytes):
         "x-goog-api-key": GEMINI_API_KEY
     }
 
-    # 直接定位当前最快的官方通道，规避轮询造成的耗时
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={GEMINI_API_KEY}"
-    res = requests.post(url, headers=headers, json=payload, timeout=25)
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={GEMINI_API_KEY}"
+    res = requests.post(url, headers=headers, json=payload, timeout=40)
     
     if res.status_code == 200:
         res_json = res.json()
@@ -162,7 +205,7 @@ def call_gemini_fast_vision(image_bytes):
             return json.loads(clean_json.group(0))
         return json.loads(raw_text)
     else:
-        raise RuntimeError(f"API 响应错误 (HTTP {res.status_code}): {res.text[:120]}")
+        raise RuntimeError(f"调用模型 [{model_name}] 失败 (HTTP {res.status_code}): {res.text[:150]}")
 
 def generate_comparison_image(df):
     w, rh, hh = 850, 40, 70
@@ -200,7 +243,7 @@ if "tour_data" not in st.session_state:
 
 c_up, c_rst = st.columns([4, 1])
 with c_up:
-    uploaded_files = st.file_uploader("📷 上传新海报 (支持分批多次上传，历史数据自动累加)", type=["jpg", "jpeg", "png"], accept_multiple_files=True)
+    uploaded_files = st.file_uploader("📷 上传新海报 (支持分批累加上传)", type=["jpg", "jpeg", "png"], accept_multiple_files=True)
 with c_rst:
     st.write("")
     st.write("")
@@ -217,9 +260,9 @@ if uploaded_files:
         has_error = False
 
         for idx, f in enumerate(uploaded_files):
-            status_text.text(f"⚡ 正在由 Gemini 极速提取: {f.name} ...")
+            status_text.text(f"⚡ 正在由 [{st.session_state.active_model}] 提取: {f.name} ...")
             try:
-                raw_items = call_gemini_fast_vision(f.getvalue())
+                raw_items = call_gemini_vision_selected(f.getvalue(), st.session_state.active_model)
                 for item in raw_items:
                     rows = split_and_explode_dates(
                         item.get("agency", "精选旅行社"),
@@ -238,7 +281,6 @@ if uploaded_files:
             progress_bar.progress((idx + 1) / len(uploaded_files))
 
         if not has_error and newly_extracted:
-            # 关键：追加累加机制，并将完全重复的记录去重
             combined = st.session_state.tour_data + newly_extracted
             seen = set()
             unique_combined = []
@@ -264,7 +306,6 @@ if st.session_state.tour_data:
             st.rerun()
 
     st.sidebar.header("🎛️ 筛选条件")
-    
     clean_agencies = sorted(list({str(a) for a in df['agency'] if pd.notna(a) and str(a).strip()}))
     selected_agency = st.sidebar.selectbox("选择旅行社", ["全部"] + clean_agencies)
 
