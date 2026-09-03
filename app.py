@@ -11,8 +11,8 @@ from PIL import Image, ImageDraw, ImageFont
 
 st.set_page_config(page_title="跨社旅游团比价筛选中心", page_icon="✈️", layout="wide")
 
-st.title("✈️ 跨旅行社海报聚合与横向对比中心 (Gemini 官方直连版)")
-st.markdown("已接入 Google 官方多模态视觉通道，支持识别任意全新排版海报并自动秒级拆解团期。")
+st.title("✈️ 跨旅行社海报聚合与横向对比中心 (Gemini 官方极速版)")
+st.markdown("已接入 Google 官方新一代视觉通道，支持识别任意全新排版海报并自动秒级拆解团期。")
 
 OFFICIAL_HOLIDAYS = [
     (datetime.date(2026, 3, 20), datetime.date(2026, 3, 29), "2026 第一学期假期 (3月)"),
@@ -23,7 +23,14 @@ OFFICIAL_HOLIDAYS = [
 ]
 
 GEMINI_API_KEY = st.secrets.get("GEMINI_API_KEY", "")
-GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent"
+
+# 适配新版 API 的官方活跃多模态模型候选池
+CANDIDATE_MODELS = [
+    "gemini-2.5-flash",
+    "gemini-2.0-flash",
+    "gemini-2.0-flash-lite",
+    "gemini-2.5-pro"
+]
 
 def extract_tour_days(title_str):
     m = re.search(r'(\d+)\s*(?:天|D|d)', str(title_str))
@@ -85,7 +92,7 @@ def call_gemini_official_vision(image_bytes):
     if not GEMINI_API_KEY:
         raise ValueError("未检测到 GEMINI_API_KEY，请在 Streamlit 后台 Secrets 中配置")
 
-    # 规范化压缩：控制图片尺寸与体积，加速传输
+    # 规范化压缩：控制图片尺寸加速上传
     img = Image.open(BytesIO(image_bytes))
     if img.mode != 'RGB':
         img = img.convert('RGB')
@@ -140,18 +147,26 @@ def call_gemini_official_vision(image_bytes):
         "Content-Type": "application/json",
         "x-goog-api-key": GEMINI_API_KEY
     }
-    url_with_key = f"{GEMINI_URL}?key={GEMINI_API_KEY}"
 
-    res = requests.post(url_with_key, headers=headers, json=payload, timeout=60)
-    if res.status_code == 200:
-        res_json = res.json()
-        raw_text = res_json["candidates"][0]["content"]["parts"][0]["text"]
-        clean_json = re.search(r'\[.*\]', raw_text, re.DOTALL)
-        if clean_json:
-            return json.loads(clean_json.group(0))
-        return json.loads(raw_text)
-    else:
-        raise RuntimeError(f"Google 官方 API 错误 (状态码 {res.status_code}): {res.text}")
+    last_error = ""
+    # 逐个尝试官方可用模型
+    for model_name in CANDIDATE_MODELS:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={GEMINI_API_KEY}"
+        try:
+            res = requests.post(url, headers=headers, json=payload, timeout=60)
+            if res.status_code == 200:
+                res_json = res.json()
+                raw_text = res_json["candidates"][0]["content"]["parts"][0]["text"]
+                clean_json = re.search(r'\[.*\]', raw_text, re.DOTALL)
+                if clean_json:
+                    return json.loads(clean_json.group(0))
+                return json.loads(raw_text)
+            else:
+                last_error = f"{model_name} HTTP {res.status_code}: {res.text[:140]}"
+        except Exception as ex:
+            last_error = f"{model_name} 请求异常: {str(ex)}"
+
+    raise RuntimeError(f"Google 官方 API 调用未成功，错误排查: {last_error}")
 
 def generate_comparison_image(df):
     w, rh, hh = 850, 40, 70
