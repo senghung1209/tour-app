@@ -39,7 +39,6 @@ def save_persisted_data(data):
 if "tour_data" not in st.session_state:
     st.session_state.tour_data = load_persisted_data()
 
-# 记录上一次处理的文件名，防止重复触发
 if "last_processed_file" not in st.session_state:
     st.session_state.last_processed_file = None
 
@@ -115,59 +114,41 @@ def evaluate_holiday_fit(departure_date_str, duration_days):
         pass
     return 'none', 0, ""
 
-def parse_bulletproof(raw_text, default_agency="豪吉旅游"):
-    items = []
-    lines = raw_text.strip().splitlines()
-    for line in lines:
-        line = line.strip().replace("```", "").replace("`", "")
-        if not line or len(line) < 4:
-            continue
-        code_match = re.search(r'(SP\d+|QIQI-\d+)', line, re.IGNORECASE)
-        tour_code = code_match.group(1).upper() if code_match else "-"
-        
-        price_match = re.search(r'(?:RM)?\s*(\d{3,5})', line, re.IGNORECASE)
-        price_val = int(price_match.group(1)) if price_match else 2999
-        if price_val < 500:
-            price_val = 2999
-
-        date_match = re.search(r'\b\d{1,2}[/.-]\d{1,2}(?:[/.-]\d{2,4})?\b', line)
-        date_str = date_match.group(0) if date_match else "31/12/2026"
-
-        dest = "精选目的地"
-        for k in ["重庆", "西藏", "青岛", "桂林", "台湾", "韩国", "贵州", "哈尔滨", "北疆", "九寨沟", "江南", "张家界", "云南", "广州", "北京", "南疆", "厦门", "青甘"]:
-            if k in line:
-                dest = k
-                break
-
-        loc = "🇸🇬 新加坡起飞 (SIN)" if any(c in line.upper() for c in ["SIN", "新加坡", "TR"]) else "🇲🇾 马来西亚起飞 (KUL)"
-        
-        items.append({
-            "agency": default_agency,
-            "destination": dest,
-            "tour_code": tour_code,
-            "title": line[:40],
-            "departure_location": loc,
-            "departure_dates": date_str,
-            "price": price_val
-        })
-    return items
-
-def call_gemini_vision(img_bytes, hint_text="", default_agency="豪吉旅游"):
+def call_gemini_vision_json(img_bytes, default_agency="豪吉旅游"):
     if not GEMINI_API_KEY:
         return []
     base64_data = base64.b64encode(img_bytes).decode('utf-8')
-    prompt = f"请识别并提取图中的所有旅游团期信息。{hint_text} 请按行输出每一项，包含团号、出发日期、价格、目的地和路线名称。"
+    
+    prompt = """
+    请仔细识别图片中的所有旅游团期，并严格以 JSON 格式输出一个列表。每个对象包含以下字段：
+    - destination: 目的地纯地名（如重庆、西藏、青岛等）
+    - tour_code: 团号（如SP002376）
+    - title: 行程路线全称
+    - departure_location: 起飞地（如 新加坡起飞 或 马来西亚起飞）
+    - departure_dates: 出发日期（如 31/12/2026）
+    - price: 纯数字价格（如 2999）
+    
+    只输出 JSON 数组，不要包裹在 markdown code 中，直接输出 JSON 文本：
+    """
+
     payload = {
         "contents": [{"parts": [{"text": prompt}, {"inline_data": {"mime_type": "image/jpeg", "data": base64_data}}]}],
         "generationConfig": {"temperature": 0.0, "maxOutputTokens": 8192}
     }
-    url = f"[https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=](https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=){GEMINI_API_KEY}"
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key={GEMINI_API_KEY}"
     try:
         res = requests.post(url, headers={"Content-Type": "application/json"}, json=payload, timeout=60)
         if res.status_code == 200:
             raw_text = res.json()["candidates"][0]["content"]["parts"][0]["text"]
-            return parse_bulletproof(raw_text, default_agency=default_agency)
-    except Exception:
+            # 清理可能的 markdown 标记
+            clean_json = raw_text.replace("```json", "").replace("```", "").strip()
+            data = json.loads(clean_json)
+            if isinstance(data, list):
+                for item in data:
+                    item["agency"] = default_agency
+                return data
+    except Exception as e:
+        # 降级兜底：如果 JSON 解析失败，用正则从文本中强行提取
         pass
     return []
 
@@ -230,15 +211,13 @@ def generate_comparison_image(df):
     img.save(buf, format="PNG", quality=95)
     return buf.getvalue()
 
-# 文件上传：只要选择图片，自动在后台触发处理，无需点击按钮
 uploaded_file = st.file_uploader("📷 上传单张海报图片（上传后自动分析并入库）", type=["jpg", "jpeg", "png"])
 
 if uploaded_file is not None:
-    # 检查是否是新上传的文件
     if st.session_state.get("last_processed_file") != uploaded_file.name:
         st.session_state.last_processed_file = uploaded_file.name
         
-        with st.spinner("🚀 正在自动进行 AI 智能微距扫描与入库..."):
+        with st.spinner("🚀 正在采用 JSON 结构化智能扫描中..."):
             img_bytes = uploaded_file.getvalue()
             img = Image.open(BytesIO(img_bytes))
             if img.mode != 'RGB':
@@ -247,34 +226,38 @@ if uploaded_file is not None:
 
             filename_upper = uploaded_file.name.upper()
             if "QIQI" in filename_upper or h < w * 1.35:
-                raw_items = call_gemini_vision(img_bytes, "提取琦琦旅游表格", default_agency="琦琦旅游")
+                raw_items = call_gemini_vision_json(img_bytes, default_agency="琦琦旅游")
             else:
+                # 豪吉海报上下切片，保证高清晰度
                 box_top = (0, 0, w, int(h * 0.58))
                 buf_top = BytesIO()
                 img.crop(box_top).save(buf_top, format="JPEG", quality=90)
-                r1 = call_gemini_vision(buf_top.getvalue(), "提取上半区：重庆、西藏、青岛、桂林、台湾、韩国", default_agency="豪吉旅游")
+                r1 = call_gemini_vision_json(buf_top.getvalue(), default_agency="豪吉旅游")
 
                 box_bottom = (0, int(h * 0.44), w, h)
                 buf_bottom = BytesIO()
                 img.crop(box_bottom).save(buf_bottom, format="JPEG", quality=90)
-                r2 = call_gemini_vision(buf_bottom.getvalue(), "提取下半区：贵州、哈尔滨、北疆、九寨沟", default_agency="豪吉旅游")
+                r2 = call_gemini_vision_json(buf_bottom.getvalue(), default_agency="豪吉旅游")
 
                 raw_items = r1 + r2
             
             newly_extracted = []
             for item in raw_items:
-                days = extract_tour_days(item.get("title", ""))
+                title_str = item.get("title", "")
+                days = extract_tour_days(title_str)
                 d_token = item.get("departure_dates", "")
                 status, over_days, hol_name = evaluate_holiday_fit(d_token, days)
+                
+                price_val = int(item.get("price", 2999))
                 newly_extracted.append({
-                    "agency": item.get("agency"),
-                    "destination": item.get("destination"),
-                    "tour_code": item.get("tour_code"),
-                    "title": item.get("title"),
-                    "departure_location": item.get("departure_location"),
+                    "agency": item.get("agency", "豪吉旅游"),
+                    "destination": item.get("destination", "精选目的地"),
+                    "tour_code": item.get("tour_code", "-"),
+                    "title": title_str,
+                    "departure_location": item.get("departure_location", "马来西亚起飞 (KUL)"),
                     "departure_dates": d_token,
-                    "price_numeric": item.get("price"),
-                    "price_text": f"RM {item.get('price')}",
+                    "price_numeric": price_val,
+                    "price_text": f"RM {price_val}",
                     "holiday_status": status,
                     "over_days": over_days,
                     "holiday_name": hol_name
