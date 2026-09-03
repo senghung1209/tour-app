@@ -11,8 +11,8 @@ from PIL import Image, ImageDraw, ImageFont
 
 st.set_page_config(page_title="跨社旅游团比价筛选中心", page_icon="✈️", layout="wide")
 
-st.title("✈️ 跨旅行社海报聚合与横向对比中心 (Qwen2.5-VL 视觉版)")
-st.markdown("通过 Hugging Face Serverless Vision API 驱动，支持识别任意全新排版海报并自动展开独立出发日。")
+st.title("✈️ 跨旅行社海报聚合与横向对比中心 (OpenRouter 智能双通道版)")
+st.markdown("已开启**图片轻量化压缩**与**免费视觉双模型自动容灾**，有效避免 Token 快速耗尽或频限报错。")
 
 OFFICIAL_HOLIDAYS = [
     (datetime.date(2026, 3, 20), datetime.date(2026, 3, 29), "2026 第一学期假期 (3月)"),
@@ -22,10 +22,30 @@ OFFICIAL_HOLIDAYS = [
     (datetime.date(2027, 1, 23), datetime.date(2027, 2, 16), "2027 农历新年与跨年假期")
 ]
 
-# 安全获取 Token（不留明文字符串，防止 GitHub 拦截）
-HF_TOKEN = st.secrets.get("HF_TOKEN", "")
-# Hugging Face 最新官方 Serverless 路由终端
-API_URL = "https://router.huggingface.co/hf-inference/v1/chat/completions"
+OPENROUTER_API_KEY = st.secrets.get("OPENROUTER_API_KEY", "")
+OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
+
+# 轮换的免费视觉多模态模型列表
+FREE_VISION_MODELS = [
+    "google/gemini-2.0-flash-exp:free",
+    "meta-llama/llama-3.2-11b-vision-instruct:free"
+]
+
+def compress_image_for_api(image_bytes):
+    """自适应压缩海报，控制在1280px以内，极大减少Token消耗并提速"""
+    img = Image.open(BytesIO(image_bytes))
+    if img.mode != 'RGB':
+        img = img.convert('RGB')
+    
+    w, h = img.size
+    max_dim = 1280
+    if max(w, h) > max_dim:
+        scale = max_dim / float(max(w, h))
+        img = img.resize((int(w * scale), int(h * scale)), Image.Resampling.LANCZOS)
+        
+    buf = BytesIO()
+    img.save(buf, format="JPEG", quality=82)
+    return buf.getvalue()
 
 def extract_tour_days(title_str):
     m = re.search(r'(\d+)\s*(?:天|D|d)', str(title_str))
@@ -83,71 +103,72 @@ def split_and_explode_dates(raw_agency, raw_dest, raw_code, raw_title, raw_loc, 
         })
     return exploded
 
-def call_huggingface_vision(image_bytes):
-    if not HF_TOKEN:
-        raise ValueError("未检测到 HF_TOKEN，请在 Streamlit 后台 Secrets 中配置 HF_TOKEN")
+def call_openrouter_vision_robust(image_bytes):
+    if not OPENROUTER_API_KEY:
+        raise ValueError("未检测到 OPENROUTER_API_KEY，请在 Streamlit 后台 Secrets 中配置")
 
-    base64_image = base64.b64encode(image_bytes).decode('utf-8')
+    compressed_bytes = compress_image_for_api(image_bytes)
+    base64_image = base64.b64encode(compressed_bytes).decode('utf-8')
     headers = {
-        "Authorization": f"Bearer {HF_TOKEN}",
-        "Content-Type": "application/json"
+        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+        "Content-Type": "application/json",
+        "HTTP-Referer": "https://streamlit.io",
+        "X-Title": "Tour Aggregator"
     }
 
     prompt = """
-    你是一个专业旅游海报解析引擎。请分析此海报并提取所有旅游行程选项。
-    遇到一个行程下有多个出发日期（例如 '14/10, 18/10'），请在 departure_dates 字段中将它们全部保留并用逗号隔开。
-    只返回合法纯 JSON 格式列表，不要包含任何 markdown 标记、解释或代码块外皮：
+    你是一个专业旅游海报解析引擎。请仔细阅读海报并完整提取所有旅游团信息。
+    重要规则：
+    1. 一个行程若有多个出发日期（例如 '14/10, 18/10, 24/10'），必须在 departure_dates 字段中把它们全部完整列出，用逗号分隔，绝不能漏掉任何一个。
+    2. 只输出纯 JSON 数组，严禁包含任何 Markdown 格式或额外文字说明：
     [
       {
-        "agency": "旅行社名称",
-        "destination": "目的地",
-        "tour_code": "团号代码",
-        "title": "路线标题",
-        "departure_location": "起飞地点(如 SIN/KUL/JB)",
+        "agency": "旅行社名称(如 豪吉旅游/琦琦旅游)",
+        "destination": "目的地(如 重庆/云南/台湾)",
+        "tour_code": "团号(如 SP002376/QQ001)",
+        "title": "完整路线标题",
+        "departure_location": "起飞机场(如 SIN/KUL/JB出发)",
         "departure_dates": "全部出发日期(如 26/10, 28/10)",
         "price": 2999
       }
     ]
     """
 
-    payload = {
-        "model": "Qwen/Qwen2.5-VL-7B-Instruct",
-        "messages": [
-            {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": prompt},
-                    {
-                        "type": "image_url",
-                        "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}
-                    }
-                ]
-            }
-        ],
-        "max_tokens": 4096,
-        "temperature": 0.1
-    }
+    err_messages = []
+    # 在可用的免费模型之间自动尝试容灾
+    for model_name in FREE_VISION_MODELS:
+        payload = {
+            "model": model_name,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": prompt},
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}
+                        }
+                    ]
+                }
+            ]
+        }
 
-    last_err = ""
-    for attempt in range(3):
         try:
-            res = requests.post(API_URL, headers=headers, json=payload, timeout=60)
+            res = requests.post(OPENROUTER_URL, headers=headers, json=payload, timeout=60)
             if res.status_code == 200:
                 content = res.json()["choices"][0]["message"]["content"]
                 clean_json = re.search(r'\[.*\]', content, re.DOTALL)
                 if clean_json:
                     return json.loads(clean_json.group(0))
                 return json.loads(content)
-            elif res.status_code == 503:
-                time.sleep(8)
             else:
-                last_err = f"HTTP {res.status_code}: {res.text}"
+                err_messages.append(f"{model_name} HTTP {res.status_code}: {res.text[:120]}")
                 time.sleep(2)
-        except Exception as ex:
-            last_err = str(ex)
+        except Exception as e:
+            err_messages.append(f"{model_name} 请求异常: {str(e)}")
             time.sleep(2)
 
-    raise RuntimeError(f"API 请求失败: {last_err}")
+    raise RuntimeError("所有免费通道均繁忙，详情: " + " | ".join(err_messages))
 
 def generate_comparison_image(df):
     w, rh, hh = 850, 40, 70
@@ -201,9 +222,9 @@ if uploaded_files:
         has_error = False
 
         for idx, f in enumerate(uploaded_files):
-            status_text.text(f"🔍 正在由 Qwen2.5-VL 解析海报: {f.name} ...")
+            status_text.text(f"🔍 正在智能压缩与多模态解析: {f.name} ...")
             try:
-                raw_items = call_huggingface_vision(f.getvalue())
+                raw_items = call_openrouter_vision_robust(f.getvalue())
                 for item in raw_items:
                     rows = split_and_explode_dates(
                         item.get("agency", "精选旅行社"),
@@ -234,14 +255,12 @@ if st.session_state.tour_data:
     df = pd.DataFrame(st.session_state.tour_data)
     df['price_numeric'] = pd.to_numeric(df['price_numeric'], errors='coerce').fillna(0).astype(int)
 
-    # 快捷校对编辑面板
     with st.expander("🛠️ 快速数据校对面板 (双击可修改文字/价格，可自主增删行)", expanded=False):
         edited_df = st.data_editor(df, num_rows="dynamic", use_container_width=True)
         if not edited_df.equals(df):
             st.session_state.tour_data = edited_df.to_dict('records')
             st.rerun()
 
-    # 侧边栏筛选器
     st.sidebar.header("🎛️ 筛选条件")
     selected_agency = st.sidebar.selectbox("选择旅行社", ["全部"] + sorted([a for a in df['agency'].unique() if a]))
     selected_dest = st.sidebar.selectbox("选择目的地", ["全部"] + sorted([d for d in df['destination'].unique() if d]))
@@ -279,9 +298,9 @@ if st.session_state.tour_data:
     st.markdown("### 📥 导出选项")
     col1, col2 = st.columns(2)
     with col1:
-        st.download_button("📊 下载 CSV 比价清单", data=filtered_df.to_csv(index=False).encode('utf-8-sig'), file_name="视觉解析比价清单.csv", mime="text/csv", use_container_width=True)
+        st.download_button("📊 下载 CSV 比价清单", data=filtered_df.to_csv(index=False).encode('utf-8-sig'), file_name="智能比价清单.csv", mime="text/csv", use_container_width=True)
     with col2:
-        st.download_button("🖼️ 下载精美长图 (.png)", data=generate_comparison_image(filtered_df), file_name="视觉解析比价长图.png", mime="image/png", use_container_width=True)
+        st.download_button("🖼️ 下载精美长图 (.png)", data=generate_comparison_image(filtered_df), file_name="智能比价长图.png", mime="image/png", use_container_width=True)
 
     st.markdown(f"### 符合条件的出发选项共 **{len(filtered_df)}** 个：")
     st.dataframe(filtered_df[['agency', 'destination', 'tour_code', 'departure_location', 'departure_dates', 'price_text', 'title']], use_container_width=True)
