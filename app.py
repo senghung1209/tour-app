@@ -12,10 +12,11 @@ import streamlit.components.v1 as components
 
 st.set_page_config(page_title="AI 旅游团智能筛选助手", page_icon="✈️", layout="wide")
 
-st.title("✈️ 旅游团宣传单智能分析与筛选 (Gemini 极速版)")
-st.markdown("搭载 Google 视觉引擎：秒级并发解析、告别排队限流、精准识别各省板块与 2026 学校假期。")
+st.title("✈️ 旅游团宣传单智能分析与筛选 (Gemini 官方极速版)")
+st.markdown("已按官方 cURL 接入 Google 原生专线：秒级并发解析、告别排队限流、精准识别各省板块与 2026 学校假期。")
 
-DEFAULT_GEMINI_KEY = "AQ.Ab8RN6LbXfnPZoT1BUFEDZ2MWyE8Tr9V0Q-k8Xovtr2h7ou7oA"
+# 你的官方专属 AQ. 密钥
+DEFAULT_GEMINI_KEY = "AQ.Ab8RN6JktT71UH7ZHw6ieP1-Q9EouOO58rnMEBOA7n-hmbHXDA"
 GEMINI_API_KEY = st.secrets.get("GEMINI_API_KEY", DEFAULT_GEMINI_KEY)
 
 OFFICIAL_HOLIDAYS = [
@@ -150,7 +151,7 @@ def trigger_notification():
     """
     components.html(js, height=0)
 
-def compress_image(uploaded_file, max_size=1200, quality=80):
+def compress_image(uploaded_file, max_size=1100, quality=78):
     img = Image.open(uploaded_file)
     if img.mode in ("RGBA", "P"):
         img = img.convert("RGB")
@@ -198,32 +199,29 @@ def analyze_single_image(file_bytes, file_name, api_key):
         "【关键要求】：\n"
         "1. 仔细观察卡片右下角小字与航空标示，严格精确区分『新加坡出发 (SIN)』还是『新山出发 (JB)』还是『吉隆坡出发 (KL)』！\n"
         "2. 同一个团号如有多个出发日期，合并在同一行用逗号分隔，不要输出任何重复行。\n"
-        "3. 不要输出 Markdown 表头或多余文字，只输出符合格式的有效数据行。"
+        "3. 只输出有效数据行，不要输出 Markdown 表头或多余文字。"
     )
 
-    url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent"
-    # 同时在 Header 提供三种身份验证方式，确保兼容 AQ. 开头与 AIza 开头密钥
+    # 严格按照官方 cURL 端点与 Header 规范
+    url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent"
     headers = {
         "Content-Type": "application/json",
-        "x-goog-api-key": api_key,
-        "Authorization": f"Bearer {api_key}"
+        "X-goog-api-key": api_key.strip()
     }
     payload = {
-        "contents": [{
-            "parts": [
-                {"text": prompt},
-                {
-                    "inline_data": {
-                        "mime_type": "image/jpeg",
-                        "data": encoded_string
+        "contents": [
+            {
+                "parts": [
+                    {"text": prompt},
+                    {
+                        "inline_data": {
+                            "mime_type": "image/jpeg",
+                            "data": encoded_string
+                        }
                     }
-                }
-            ]
-        }],
-        "generationConfig": {
-            "temperature": 0.1,
-            "maxOutputTokens": 4096
-        }
+                ]
+            }
+        ]
     }
     
     response = requests.post(url, headers=headers, json=payload, timeout=60)
@@ -252,12 +250,12 @@ def analyze_single_image(file_bytes, file_name, api_key):
             err_msg = response.json().get("error", {}).get("message", response.text)
         except Exception:
             pass
-        raise Exception(f"Gemini API 报错 ({response.status_code}): {err_msg}")
+        raise Exception(f"Google 认证报错 ({response.status_code}): {err_msg}")
 
 def background_worker(files_data, task_dict, api_key):
     total = len(files_data)
     for idx, (f_name, f_bytes) in enumerate(files_data):
-        task_dict["status_msg"] = f"⚡ Gemini 正在极速全板块解析第 {idx + 1}/{total} 张: {f_name} ..."
+        task_dict["status_msg"] = f"⚡ Gemini 正在秒速全板块解析第 {idx + 1}/{total} 张: {f_name} ..."
         try:
             data = analyze_single_image(f_bytes, f_name, api_key)
             if data:
@@ -268,7 +266,7 @@ def background_worker(files_data, task_dict, api_key):
             task_dict["errors"].append(f"{f_name}: {str(err)}")
             
         task_dict["progress"] = (idx + 1) / total
-        time.sleep(0.5)
+        time.sleep(0.3)
             
     task_dict["running"] = False
     task_dict["finished"] = True
@@ -300,11 +298,6 @@ function requestAudioAndNotify() {
 </script>
 """, height=58)
 
-if not GEMINI_API_KEY:
-    user_key = st.sidebar.text_input("🔑 请输入 Gemini API Key:", type="password")
-    if user_key:
-        GEMINI_API_KEY = user_key
-
 uploaded_files = st.file_uploader(
     "批量上传宣传图 (支持 JPG/PNG，可多选)", 
     type=["jpg", "jpeg", "png"],
@@ -316,21 +309,18 @@ if uploaded_files:
     
     if not task["running"]:
         if st.button("🚀 开始极速后台批量分析", type="primary"):
-            if not GEMINI_API_KEY:
-                st.error("❌ 请先配置 Gemini API Key！")
-            else:
-                task["running"] = True
-                task["finished"] = False
-                task["notified"] = False
-                task["progress"] = 0.0
-                task["results"] = []
-                task["errors"] = []
-                task["status_msg"] = "正在启动 Gemini 高速引擎..."
-                
-                files_data = [(f.name, f.getvalue()) for f in uploaded_files]
-                t = threading.Thread(target=background_worker, args=(files_data, task, GEMINI_API_KEY), daemon=True)
-                t.start()
-                st.rerun()
+            task["running"] = True
+            task["finished"] = False
+            task["notified"] = False
+            task["progress"] = 0.0
+            task["results"] = []
+            task["errors"] = []
+            task["status_msg"] = "正在启动 Google 极速引擎..."
+            
+            files_data = [(f.name, f.getvalue()) for f in uploaded_files]
+            t = threading.Thread(target=background_worker, args=(files_data, task, GEMINI_API_KEY), daemon=True)
+            t.start()
+            st.rerun()
 
 if task["running"]:
     st.info(task["status_msg"])
