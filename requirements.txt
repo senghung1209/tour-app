@@ -1,6 +1,5 @@
 streamlit
 pandas
 pillow
-opencv-python-headless
-easyocr
-numpy
+requests
+
