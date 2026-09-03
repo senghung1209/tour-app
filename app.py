@@ -12,8 +12,8 @@ import streamlit.components.v1 as components
 
 st.set_page_config(page_title="AI 旅游团智能筛选助手", page_icon="✈️", layout="wide")
 
-st.title("✈️ 旅游团宣传单智能分析与筛选 (Groq 多模型高可用版)")
-st.markdown("已接入 Groq 视觉多模态引擎：支持模型自动降级切换、图像自适应清洗与 2026 学校假期智能匹配。")
+st.title("✈️ 旅游团宣传单智能分析与筛选 (Groq 高可用版)")
+st.markdown("已接入 Groq 视觉多模态引擎：更新至最新稳定模型、图像自适应清洗与 2026 学校假期智能匹配。")
 
 GROQ_API_KEY = "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"
 
@@ -211,10 +211,10 @@ def analyze_single_image(file_bytes, file_name, task_dict):
         "Content-Type": "application/json"
     }
 
-    # 使用 Groq 官方视觉模型列表进行自动轮换和回退
+    # 仅使用当前官方支持的稳定视觉模型
     vision_models = [
-        "llama-3.2-11b-vision-preview",
-        "llama-3.2-90b-vision-preview"
+        "qwen/qwen3.6-27b",
+        "llama-3.2-11b-vision-preview"
     ]
 
     last_err = ""
@@ -250,9 +250,8 @@ def analyze_single_image(file_bytes, file_name, task_dict):
                         seen.add(k)
                         unique_list.append(it)
                     return unique_list
-            elif response.status_code == 429:
-                # 触发频控或限额时自动尝试下一个备用模型
-                time.sleep(2)
+            elif response.status_code in [429, 400]:
+                time.sleep(1)
                 continue
             else:
                 last_err = f"模型 {model_name} 报错 ({response.status_code}): {response.text}"
@@ -265,7 +264,7 @@ def analyze_single_image(file_bytes, file_name, task_dict):
 def background_worker(files_data, task_dict, api_key):
     total = len(files_data)
     for idx, (f_name, f_bytes) in enumerate(files_data):
-        task_dict["status_msg"] = f"⚡ 正在转换并高精解析第 {idx + 1}/{total} 张: {f_name} ..."
+        task_dict["status_msg"] = f"⚡ 正在高精解析第 {idx + 1}/{total} 张: {f_name} ..."
         try:
             data = analyze_single_image(f_bytes, f_name, task_dict)
             if data:
