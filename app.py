@@ -12,7 +12,7 @@ from PIL import Image, ImageDraw, ImageFont
 st.set_page_config(page_title="跨社旅游团比价筛选中心", page_icon="✈️", layout="wide")
 
 st.title("✈️ 跨旅行社海报聚合与横向对比中心")
-st.caption("🚀 已锁定 gemini-3.5-flash 引擎，内置 503 弹性双保险，支持长表与九宫格海报。")
+st.caption("🚀 已强化超长海报容错与截断自愈，支持多格海报几十项团期全量提取。")
 
 OFFICIAL_HOLIDAYS = [
     (datetime.date(2026, 3, 20), datetime.date(2026, 3, 29), "2026 第一学期假期 (3月)"),
@@ -24,8 +24,6 @@ OFFICIAL_HOLIDAYS = [
 
 RAW_KEY = st.secrets.get("GEMINI_API_KEY", "")
 GEMINI_API_KEY = str(RAW_KEY).strip() if RAW_KEY else ""
-
-# 主力引擎与 503 熔断兜底引擎
 PRIMARY_MODEL = "gemini-3.5-flash"
 BACKUP_MODEL = "gemini-3.1-flash-lite"
 
@@ -94,20 +92,50 @@ def split_and_explode_dates(raw_agency, raw_dest, raw_code, raw_title, raw_loc, 
         })
     return exploded
 
-def safe_parse_json(raw_text):
+def robust_json_decode(raw_text):
     clean_text = raw_text.strip()
     clean_text = re.sub(r'^```json\s*', '', clean_text, flags=re.MULTILINE)
     clean_text = re.sub(r'^```\s*', '', clean_text, flags=re.MULTILINE)
     
+    # 尝试直接解析完整结构
     match = re.search(r'\[.*\]', clean_text, re.DOTALL)
     if match:
-        clean_text = match.group(0)
-    
-    try:
-        return json.loads(clean_text)
-    except Exception:
-        clean_text_fixed = re.sub(r',\s*([\]}])', r'\1', clean_text)
-        return json.loads(clean_text_fixed)
+        try:
+            return json.loads(match.group(0))
+        except Exception:
+            pass
+
+    # 截断自愈逻辑：若末尾因长度截断，截取到最后一个完整的对象闭合符号 '}' 并补齐 ']'
+    last_brace = clean_text.rfind('}')
+    if last_brace != -1:
+        first_bracket = clean_text.find('[')
+        if first_bracket != -1 and first_bracket < last_brace:
+            truncated = clean_text[first_bracket:last_brace + 1] + ']'
+            try:
+                return json.loads(truncated)
+            except Exception:
+                pass
+
+    # 兜底正则提取：从残缺文本中强行抓取每一个完整合法的对象
+    object_pattern = re.compile(
+        r'\{\s*"agency"\s*:\s*"(.*?)"\s*,\s*"destination"\s*:\s*"(.*?)"\s*,\s*"tour_code"\s*:\s*"(.*?)"\s*,\s*"title"\s*:\s*"(.*?)"\s*,\s*"departure_location"\s*:\s*"(.*?)"\s*,\s*"departure_dates"\s*:\s*"(.*?)"\s*,\s*"price"\s*:\s*(\d+)\s*\}',
+        re.DOTALL
+    )
+    items = []
+    for m in object_pattern.finditer(clean_text):
+        items.append({
+            "agency": m.group(1),
+            "destination": m.group(2),
+            "tour_code": m.group(3),
+            "title": m.group(4),
+            "departure_location": m.group(5),
+            "departure_dates": m.group(6),
+            "price": int(m.group(7))
+        })
+    if items:
+        return items
+
+    raise ValueError("未能成功解析 JSON，文本末尾截断且无法修复。")
 
 def call_gemini_vision_resilient(image_bytes, status_placeholder):
     if not GEMINI_API_KEY:
@@ -122,30 +150,21 @@ def call_gemini_vision_resilient(image_bytes, status_placeholder):
         img = img.resize((int(w * scale), int(h * scale)), Image.Resampling.LANCZOS)
 
     buf = BytesIO()
-    img.save(buf, format="JPEG", quality=85)
+    img.save(buf, format="JPEG", quality=82)
     base64_data = base64.b64encode(buf.getvalue()).decode('utf-8')
 
     prompt = """
-    你是一个专业高精度旅游海报提取引擎。
+    提取海报全部旅游团期，生成紧凑纯 JSON 数组。
     规则：
-    1. 旅行社识别：海报若为九宫格拼贴（含SP团号或联系人SIONG/ALEX），统一写“豪吉旅游”；若是表格型海报（如琦琦），按其实际名称写。
-    2. 多价格拆分：一个小方块若包含不同出发日期对应不同价格，务必拆分为多条独立对象输出！
-    3. 出发地点：
-       - 带 SIN、新加坡、或酷航(Scoot)的写“新加坡起飞 (SIN)”
-       - 带 JB、新山的写“新山出发 (JB)”
-       - 带 KL 或默认的写“马来西亚起飞 (KUL)”
-    4. 务必输出纯 JSON 数组，严禁任何 markdown 符号：
-    [
-      {
-        "agency": "旅行社名称",
-        "destination": "目的地",
-        "tour_code": "团号",
-        "title": "行程名",
-        "departure_location": "起飞地",
-        "departure_dates": "出发日期",
-        "price": 2999
-      }
-    ]
+    1. 旅行社名称：九宫格拼贴海报统一写“豪吉旅游”；表格型海报（如琦琦）按原标题写。
+    2. 多价格拆分：一个小方块若包含不同日期对应不同价格，务必拆分为独立项目！
+    3. 起飞地点：
+       - 含 SIN/新加坡/酷航(Scoot)填“新加坡起飞 (SIN)”
+       - 含 JB/新山填“新山出发 (JB)”
+       - 默认填“马来西亚起飞 (KUL)”
+    4. 行程名保持精炼简短（不要带过长修饰词），团号若无填“-”。
+    5. 仅输出合法紧凑 JSON 数组，严禁 markdown 标记与换行杂质：
+    [{"agency":"豪吉旅游","destination":"重庆","tour_code":"SP002376","title":"7天6夜 重庆风采线","departure_location":"新加坡起飞 (SIN)","departure_dates":"31/12/26","price":2999}]
     """
 
     payload = {
@@ -178,32 +197,26 @@ def call_gemini_vision_resilient(image_bytes, status_placeholder):
 
     for model_name in models_to_try:
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={GEMINI_API_KEY}"
-        
-        # 支持遇 503 重试一次
         for attempt in range(2):
             try:
                 res = requests.post(url, headers=headers, json=payload, timeout=60)
                 if res.status_code == 200:
                     res_json = res.json()
                     raw_text = res_json["candidates"][0]["content"]["parts"][0]["text"]
-                    return safe_parse_json(raw_text)
-                
-                # 遇到 503 高峰排队，等待 2 秒进行重试或切换
+                    return robust_json_decode(raw_text)
                 if res.status_code == 503:
                     if attempt == 0:
-                        status_placeholder.warning(f"⚠️ [{model_name}] 遭遇 Google 算力高峰(503)，正在为您重试...")
+                        status_placeholder.warning(f"⚠️ [{model_name}] 算力拥挤(503)，2秒后自动重试...")
                         time.sleep(2)
                         continue
                     else:
-                        status_placeholder.info(f"🔄 自动切换至备用高速引擎 [{BACKUP_MODEL}] 解析...")
                         break
                 else:
                     raise RuntimeError(f"API 响应错误 (HTTP {res.status_code}): {res.text[:120]}")
             except requests.exceptions.Timeout:
-                status_placeholder.warning(f"⚠️ [{model_name}] 连接超时，尝试切换引擎...")
                 break
 
-    raise RuntimeError("当前 Google 官方所有模型算力处于极端高峰，请稍等 10 秒后重试。")
+    raise RuntimeError("当前官方模型响应超时，请稍后重试。")
 
 def generate_comparison_image(df):
     w, rh, hh = 850, 40, 70
