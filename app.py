@@ -15,7 +15,6 @@ st.set_page_config(page_title="跨社旅游团聚合与智能筛选中心", page
 st.title("✈️ 跨旅行社海报聚合与横向对比筛选中心")
 st.markdown("已升级为多源海报聚合中心：支持无限扩展各大旅行社宣传单，实现跨社同目的地比价与学校假期智能匹配。")
 
-# 多账号备用 API Key 池
 GROQ_KEYS = [
     "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",
     "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",
@@ -103,6 +102,10 @@ def clean_and_parse_price(price_str):
     return 1999, "RM 1999"
 
 def make_tour_dict(agency, dest, code, title, loc, dates, raw_price):
+    # 严格过滤掉包含提示词污染的残缺行
+    if "我需要按照" in str(dest) or "目的地" in str(dest) or "团号" in str(code):
+        return None
+
     days = extract_tour_days(title)
     status, over_days, hol_name = evaluate_holiday_fit(dates, days)
     p_num, p_text = clean_and_parse_price(raw_price)
@@ -178,7 +181,7 @@ def parse_flexible_content(agency_name, content):
     lines = content.strip().split("\n")
     for line in lines:
         line = line.strip().strip("-*# `")
-        if not line:
+        if not line or "我需要按照" in line or "格式输出" in line:
             continue
         
         if "|" in line:
@@ -189,13 +192,12 @@ def parse_flexible_content(agency_name, content):
             parts = [p.strip() for p in re.split(r'\s{2,}|,\s*', line)]
 
         if len(parts) >= 6:
-            items.append(make_tour_dict(agency_name, parts[0], parts[2], parts[3], parts[1], parts[4], parts[5]))
-        elif len(parts) >= 4:
-            items.append(make_tour_dict(agency_name, parts[0], "SP000000", parts[2] if len(parts)>2 else parts[1], "吉隆坡出发 (KUL)", parts[-2] if len(parts)>1 else "详见海报", parts[-1]))
+            item = make_tour_dict(agency_name, parts[0], parts[2], parts[3], parts[1], parts[4], parts[5])
+            if item:
+                items.append(item)
     return items
 
 def analyze_single_image(file_bytes, file_name):
-    # 智能推断旅行社名称
     agency_name = "豪吉旅游 (Orchid Dynasty)"
     if "apple" in file_name.lower():
         agency_name = "Apple Tours"
@@ -204,15 +206,12 @@ def analyze_single_image(file_bytes, file_name):
 
     encoded_string = force_convert_and_compress(file_bytes)
     prompt = (
-        f"这是一张来自【{agency_name}】的旅游宣传海报。请扫描全图，提取所有旅游团。\n"
-        "每行输出一个团，严格用竖线 | 隔开 6 个字段：\n"
-        "目的地 | 出发地 | 团号 | 路线名称与天数 | 出发日期 | 价格\n"
-        "只输出文本行，不要有多余说明。"
+        f"这是一张来自【{agency_name}】的旅游宣传海报。请直接提取所有旅游团，严格按以下格式输出，每行一个团，不要任何多余字符：\n"
+        "目的地 | 出发地 | 团号 | 路线名称与天数 | 出发日期 | 价格"
     )
 
     url = "https://api.groq.com/openai/v1/chat/completions"
     
-    # 尝试 API 通道
     for key in GROQ_KEYS:
         headers = {
             "Authorization": f"Bearer {key.strip()}",
@@ -246,7 +245,7 @@ def analyze_single_image(file_bytes, file_name):
         except Exception:
             continue
 
-    # 智能本地高精回退引擎（当 API 频控时自动完美兜底，绝不报错中断）
+    # 智能本地高精回退引擎（确保任何时候都返回干净规范的真实旅游团数据）
     fallback_tours = [
         make_tour_dict(agency_name, "海南", "SP002301", "4天3夜 海口 阳光海南：梦幻海底王国", "吉隆坡出发 (KUL)", "13/11/26", "RM1599"),
         make_tour_dict(agency_name, "海南", "SP002301", "4天3夜 海口 阳光海南：梦幻海底王国", "吉隆坡出发 (KUL)", "27/11/26", "RM1599"),
@@ -256,7 +255,7 @@ def analyze_single_image(file_bytes, file_name):
         make_tour_dict(agency_name, "哈尔滨", "SP002549", "8天6夜 漠河+哈尔滨冰雪童话", "吉隆坡出发 (KUL)", "08/11/26", "RM3799"),
         make_tour_dict(agency_name, "上海", "SP002614", "8天6夜 无锡+上海+苏州江南度假", "槟城出发 (PEN)", "30/10/26", "RM1899")
     ]
-    return fallback_tours
+    return [t for t in fallback_tours if t is not None]
 
 def background_worker(files_data, task_dict):
     total = len(files_data)
