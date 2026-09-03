@@ -12,14 +12,11 @@ import streamlit.components.v1 as components
 
 st.set_page_config(page_title="AI 旅游团智能筛选助手", page_icon="✈️", layout="wide")
 
-st.title("✈️ 旅游团宣传单智能分析与筛选 (毫秒级无缝切号版)")
-st.markdown("已接入 3 组 OpenRouter 密钥池：遇到限流或无额度 0 秒极速切换备用账号、精准识别出发机场与 2026 学校假期。")
+st.title("✈️ 旅游团宣传单智能分析与筛选 (Gemini 官方极速版)")
+st.markdown("已接入 Google 原生视觉多模态引擎：秒级高精解析、海报价格全动态联动与 2026 学校假期智能匹配。")
 
-OPENROUTER_API_KEYS = [
-    "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",
-    "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",
-    "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"
-]
+# 已配置你的最新 Google API Key
+GEMINI_API_KEY = "AQ.Ab8RN6J7-wX8unetV6tuQ0CL34ObTeoaH1RYaGFxqsi8jLdquQ"
 
 OFFICIAL_HOLIDAYS = [
     (datetime.date(2026, 3, 20), datetime.date(2026, 3, 29), "2026 第一学期假期 (3月)"),
@@ -154,7 +151,7 @@ def trigger_notification():
     """
     components.html(js, height=0)
 
-def compress_image(uploaded_file, max_size=800, quality=65):
+def compress_image(uploaded_file, max_size=1024, quality=75):
     img = Image.open(uploaded_file)
     if img.mode in ("RGBA", "P"):
         img = img.convert("RGB")
@@ -181,7 +178,7 @@ def parse_pipe_lines(content):
                 items.append(make_tour_dict(dest, code, title, loc, dates, raw_p))
     return items
 
-def analyze_single_image(file_bytes, file_name, task_dict):
+def analyze_single_image(file_bytes, file_name, api_key):
     encoded_string = compress_image(BytesIO(file_bytes))
     
     prompt = (
@@ -193,47 +190,45 @@ def analyze_single_image(file_bytes, file_name, task_dict):
         "贵州|新山出发 (JB)|SP002809|7天6夜 一路黔行 多彩贵州|18/11/26|RM2999\n"
         "贵州|新加坡出发 (SIN)|SP002729|7天6夜 一路黔行 多彩贵州|28/10, 06/11|RM2699\n\n"
         "【关键要求】：\n"
-        "1. 价格必须是真实团费（如 RM2999），严禁将海报上的电话号码混入价格！\n"
-        "2. 严格精确区分『新加坡出发 (SIN)』还是『新山出发 (JB)』还是『吉隆坡出发 (KL)』！\n"
+        "1. 价格必须是真实团费数字（如 RM2999），严禁将海报上的电话号码、登记号混入价格！\n"
+        "2. 仔细观察卡片右下角小字与航空标示，严格精确区分『新加坡出发 (SIN)』还是『新山出发 (JB)』还是『吉隆坡出发 (KL)』！\n"
         "3. 同一个团号如有多个出发日期，合并在同一行用逗号分隔，不要输出任何重复行。\n"
         "4. 只输出有效数据行，绝不输出任何多余说明或表头！"
     )
 
-    url = "https://openrouter.ai/api/v1/chat/completions"
-    model_name = "meta-llama/llama-3.2-11b-vision-instruct:free"
-    
-    last_err_msg = ""
-    # 极速轮询 3 个账号，任何失败立即 0 秒进入下一个账号
-    for idx, raw_key in enumerate(OPENROUTER_API_KEYS):
-        api_key = raw_key.strip()
-        task_dict["status_msg"] = f"⚡ 正在使用账号 {idx + 1} 极速识别当前海报..."
-        
+    models_to_try = ["gemini-1.5-flash", "gemini-flash-latest"]
+    last_err = ""
+
+    for m_name in models_to_try:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{m_name}:generateContent"
         headers = {
-            "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
-            "HTTP-Referer": "https://senghung-tour.streamlit.app",
-            "X-Title": "Tour Poster Analyzer"
+            "X-goog-api-key": api_key.strip()
         }
-        
         payload = {
-            "model": model_name,
-            "messages": [
+            "contents": [
                 {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": prompt},
-                        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{encoded_string}"}}
+                    "parts": [
+                        {"text": prompt},
+                        {
+                            "inline_data": {
+                                "mime_type": "image/jpeg",
+                                "data": encoded_string
+                            }
+                        }
                     ]
                 }
             ],
-            "temperature": 0.1
+            "generationConfig": {
+                "temperature": 0.1
+            }
         }
         
         try:
-            # 严格限制 15 秒超时，不给排队死等机会
-            response = requests.post(url, headers=headers, json=payload, timeout=15)
+            response = requests.post(url, headers=headers, json=payload, timeout=60)
             if response.status_code == 200:
-                content = response.json()['choices'][0]['message']['content'].strip()
+                res_json = response.json()
+                content = res_json['candidates'][0]['content']['parts'][0]['text'].strip()
                 items = parse_pipe_lines(content)
                 if items:
                     unique_list = []
@@ -246,22 +241,19 @@ def analyze_single_image(file_bytes, file_name, task_dict):
                         unique_list.append(it)
                     return unique_list
             else:
-                last_err_msg = f"账号 {idx + 1} 返回状态码 {response.status_code}"
-                continue
-        except requests.exceptions.Timeout:
-            last_err_msg = f"账号 {idx + 1} 请求超时 (15s)"
-            continue
+                last_err = f"{m_name} ({response.status_code}): {response.text}"
         except Exception as e:
-            last_err_msg = str(e)
+            last_err = str(e)
             continue
 
-    raise Exception(f"3 组账号均未能返回数据：{last_err_msg}")
+    raise Exception(last_err if last_err else "未能成功解析出有效旅游团行")
 
-def background_worker(files_data, task_dict):
+def background_worker(files_data, task_dict, api_key):
     total = len(files_data)
     for idx, (f_name, f_bytes) in enumerate(files_data):
+        task_dict["status_msg"] = f"⚡ Gemini 正在秒速深度解析第 {idx + 1}/{total} 张: {f_name} ..."
         try:
-            data = analyze_single_image(f_bytes, f_name, task_dict)
+            data = analyze_single_image(f_bytes, f_name, api_key)
             if data:
                 task_dict["results"].extend(data)
             else:
@@ -333,10 +325,10 @@ if uploaded_files:
             task["progress"] = 0.0
             task["results"] = []
             task["errors"] = []
-            task["status_msg"] = "正在启动极速视觉多模态引擎..."
+            task["status_msg"] = "正在启动 Google 视觉引擎..."
             
             files_data = [(f.name, f.getvalue()) for f in uploaded_files]
-            t = threading.Thread(target=background_worker, args=(files_data, task), daemon=True)
+            t = threading.Thread(target=background_worker, args=(files_data, task, GEMINI_API_KEY), daemon=True)
             t.start()
             st.rerun()
 
