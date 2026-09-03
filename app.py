@@ -12,11 +12,10 @@ import streamlit.components.v1 as components
 
 st.set_page_config(page_title="AI 旅游团智能筛选助手", page_icon="✈️", layout="wide")
 
-st.title("✈️ 旅游团宣传单智能分析与筛选 (Gemini 官方极速版)")
-st.markdown("已接入 Google 原生视觉多模态引擎：秒级高精解析、海报价格全动态联动与 2026 学校假期智能匹配。")
+st.title("✈️ 旅游团宣传单智能分析与筛选 (Groq 极速高精版)")
+st.markdown("已切换至 Groq 高速视觉多模态引擎：完美绕过 Google 401 权限墙、秒级解析海报、智能匹配 2026 学校假期。")
 
-# 已配置你刚刚在后台全新生成的 API Key
-GEMINI_API_KEY = "AQ.Ab8RN6LggGSou_zp2XP2ImhrmBhmAwa2FXelRGvnJu7T8NBW9Q"
+GROQ_API_KEY = "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"
 
 OFFICIAL_HOLIDAYS = [
     (datetime.date(2026, 3, 20), datetime.date(2026, 3, 29), "2026 第一学期假期 (3月)"),
@@ -151,7 +150,7 @@ def trigger_notification():
     """
     components.html(js, height=0)
 
-def compress_image(uploaded_file, max_size=1024, quality=75):
+def compress_image(uploaded_file, max_size=900, quality=70):
     img = Image.open(uploaded_file)
     if img.mode in ("RGBA", "P"):
         img = img.convert("RGB")
@@ -178,7 +177,7 @@ def parse_pipe_lines(content):
                 items.append(make_tour_dict(dest, code, title, loc, dates, raw_p))
     return items
 
-def analyze_single_image(file_bytes, file_name, api_key):
+def analyze_single_image(file_bytes, file_name, task_dict):
     encoded_string = compress_image(BytesIO(file_bytes))
     
     prompt = (
@@ -196,64 +195,52 @@ def analyze_single_image(file_bytes, file_name, api_key):
         "4. 只输出有效数据行，绝不输出任何多余说明或表头！"
     )
 
-    models_to_try = ["gem-1.5-flash", "gemini-1.5-flash", "gemini-flash-latest"]
-    last_err = ""
-
-    for m_name in models_to_try:
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{m_name}:generateContent"
-        headers = {
-            "Content-Type": "application/json",
-            "X-goog-api-key": api_key.strip()
-        }
-        payload = {
-            "contents": [
-                {
-                    "parts": [
-                        {"text": prompt},
-                        {
-                            "inline_data": {
-                                "mime_type": "image/jpeg",
-                                "data": encoded_string
-                            }
-                        }
-                    ]
-                }
-            ],
-            "generationConfig": {
-                "temperature": 0.1
+    url = "https://api.groq.com/openai/v1/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {GROQ_API_KEY}",
+        "Content-Type": "application/json"
+    }
+    payload = {
+        "model": "meta-llama/llama-3.2-11b-vision-preview",
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": prompt},
+                    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{encoded_string}"}}
+                ]
             }
-        }
-        
-        try:
-            response = requests.post(url, headers=headers, json=payload, timeout=60)
-            if response.status_code == 200:
-                res_json = response.json()
-                content = res_json['candidates'][0]['content']['parts'][0]['text'].strip()
-                items = parse_pipe_lines(content)
-                if items:
-                    unique_list = []
-                    seen = set()
-                    for it in items:
-                        k = (it["tour_code"], it["destination"], it["departure_location"], it["price_numeric"])
-                        if it["tour_code"] and k in seen:
-                            continue
-                        seen.add(k)
-                        unique_list.append(it)
-                    return unique_list
-            else:
-                last_err = f"{m_name} ({response.status_code}): {response.text}"
-        except Exception as e:
-            last_err = str(e)
-            continue
+        ],
+        "temperature": 0.1,
+        "max_tokens": 2048
+    }
+    
+    response = requests.post(url, headers=headers, json=payload, timeout=60)
+    if response.status_code == 200:
+        res_json = response.json()
+        content = res_json['choices'][0]['message']['content'].strip()
+        items = parse_pipe_lines(content)
+        if items:
+            unique_list = []
+            seen = set()
+            for it in items:
+                k = (it["tour_code"], it["destination"], it["departure_location"], it["price_numeric"])
+                if it["tour_code"] and k in seen:
+                    continue
+                seen.add(k)
+                unique_list.append(it)
+            return unique_list
+    else:
+        raise Exception(f"Groq API 报错 ({response.status_code}): {response.text}")
 
-    raise Exception(last_err if last_err else "未能成功解析出有效旅游团行")
+    raise Exception("未能成功解析出有效旅游团行")
 
 def background_worker(files_data, task_dict, api_key):
     total = len(files_data)
     for idx, (f_name, f_bytes) in enumerate(files_data):
-        task_dict["status_msg"] = f"⚡ Gemini 正在秒速深度解析第 {idx + 1}/{total} 张: {f_name} ..."
+        task_dict["status_msg"] = f"⚡ Groq 正在极速解析第 {idx + 1}/{total} 张: {f_name} ..."
         try:
-            data = analyze_single_image(f_bytes, f_name, api_key)
+            data = analyze_single_image(f_bytes, f_name, task_dict)
             if data:
                 task_dict["results"].extend(data)
             else:
@@ -262,7 +249,7 @@ def background_worker(files_data, task_dict, api_key):
             task_dict["errors"].append(f"{f_name}: {str(err)}")
             
         task_dict["progress"] = (idx + 1) / total
-        time.sleep(0.3)
+        time.sleep(1.0)
             
     task_dict["running"] = False
     task_dict["finished"] = True
@@ -325,10 +312,10 @@ if uploaded_files:
             task["progress"] = 0.0
             task["results"] = []
             task["errors"] = []
-            task["status_msg"] = "正在启动 Google 视觉引擎..."
+            task["status_msg"] = "正在启动 Groq 视觉引擎..."
             
             files_data = [(f.name, f.getvalue()) for f in uploaded_files]
-            t = threading.Thread(target=background_worker, args=(files_data, task, GEMINI_API_KEY), daemon=True)
+            t = threading.Thread(target=background_worker, args=(files_data, task, GROQ_API_KEY), daemon=True)
             t.start()
             st.rerun()
 
