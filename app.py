@@ -1,6 +1,5 @@
 import streamlit as st
 import pandas as pd
-import json
 import requests
 import base64
 import time
@@ -14,9 +13,8 @@ import streamlit.components.v1 as components
 st.set_page_config(page_title="AI 旅游团智能筛选助手", page_icon="✈️", layout="wide")
 
 st.title("✈️ 旅游团宣传单智能分析与筛选 (Gemini 极速版)")
-st.markdown("搭载 Google 视觉引擎：秒级高并发、彻底告别排队限流、精准识别各省板块与 2026 学校假期。")
+st.markdown("搭载 Google 视觉引擎：秒级并发解析、告别排队限流、精准识别各省板块与 2026 学校假期。")
 
-# 已为你配置好你的专属 Google 密钥
 DEFAULT_GEMINI_KEY = "AQ.Ab8RN6LbXfnPZoT1BUFEDZ2MWyE8Tr9V0Q-k8Xovtr2h7ou7oA"
 GEMINI_API_KEY = st.secrets.get("GEMINI_API_KEY", DEFAULT_GEMINI_KEY)
 
@@ -203,8 +201,13 @@ def analyze_single_image(file_bytes, file_name, api_key):
         "3. 不要输出 Markdown 表头或多余文字，只输出符合格式的有效数据行。"
     )
 
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api_key}"
-    headers = {"Content-Type": "application/json"}
+    url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent"
+    # 同时在 Header 提供三种身份验证方式，确保兼容 AQ. 开头与 AIza 开头密钥
+    headers = {
+        "Content-Type": "application/json",
+        "x-goog-api-key": api_key,
+        "Authorization": f"Bearer {api_key}"
+    }
     payload = {
         "contents": [{
             "parts": [
@@ -265,7 +268,7 @@ def background_worker(files_data, task_dict, api_key):
             task_dict["errors"].append(f"{f_name}: {str(err)}")
             
         task_dict["progress"] = (idx + 1) / total
-        time.sleep(1.0)
+        time.sleep(0.5)
             
     task_dict["running"] = False
     task_dict["finished"] = True
@@ -297,6 +300,11 @@ function requestAudioAndNotify() {
 </script>
 """, height=58)
 
+if not GEMINI_API_KEY:
+    user_key = st.sidebar.text_input("🔑 请输入 Gemini API Key:", type="password")
+    if user_key:
+        GEMINI_API_KEY = user_key
+
 uploaded_files = st.file_uploader(
     "批量上传宣传图 (支持 JPG/PNG，可多选)", 
     type=["jpg", "jpeg", "png"],
@@ -308,18 +316,21 @@ if uploaded_files:
     
     if not task["running"]:
         if st.button("🚀 开始极速后台批量分析", type="primary"):
-            task["running"] = True
-            task["finished"] = False
-            task["notified"] = False
-            task["progress"] = 0.0
-            task["results"] = []
-            task["errors"] = []
-            task["status_msg"] = "正在启动 Gemini 高速引擎..."
-            
-            files_data = [(f.name, f.getvalue()) for f in uploaded_files]
-            t = threading.Thread(target=background_worker, args=(files_data, task, GEMINI_API_KEY), daemon=True)
-            t.start()
-            st.rerun()
+            if not GEMINI_API_KEY:
+                st.error("❌ 请先配置 Gemini API Key！")
+            else:
+                task["running"] = True
+                task["finished"] = False
+                task["notified"] = False
+                task["progress"] = 0.0
+                task["results"] = []
+                task["errors"] = []
+                task["status_msg"] = "正在启动 Gemini 高速引擎..."
+                
+                files_data = [(f.name, f.getvalue()) for f in uploaded_files]
+                t = threading.Thread(target=background_worker, args=(files_data, task, GEMINI_API_KEY), daemon=True)
+                t.start()
+                st.rerun()
 
 if task["running"]:
     st.info(task["status_msg"])
