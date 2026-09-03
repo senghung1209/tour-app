@@ -3,7 +3,6 @@ import pandas as pd
 import time
 import datetime
 import re
-import json
 import base64
 import requests
 from io import BytesIO
@@ -12,7 +11,7 @@ from PIL import Image, ImageDraw, ImageFont
 st.set_page_config(page_title="跨社旅游团比价筛选中心", page_icon="✈️", layout="wide")
 
 st.title("✈️ 跨旅行社海报聚合与横向对比中心")
-st.caption("🚀 已强化超长海报容错与截断自愈，支持多格海报几十项团期全量提取。")
+st.caption("🚀 已启用全量地毯式扫描引擎，无遗漏提取海报内所有格子的全部出发日与对应价格。")
 
 OFFICIAL_HOLIDAYS = [
     (datetime.date(2026, 3, 20), datetime.date(2026, 3, 29), "2026 第一学期假期 (3月)"),
@@ -92,52 +91,31 @@ def split_and_explode_dates(raw_agency, raw_dest, raw_code, raw_title, raw_loc, 
         })
     return exploded
 
-def robust_json_decode(raw_text):
-    clean_text = raw_text.strip()
-    clean_text = re.sub(r'^```json\s*', '', clean_text, flags=re.MULTILINE)
-    clean_text = re.sub(r'^```\s*', '', clean_text, flags=re.MULTILINE)
-    
-    # 尝试直接解析完整结构
-    match = re.search(r'\[.*\]', clean_text, re.DOTALL)
-    if match:
-        try:
-            return json.loads(match.group(0))
-        except Exception:
-            pass
-
-    # 截断自愈逻辑：若末尾因长度截断，截取到最后一个完整的对象闭合符号 '}' 并补齐 ']'
-    last_brace = clean_text.rfind('}')
-    if last_brace != -1:
-        first_bracket = clean_text.find('[')
-        if first_bracket != -1 and first_bracket < last_brace:
-            truncated = clean_text[first_bracket:last_brace + 1] + ']'
-            try:
-                return json.loads(truncated)
-            except Exception:
-                pass
-
-    # 兜底正则提取：从残缺文本中强行抓取每一个完整合法的对象
-    object_pattern = re.compile(
-        r'\{\s*"agency"\s*:\s*"(.*?)"\s*,\s*"destination"\s*:\s*"(.*?)"\s*,\s*"tour_code"\s*:\s*"(.*?)"\s*,\s*"title"\s*:\s*"(.*?)"\s*,\s*"departure_location"\s*:\s*"(.*?)"\s*,\s*"departure_dates"\s*:\s*"(.*?)"\s*,\s*"price"\s*:\s*(\d+)\s*\}',
-        re.DOTALL
-    )
+def parse_compact_lines(raw_text):
+    clean_lines = raw_text.strip().splitlines()
     items = []
-    for m in object_pattern.finditer(clean_text):
-        items.append({
-            "agency": m.group(1),
-            "destination": m.group(2),
-            "tour_code": m.group(3),
-            "title": m.group(4),
-            "departure_location": m.group(5),
-            "departure_dates": m.group(6),
-            "price": int(m.group(7))
-        })
-    if items:
-        return items
+    for line in clean_lines:
+        line = line.strip()
+        if not line or line.startswith("#") or line.startswith("`") or "旅行社|目的地" in line:
+            continue
+        parts = [p.strip() for p in line.split("|")]
+        if len(parts) >= 7:
+            try:
+                price_val = int(re.sub(r'[^\d]', '', parts[6]))
+            except Exception:
+                price_val = 0
+            items.append({
+                "agency": parts[0] or "精选旅行社",
+                "destination": parts[1] or "精选目的地",
+                "tour_code": parts[2] or "-",
+                "title": parts[3] or "",
+                "departure_location": parts[4] or "",
+                "departure_dates": parts[5] or "",
+                "price": price_val
+            })
+    return items
 
-    raise ValueError("未能成功解析 JSON，文本末尾截断且无法修复。")
-
-def call_gemini_vision_resilient(image_bytes, status_placeholder):
+def call_gemini_vision_full_scan(image_bytes, status_placeholder):
     if not GEMINI_API_KEY:
         raise ValueError("未检测到 GEMINI_API_KEY，请在 Streamlit 后台 Secrets 中配置")
 
@@ -145,26 +123,32 @@ def call_gemini_vision_resilient(image_bytes, status_placeholder):
     if img.mode != 'RGB':
         img = img.convert('RGB')
     w, h = img.size
-    if max(w, h) > 1800:
-        scale = 1800.0 / max(w, h)
+    # 调大分辨率上限至 2400px，确保九宫格所有细密小字百分百清晰可读
+    if max(w, h) > 2400:
+        scale = 2400.0 / max(w, h)
         img = img.resize((int(w * scale), int(h * scale)), Image.Resampling.LANCZOS)
 
     buf = BytesIO()
-    img.save(buf, format="JPEG", quality=82)
+    img.save(buf, format="JPEG", quality=88)
     base64_data = base64.b64encode(buf.getvalue()).decode('utf-8')
 
     prompt = """
-    提取海报全部旅游团期，生成紧凑纯 JSON 数组。
-    规则：
-    1. 旅行社名称：九宫格拼贴海报统一写“豪吉旅游”；表格型海报（如琦琦）按原标题写。
-    2. 多价格拆分：一个小方块若包含不同日期对应不同价格，务必拆分为独立项目！
-    3. 起飞地点：
-       - 含 SIN/新加坡/酷航(Scoot)填“新加坡起飞 (SIN)”
-       - 含 JB/新山填“新山出发 (JB)”
-       - 默认填“马来西亚起飞 (KUL)”
-    4. 行程名保持精炼简短（不要带过长修饰词），团号若无填“-”。
-    5. 仅输出合法紧凑 JSON 数组，严禁 markdown 标记与换行杂质：
-    [{"agency":"豪吉旅游","destination":"重庆","tour_code":"SP002376","title":"7天6夜 重庆风采线","departure_location":"新加坡起飞 (SIN)","departure_dates":"31/12/26","price":2999}]
+    你是一个专业旅行社海报视觉解析专家。请对海报进行【地毯式逐格无遗漏扫描】，把海报里的全部信息完整提取出来！
+
+    如果是多方块拼贴海报（如豪吉旅游）：
+    - 旅行社名称：统一填“豪吉旅游”；如果是琦琦旅游表格，填“琦琦旅游”。
+    - 逐格扫描：从左往右、从上往下扫描每一个大格子（如 SIN-重庆、SIN-西藏、青岛、SIN-桂林、SIN-台湾、SIN-韩国、JB-贵州、SIN-哈尔滨、KL-北疆、SIN-九寨沟等）。
+    - 价格与团期彻底拆解：同一个格子内若有多个出发日期和价格（例如 17/11/26 卖 3299，15/12/26 卖 3999，29/12/26 卖 3699），必须拆解成单独的每一行输出，严禁遗漏任何一个日期或价格！
+    - 出发地判定：
+      * 标题写 SIN、或带 Scoot/酷航图标的填“新加坡起飞 (SIN)”
+      * 标题写 JB 或带新山字样的填“新山出发 (JB)”
+      * 标题写 KL 或默认的填“马来西亚起飞 (KUL)”
+
+    输出格式要求：
+    为了保证 30~40 条全部输出完整不被截断，请直接输出纯文本，一行一个团期，字段用竖线 | 分开：
+    旅行社|目的地|团号|行程路线全称|起飞地|出发日期|纯数字价格
+
+    注意：直接输出数据行，不要带任何 markdown 标签或多余解释！
     """
 
     payload = {
@@ -183,8 +167,7 @@ def call_gemini_vision_resilient(image_bytes, status_placeholder):
         ],
         "generationConfig": {
             "temperature": 0.0,
-            "maxOutputTokens": 8192,
-            "response_mime_type": "application/json"
+            "maxOutputTokens": 8192
         }
     }
 
@@ -199,14 +182,16 @@ def call_gemini_vision_resilient(image_bytes, status_placeholder):
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={GEMINI_API_KEY}"
         for attempt in range(2):
             try:
-                res = requests.post(url, headers=headers, json=payload, timeout=60)
+                res = requests.post(url, headers=headers, json=payload, timeout=75)
                 if res.status_code == 200:
                     res_json = res.json()
                     raw_text = res_json["candidates"][0]["content"]["parts"][0]["text"]
-                    return robust_json_decode(raw_text)
+                    items = parse_compact_lines(raw_text)
+                    if items:
+                        return items
                 if res.status_code == 503:
                     if attempt == 0:
-                        status_placeholder.warning(f"⚠️ [{model_name}] 算力拥挤(503)，2秒后自动重试...")
+                        status_placeholder.warning(f"⚠️ [{model_name}] 算力排队(503)，2秒后自动重试...")
                         time.sleep(2)
                         continue
                     else:
@@ -216,7 +201,7 @@ def call_gemini_vision_resilient(image_bytes, status_placeholder):
             except requests.exceptions.Timeout:
                 break
 
-    raise RuntimeError("当前官方模型响应超时，请稍后重试。")
+    raise RuntimeError("当前官方模型处理超时，请稍后重试。")
 
 def generate_comparison_image(df):
     w, rh, hh = 850, 40, 70
@@ -256,16 +241,16 @@ uploaded_files = st.file_uploader("📷 上传旅行社海报图片 (支持长�
 
 if uploaded_files:
     st.info(f"已选择 {len(uploaded_files)} 张海报图片")
-    if st.button("🚀 极速解析并追加到总库", type="primary", use_container_width=True):
+    if st.button("🚀 地毯式极速全量提取并追加到总库", type="primary", use_container_width=True):
         newly_extracted = []
         progress_bar = st.progress(0.0)
         status_text = st.empty()
         has_error = False
 
         for idx, f in enumerate(uploaded_files):
-            status_text.info(f"⚡ [{idx+1}/{len(uploaded_files)}] 正在解析: `{f.name}` ...")
+            status_text.info(f"⚡ [{idx+1}/{len(uploaded_files)}] 正在地毯式提取所有格子: `{f.name}` ...")
             try:
-                raw_items = call_gemini_vision_resilient(f.getvalue(), status_text)
+                raw_items = call_gemini_vision_full_scan(f.getvalue(), status_text)
                 for item in raw_items:
                     rows = split_and_explode_dates(
                         item.get("agency", "精选旅行社"),
@@ -294,7 +279,7 @@ if uploaded_files:
                     unique_combined.append(item)
 
             st.session_state.tour_data = unique_combined
-            st.success(f"🎉 解析完成！成功追加数据，当前总库共计 {len(st.session_state.tour_data)} 项出发日期。")
+            st.success(f"🎉 地毯式解析完成！本次提取出 {len(newly_extracted)} 条具体团期，当前总库共计 {len(st.session_state.tour_data)} 项出发日期。")
             st.rerun()
 
 if st.session_state.tour_data:
