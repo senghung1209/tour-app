@@ -41,6 +41,32 @@ st.session_state.tour_data = load_persisted_data()
 
 st.title("✈️ 跨旅行社海报聚合与横向对比中心")
 
+# 高清中文字体自动获取（已前置定义，解决 NameError）
+@st.cache_resource
+def get_chinese_font(font_size=15):
+    font_paths = [
+        "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
+        "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+        "wqy-microhei.ttc"
+    ]
+    for p in font_paths:
+        if os.path.exists(p):
+            try:
+                return ImageFont.truetype(p, font_size)
+            except Exception:
+                pass
+
+    local_font = "wqy-microhei.ttc"
+    if not os.path.exists(local_font):
+        try:
+            url = "https://github.com/anthonyfok/fonts-wqy-microhei/raw/master/wqy-microhei.ttc"
+            urllib.request.urlretrieve(url, local_font)
+            return ImageFont.truetype(local_font, font_size)
+        except Exception:
+            pass
+    return ImageFont.load_default()
+
 @st.cache_resource
 def get_loud_wav_base64():
     sample_rate = 22050
@@ -171,7 +197,6 @@ def normalize_departure_location(raw_loc, raw_title):
         return "🇲🇾 新山出发 (JB)"
     return "🇲🇾 马来西亚起飞 (KUL)"
 
-# 专用解析：豪吉旅游海报
 def parse_haoji_text(raw_text):
     items = []
     for line in raw_text.strip().splitlines():
@@ -195,7 +220,6 @@ def parse_haoji_text(raw_text):
             })
     return items
 
-# 专用解析：琦琦旅游表格海报
 def parse_qiqi_text(raw_text):
     items = []
     for line in raw_text.strip().splitlines():
@@ -203,7 +227,6 @@ def parse_qiqi_text(raw_text):
         if not line or line.startswith("#") or "序号|出发日期" in line:
             continue
         parts = [p.strip() for p in line.split("|")]
-        # 琦琦格式：序号 | 出发日期 | 天数 | 行程亮点 | 航空 | 团费
         if len(parts) >= 6:
             try:
                 price_val = int(re.sub(r'[^\d]', '', parts[5]))
@@ -212,19 +235,15 @@ def parse_qiqi_text(raw_text):
             
             days_str = parts[2] or "6天5夜"
             title_str = f"{days_str} {parts[3]}"
-            
-            # 从行程亮点提取纯地名作为目的地
             raw_dest = parts[3]
             clean_dest = raw_dest.split("+")[0].split(" ")[0].strip()
-            
-            # 航空判断起飞地
             airline = parts[4].upper()
             loc = "新加坡起飞 (SIN)" if "TR" in airline else "马来西亚起飞 (KUL)"
 
             items.append({
                 "agency": "琦琦旅游",
                 "destination": clean_dest if clean_dest else "精选目的地",
-                "tour_code": f"QIQI-{parts[0]}",  # 用专属前缀避免序号污染
+                "tour_code": f"QIQI-{parts[0]}",
                 "title": title_str,
                 "departure_location": loc,
                 "departure_dates": parts[1],
@@ -333,15 +352,12 @@ if uploaded_files:
             img = Image.open(BytesIO(img_bytes))
             w, h = img.size
 
-            # 自动特征识别版式
-            # 琦琦是单张高瘦表格 (h > w * 1.3 且没有 SP 团号特征，或者名称带 qiqi)
             filename_upper = f.name.upper()
             if "QIQI" in filename_upper or h < w * 1.35:
                 status_box.markdown(f"**[{f_idx+1}/{total_files}]** 🔍 正在独立扫描琦琦旅游超值表格...")
                 progress_bar.progress(0.5)
                 raw_items = call_gemini_vision(img_bytes, "qiqi")
             else:
-                # 豪吉拼贴海报切片
                 status_box.markdown(f"**[{f_idx+1}/{total_files}]** 🔍 正在分区域扫描豪吉海报...")
                 progress_bar.progress(0.25)
                 r1 = call_gemini_vision(img.crop((0, 0, w, int(h * 0.58))).tobytes(), "haoji")
