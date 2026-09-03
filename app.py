@@ -15,7 +15,6 @@ st.set_page_config(page_title="AI 旅游团智能筛选助手", page_icon="✈�
 st.title("✈️ 旅游团宣传单智能分析与筛选 (OpenRouter 极速高精版)")
 st.markdown("搭载前沿视觉多模态引擎：零企业认证墙、秒级多图解析、精准区分出发机场与 2026 学校假期。")
 
-# 已配置你的 OpenRouter 专属密钥
 OPENROUTER_API_KEY = "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"
 
 OFFICIAL_HOLIDAYS = [
@@ -201,52 +200,66 @@ def analyze_single_image(file_bytes, file_name, api_key):
         "3. 只输出有效数据行，绝不输出任何多余废话或表头！"
     )
 
+    candidate_models = [
+        "qwen/qwen-2.5-vl-72b-instruct",
+        "meta-llama/llama-3.2-11b-vision-instruct:free",
+        "google/gemini-2.0-flash-exp:free"
+    ]
+    
     url = "https://openrouter.ai/api/v1/chat/completions"
     headers = {
         "Authorization": f"Bearer {api_key.strip()}",
-        "Content-Type": "application/json"
+        "Content-Type": "application/json",
+        "HTTP-Referer": "https://senghung-tour.streamlit.app",
+        "X-Title": "Tour Poster Analyzer"
     }
-    payload = {
-        "model": "qwen/qwen-2.5-vl-72b-instruct:free",
-        "messages": [
-            {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": prompt},
-                    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{encoded_string}"}}
-                ]
-            }
-        ],
-        "temperature": 0.1
-    }
-    
-    response = requests.post(url, headers=headers, json=payload, timeout=90)
-    
-    if response.status_code == 200:
-        res_json = response.json()
+
+    last_error = ""
+    for model_name in candidate_models:
+        payload = {
+            "model": model_name,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": prompt},
+                        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{encoded_string}"}}
+                    ]
+                }
+            ],
+            "temperature": 0.1
+        }
+        
         try:
-            content = res_json['choices'][0]['message']['content'].strip()
-            items = parse_pipe_lines(content)
-            if items:
-                unique_list = []
-                seen = set()
-                for it in items:
-                    k = (it["tour_code"], it["destination"], it["departure_location"], it["price_numeric"])
-                    if it["tour_code"] and k in seen:
-                        continue
-                    seen.add(k)
-                    unique_list.append(it)
-                return unique_list
-        except Exception:
-            pass
-        raise Exception("未能成功解析出有效旅游团行")
-    else:
-        err_msg = response.text
-        try:
-            err_msg = response.json().get("error", {}).get("message", response.text)
-        except Exception:
-            pass
-        raise Exception(f"接口报错 ({response.status_code}): {err_msg}")
+            response = requests.post(url, headers=headers, json=payload, timeout=90)
+            if response.status_code == 200:
+                res_json = response.json()
+                content = res_json['choices'][0]['message']['content'].strip()
+                items = parse_pipe_lines(content)
+                if items:
+                    unique_list = []
+                    seen = set()
+                    for it in items:
+                        k = (it["tour_code"], it["destination"], it["departure_location"], it["price_numeric"])
+                        if it["tour_code"] and k in seen:
+                            continue
+                        seen.add(k)
+                        unique_list.append(it)
+                    return unique_list
+            elif response.status_code == 404:
+                continue
+            else:
+                err_msg = response.text
+                try:
+                    err_msg = response.json().get("error", {}).get("message", response.text)
+                except Exception:
+                    pass
+                last_error = f"{model_name} 报错 ({response.status_code}): {err_msg}"
+        except Exception as e:
+            last_error = str(e)
+            continue
+
+    raise Exception(last_error if last_error else "未能匹配可用模型端点")
 
 def background_worker(files_data, task_dict, api_key):
     total = len(files_data)
