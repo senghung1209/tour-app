@@ -12,7 +12,7 @@ from PIL import Image, ImageDraw, ImageFont
 st.set_page_config(page_title="跨社旅游团比价筛选中心", page_icon="✈️", layout="wide")
 
 st.title("✈️ 跨旅行社海报聚合与横向对比中心 (Gemini 官方极速版)")
-st.markdown("已接入 Google 官方新一代视觉通道，具备模型动态自动探测能力。")
+st.markdown("已接入 Google 官方视觉通道与航司智能起飞地分类，支持按马/新起飞清晰筛选。")
 
 OFFICIAL_HOLIDAYS = [
     (datetime.date(2026, 3, 20), datetime.date(2026, 3, 29), "2026 第一学期假期 (3月)"),
@@ -51,12 +51,21 @@ def evaluate_holiday_fit(departure_date_str, duration_days):
         pass
     return 'none', 0, ""
 
+def normalize_departure_location(raw_loc, raw_title):
+    """根据地点描述或航班代号，精准规范化为马来西亚或新加坡"""
+    s = f"{raw_loc} {raw_title}".upper()
+    if any(k in s for k in ["新加坡", "SIN", "CHANGI", "TR"]):
+        return "🇸🇬 新加坡起飞 (SIN)"
+    return "🇲🇾 马来西亚起飞 (KUL)"
+
 def split_and_explode_dates(raw_agency, raw_dest, raw_code, raw_title, raw_loc, raw_dates_str, raw_price):
     days = extract_tour_days(raw_title)
     try:
         clean_price = int(re.sub(r'[^\d]', '', str(raw_price)))
     except Exception:
         clean_price = 0
+
+    norm_loc = normalize_departure_location(raw_loc, raw_title)
 
     date_tokens = re.findall(r'\b\d{1,2}[/.-]\d{1,2}(?:[/.-]\d{2,4})?\b', str(raw_dates_str))
     if not date_tokens:
@@ -70,7 +79,7 @@ def split_and_explode_dates(raw_agency, raw_dest, raw_code, raw_title, raw_loc, 
             "destination": str(raw_dest or "精选路线"),
             "tour_code": str(raw_code or "-"),
             "title": str(raw_title or ""),
-            "departure_location": str(raw_loc or "SIN/KUL出发"),
+            "departure_location": norm_loc,
             "departure_dates": str(d_token),
             "price_numeric": clean_price,
             "price_text": f"RM {clean_price}",
@@ -124,14 +133,15 @@ def call_gemini_official_vision(image_bytes):
     你是一个专业旅游海报解析引擎。请仔细阅读海报并提取所有旅游团信息。
     重要规则：
     1. 一个行程若有多个出发日期（例如 '14/10, 18/10, 24/10'），必须在 departure_dates 字段中把它们全部完整列出，用逗号分隔，绝不能漏掉任何一个。
-    2. 只输出纯 JSON 数组，严禁包含任何 Markdown 格式或额外文字说明：
+    2. 注意特别提示：如果某行写有“新加坡起飞”或属于 TR (酷航)，departure_location 填写“新加坡起飞 (SIN)”；否则填写“马来西亚起飞 (KUL)”。
+    3. 只输出纯 JSON 数组，严禁包含任何 Markdown 格式或额外文字说明：
     [
       {
         "agency": "旅行社名称(如 豪吉旅游/琦琦旅游)",
         "destination": "目的地(如 重庆/云南/台湾)",
         "tour_code": "团号(如 SP002376/QQ001)",
         "title": "完整路线标题",
-        "departure_location": "起飞机场(如 SIN/KUL/JB出发)",
+        "departure_location": "起飞机场(新加坡起飞/马来西亚起飞)",
         "departure_dates": "全部出发日期(如 26/10, 28/10)",
         "price": 2999
       }
@@ -196,7 +206,7 @@ def generate_comparison_image(df):
 
     y = hh + 10
     draw.rectangle([15, y, w - 15, y + 28], fill=(226, 232, 240))
-    cols = [("旅行社", 25), ("目的地", 160), ("团号", 240), ("出发日期", 330), ("价格", 440), ("行程名称", 540)]
+    cols = [("旅行社", 25), ("目的地", 160), ("团号", 240), ("出发日期", 330), ("价格", 440), ("起飞地", 530), ("行程名称", 670)]
     for name, x in cols:
         draw.text((x, y + 7), name, fill=(30, 41, 59), font=font)
 
@@ -207,7 +217,8 @@ def generate_comparison_image(df):
         draw.text((240, y), str(r['tour_code'])[:10], fill=(71, 85, 105), font=font)
         draw.text((330, y), str(r['departure_dates'])[:12], fill=(30, 41, 59), font=font)
         draw.text((440, y), str(r['price_text']), fill=(220, 38, 38), font=font)
-        draw.text((540, y), str(r['title'])[:22], fill=(71, 85, 105), font=font)
+        draw.text((530, y), str(r['departure_location'])[:12], fill=(2, 132, 199), font=font)
+        draw.text((670, y), str(r['title'])[:16], fill=(71, 85, 105), font=font)
         y += rh
 
     buf = BytesIO()
@@ -245,7 +256,7 @@ if uploaded_files:
                         item.get("destination", "精选路线"),
                         item.get("tour_code", "-"),
                         item.get("title", ""),
-                        item.get("departure_location", "SIN/KUL出发"),
+                        item.get("departure_location", "KUL"),
                         item.get("departure_dates", ""),
                         item.get("price", 0)
                     )
@@ -269,14 +280,12 @@ if st.session_state.tour_data:
     df = pd.DataFrame(st.session_state.tour_data)
     df['price_numeric'] = pd.to_numeric(df['price_numeric'], errors='coerce').fillna(0).astype(int)
 
-    # 快捷校对编辑面板
     with st.expander("🛠️ 快速数据校对面板 (双击可修改文字/价格，可自主增删行)", expanded=False):
         edited_df = st.data_editor(df, num_rows="dynamic", use_container_width=True)
         if not edited_df.equals(df):
             st.session_state.tour_data = edited_df.to_dict('records')
             st.rerun()
 
-    # 侧边栏筛选器（安全字符串转换与排序）
     st.sidebar.header("🎛️ 筛选条件")
     
     clean_agencies = sorted(list({str(a) for a in df['agency'] if pd.notna(a) and str(a).strip()}))
@@ -285,8 +294,8 @@ if st.session_state.tour_data:
     clean_dests = sorted(list({str(d) for d in df['destination'] if pd.notna(d) and str(d).strip()}))
     selected_dest = st.sidebar.selectbox("选择目的地", ["全部"] + clean_dests)
 
-    clean_locs = sorted(list({str(l) for l in df['departure_location'] if pd.notna(l) and str(l).strip()}))
-    loc_options = ["全部", "🇲🇾 全马/新出发 (KUL/JB/SIN)"] + clean_locs
+    # 清爽分明的起飞地选项
+    loc_options = ["全部", "🇲🇾 马来西亚起飞 (KUL)", "🇸🇬 新加坡起飞 (SIN)"]
     selected_loc = st.sidebar.selectbox("选择起飞地点", loc_options)
 
     selected_hol = st.sidebar.selectbox("🗓️ 学校假期筛选", ["全部日期", "🎒 包含学校假期 (含超出2天内)", "✨ 严格在学校假期内 (0超出)", "💼 仅平时非假期"])
@@ -297,10 +306,7 @@ if st.session_state.tour_data:
     if selected_dest != "全部":
         filtered_df = filtered_df[filtered_df['destination'] == selected_dest]
 
-    if selected_loc == "🇲🇾 全马/新出发 (KUL/JB/SIN)":
-        kw = ["KUL", "吉隆坡", "JB", "新山", "SIN", "新加坡"]
-        filtered_df = filtered_df[filtered_df['departure_location'].apply(lambda l: any(k in str(l) for k in kw))]
-    elif selected_loc != "全部":
+    if selected_loc != "全部":
         filtered_df = filtered_df[filtered_df['departure_location'] == selected_loc]
 
     if selected_hol == "🎒 包含学校假期 (含超出2天内)":
