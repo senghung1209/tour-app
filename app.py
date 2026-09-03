@@ -15,8 +15,8 @@ st.set_page_config(page_title="AI 旅游团智能筛选助手", page_icon="✈�
 st.title("✈️ 旅游团宣传单智能分析与筛选 (Gemini 官方极速版)")
 st.markdown("已接入 Google 原生视觉多模态引擎：秒级高精解析、海报价格全动态联动与 2026 学校假期智能匹配。")
 
-# 已配置你的最新 Google API Key
-GEMINI_API_KEY = "AQ.Ab8RN6J7-wX8unetV6tuQ0CL34ObTeoaH1RYaGFxqsi8jLdquQ"
+# 已更新为你刚刚激活的新 Gemini 官方 API Key
+GEMINI_API_KEY = "AQ.Ab8RN6JUwph7e5lEbLem_xZvev1hSA6ab0kn_qrCmcdDDR7phQ"
 
 OFFICIAL_HOLIDAYS = [
     (datetime.date(2026, 3, 20), datetime.date(2026, 3, 29), "2026 第一学期假期 (3月)"),
@@ -196,7 +196,7 @@ def analyze_single_image(file_bytes, file_name, api_key):
         "4. 只输出有效数据行，绝不输出任何多余说明或表头！"
     )
 
-    models_to_try = ["gemini-1.5-flash", "gemini-flash-latest"]
+    models_to_try = ["gemini-2.5-flash", "gemini-1.5-flash"]
     last_err = ""
 
     for m_name in models_to_try:
