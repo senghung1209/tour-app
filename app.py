@@ -4,6 +4,7 @@ import datetime
 import re
 import os
 import json
+import base64
 import time
 import urllib.request
 import requests
@@ -36,14 +37,14 @@ if "tour_data" not in st.session_state:
 
 st.title("✈️ 跨旅行社海报聚合与横向对比中心")
 
-# 声音提醒前端激活组件
+# 顶部系统通知与媒体音频双重激活卡片
 auth_html = """
-<div style="background: #f0fdf4; border: 1.5px solid #22c55e; border-radius: 8px; padding: 10px; margin-bottom: 15px;">
-    <div style="font-size: 13px; color: #166534; margin-bottom: 6px;">
-        🔔 提示音设置：点击下方绿色按钮可测试与激活完成提醒音频（分析完自动出声）：
+<div style="background: #eff6ff; border: 1.5px solid #3b82f6; border-radius: 8px; padding: 10px; margin-bottom: 15px;">
+    <div style="font-size: 13px; color: #1e40af; margin-bottom: 6px;">
+        🔔 提示音设置：点击下方按钮激活系统通知权限与铃声（手机通知铃声 + 提示音双保险）：
     </div>
-    <button id="auth_btn" style="background: #16a34a; color: white; border: none; padding: 8px 14px; border-radius: 6px; font-weight: bold; font-size: 13px; cursor: pointer;">
-        👉 点击激活提示音
+    <button id="auth_btn" style="background: #2563eb; color: white; border: none; padding: 8px 16px; border-radius: 6px; font-weight: bold; font-size: 13px; cursor: pointer;">
+        👉 点击开启系统通知铃声与提示音
     </button>
 </div>
 <script>
@@ -60,20 +61,25 @@ document.getElementById('auth_btn').addEventListener('click', function() {
         gain.connect(window.audioCtx.destination);
         osc.start();
         osc.stop(window.audioCtx.currentTime + 0.2);
-        alert("提示音已成功激活！");
-    } catch(e) {
-        alert("提示音激活成功！");
+    } catch(e) {}
+
+    if ("Notification" in window) {
+        Notification.requestPermission().then(function(perm) {
+            alert("提示音与通知权限已激活！当前状态: " + perm);
+        });
+    } else {
+        alert("提示音已激活！");
     }
 });
 </script>
 """
 components.html(auth_html, height=95)
 
-def trigger_done_sound():
-    js = """
+def trigger_done_sound(count_num):
+    js = f"""
     <script>
-    (function() {
-        try {
+    (function() {{
+        try {{
             const ctx = new (window.AudioContext || window.webkitAudioContext)();
             const now = ctx.currentTime;
             const osc = ctx.createOscillator();
@@ -87,8 +93,15 @@ def trigger_done_sound():
             gain.connect(ctx.destination);
             osc.start(now);
             osc.stop(now + 0.8);
-        } catch(e) {}
-    })();
+        }} catch(e) {{}}
+
+        if ("Notification" in window && Notification.permission === "granted") {{
+            new Notification("🎉 海报解析全部完成！", {{
+                body: "本次成功提取并更新了 " + {count_num} + " 条团期！",
+                icon: "✈️"
+            }});
+        }}
+    }})();
     </script>
     """
     components.html(js, height=0)
@@ -157,7 +170,7 @@ def split_and_explode_dates(raw_agency, raw_dest, raw_code, raw_title, raw_loc, 
     for d_token in date_tokens:
         status, over_days, hol_name = evaluate_holiday_fit(d_token, days)
         exploded.append({
-            "agency": str(raw_agency or "豪吉旅游"),
+            "agency": str(raw_agency or "精选旅行社"),
             "destination": str(raw_dest or "精选路线"),
             "tour_code": str(raw_code or "-"),
             "title": str(raw_title or ""),
@@ -185,7 +198,7 @@ def parse_compact_lines(raw_text):
             except Exception:
                 price_val = 0
             items.append({
-                "agency": parts[0] or "豪吉旅游",
+                "agency": parts[0] or "精选旅行社",
                 "destination": parts[1] or "精选目的地",
                 "tour_code": parts[2] or "-",
                 "title": parts[3] or "",
@@ -195,9 +208,9 @@ def parse_compact_lines(raw_text):
             })
     return items
 
-def call_gemini_vision_chunk(img_chunk, chunk_name, hint_text):
+def call_gemini_vision_chunk(img_chunk, chunk_name, hint_text=""):
     if not GEMINI_API_KEY:
-        st.error("未检测到 GEMINI_API_KEY，请检查 Secrets 配置")
+        st.error("未检测到 GEMINI_API_KEY，请在 Secrets 中配置")
         return []
 
     buf = BytesIO()
@@ -206,13 +219,14 @@ def call_gemini_vision_chunk(img_chunk, chunk_name, hint_text):
 
     prompt = f"""
     你是高精度海报视觉专家，正在扫描海报【{chunk_name}】。
-    请全量提取该图内的全部旅游团期，必须涵盖：{hint_text}
+    请全量提取画面内的全部旅游团期信息。
+    {f"关注参考区域: {hint_text}" if hint_text else ""}
 
-    规则：
-    1. 【多日期彻底拆分】：若一个格子有多个出发日（例如 26/10, 28/10 对应 2699；或者 12/10/26, 25/5/27 对应 6999），每一个出发日必须单独输出一行！
-    2. 旅行社：统一写“豪吉旅游”；若是琦琦长表格写“琦琦旅游”。
-    3. 起飞地点：含 SIN/新加坡/酷航 填“新加坡起飞 (SIN)”；含 JB/新山 填“新山出发 (JB)”；默认填“马来西亚起飞 (KUL)”。
-    4. 纯文本逐行输出，以竖线 | 分隔，不要输出任何代码块标签：
+    核心提取规则：
+    1. 【多日期彻底拆分】：若一个格子或行包含多个出发日（例如 26/10, 28/10 对应 2699；或者 12/10/26, 25/5/27 对应 6999），每一个出发日必须单独拆成一行输出！
+    2. 旅行社判断：若海报包含 SP 团号或豪吉标志，填“豪吉旅游”；若是表格型海报填其实际名称（如“琦琦旅游”）。
+    3. 起飞地点判断：含 SIN/新加坡/酷航 填“新加坡起飞 (SIN)”；含 JB/新山 填“新山出发 (JB)”；默认填“马来西亚起飞 (KUL)”。
+    4. 纯文本逐行输出，以竖线 | 分隔，严禁 markdown 代码块或说明文字：
     旅行社|目的地|团号|行程路线全称|起飞地|出发日期|纯数字价格
     """
 
@@ -250,7 +264,6 @@ def call_gemini_vision_chunk(img_chunk, chunk_name, hint_text):
                 break
     return []
 
-# 高清中文字体自动获取
 @st.cache_resource
 def get_chinese_font(font_size=15):
     font_paths = [
@@ -327,11 +340,11 @@ def generate_comparison_image(df):
     img.save(buf, format="PNG", quality=95)
     return buf.getvalue()
 
-uploaded_files = st.file_uploader("📷 上传旅行社海报图片 (长表/拼贴海报，自动追加保存)", type=["jpg", "jpeg", "png"], accept_multiple_files=True)
+uploaded_files = st.file_uploader("📷 上传旅行社海报图片 (支持长表/拼贴海报，自动追加保存)", type=["jpg", "jpeg", "png"], accept_multiple_files=True)
 
 if uploaded_files:
     st.info(f"已选择 {len(uploaded_files)} 张海报图片")
-    if st.button("🚀 启动全量 61 项地毯式扫描并入库", type="primary", use_container_width=True):
+    if st.button("🚀 启动全量深度扫描并追加到总库", type="primary", use_container_width=True):
         newly_extracted = []
         progress_bar = st.progress(0.0)
         status_box = st.empty()
@@ -345,32 +358,32 @@ if uploaded_files:
             w, h = img.size
 
             if h > w * 1.2:
-                # 黄金切割：上半区 58%，下半区从 46% 到底
+                # 针对多格长图采用宽幅安全双半区重叠扫描
                 box_top = (0, 0, w, int(h * 0.58))
                 box_bottom = (0, int(h * 0.46), w, h)
 
                 status_box.markdown(f"**[{f_idx+1}/{total_files}]** 🔍 正在扫描上半区 (重庆 / 西藏 / 青岛 / 桂林 / 台湾 / 韩国)...")
                 progress_bar.progress(0.25)
-                hint_top = "SIN-重庆(约12条)、SIN-西藏(约5条)、青岛(约3条)、SIN-桂林(约3条)、SIN-台湾(约6条)、SIN-韩国(约4条)"
+                hint_top = "重庆、西藏、青岛、桂林、台湾、韩国"
                 r1 = call_gemini_vision_chunk(img.crop(box_top), "上半区", hint_top)
 
                 status_box.markdown(f"**[{f_idx+1}/{total_files}]** 🔍 正在扫描下半区 (贵州 / 哈尔滨 / 北疆 / 九寨沟)...")
                 progress_bar.progress(0.75)
-                hint_bottom = "JB-贵州(约13条全部日期)、SIN-哈尔滨(约9条全部日期)、KL-北疆(约4条全部日期)、SIN-九寨沟(约2条全部日期)"
+                hint_bottom = "贵州全部、哈尔滨全部、北疆全部、九寨沟全部"
                 r2 = call_gemini_vision_chunk(img.crop(box_bottom), "下半区", hint_bottom)
 
                 raw_items = r1 + r2
             else:
-                status_box.markdown(f"**[{f_idx+1}/{total_files}]** 🔍 正在扫描表格海报...")
+                status_box.markdown(f"**[{f_idx+1}/{total_files}]** 🔍 正在扫描全幅表格海报...")
                 progress_bar.progress(0.5)
                 raw_items = call_gemini_vision_chunk(img, "全幅表格", "所有表格行")
 
             progress_bar.progress(1.0)
-            status_box.markdown("✨ 正在汇总并计算团期假期匹配度...")
+            status_box.markdown("✨ 正在汇总并去重...")
 
             for item in raw_items:
                 rows = split_and_explode_dates(
-                    item.get("agency", "豪吉旅游"),
+                    item.get("agency", "精选旅行社"),
                     item.get("destination", "精选路线"),
                     item.get("tour_code", "-"),
                     item.get("title", ""),
@@ -392,7 +405,7 @@ if uploaded_files:
 
             st.session_state.tour_data = unique_combined
             save_persisted_data(unique_combined)
-            trigger_done_sound()
+            trigger_done_sound(len(newly_extracted))
             st.success(f"🎉 扫描全部完成！本次成功提取出 **{len(newly_extracted)}** 条团期，已安全写入总库。")
             st.rerun()
 
@@ -408,7 +421,7 @@ if st.session_state.tour_data:
     df = pd.DataFrame(st.session_state.tour_data)
     df['price_numeric'] = pd.to_numeric(df['price_numeric'], errors='coerce').fillna(0).astype(int)
 
-    with st.expander(f"🛠️ 快速数据校对面板 (当前总库共有 {len(df)} 项，可直接修改/增删行)", expanded=False):
+    with st.expander(f"🛠️ 快速数据校对面板 (当前总库共有 {len(df)} 项，支持修改/增删行)", expanded=False):
         edited_df = st.data_editor(df, num_rows="dynamic", use_container_width=True)
         if not edited_df.equals(df):
             st.session_state.tour_data = edited_df.to_dict('records')
