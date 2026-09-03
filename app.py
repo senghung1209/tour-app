@@ -41,7 +41,7 @@ st.session_state.tour_data = load_persisted_data()
 
 st.title("✈️ 跨旅行社海报聚合与横向对比中心")
 
-# 生成真实高分贝清晰叮咚音频 (800Hz + 1200Hz WAV)
+# 生成真实高分贝清晰叮咚音频 (850Hz + 1200Hz WAV)
 @st.cache_resource
 def get_loud_wav_base64():
     sample_rate = 22050
@@ -67,8 +67,8 @@ def get_loud_wav_base64():
 
 LOUD_WAV_B64 = get_loud_wav_base64()
 
-# 纯原生即时触摸播放与手机震动卡片
-native_audio_html = f"""
+# 纯原生即时触摸播放与手机震动卡片（杜绝 f-string 大括号语法冲突）
+native_audio_html = """
 <div style="background: #eff6ff; border: 1.5px solid #3b82f6; border-radius: 8px; padding: 12px; margin-bottom: 15px;">
     <div style="font-weight: bold; font-size: 14px; color: #1e40af; margin-bottom: 5px;">
         🔊 手机完成提示音 & 强力震动服务
@@ -77,7 +77,7 @@ native_audio_html = f"""
         提示：请点击下方按钮测试响度。点击后手机将<b>立即鸣响并震动</b>，同时解锁浏览器后台出声权限：
     </div>
     <audio id="real_alert_sound" preload="auto">
-        <source src="data:audio/wav;base64,{LOUD_WAV_B64}" type="audio/wav">
+        <source src="data:audio/wav;base64,AUDIO_PLACEHOLDER" type="audio/wav">
     </audio>
     <button id="direct_play_btn" style="background: #2563eb; color: white; border: none; padding: 10px 20px; border-radius: 6px; font-weight: bold; font-size: 14px; width: 100%; cursor: pointer;">
         🔊 点击立即测试铃声与强力震动
@@ -92,20 +92,19 @@ document.getElementById('direct_play_btn').addEventListener('click', function(e)
     e.preventDefault();
     
     // 1. 物理震动（连续震动3下）
-    if ("vibrate" in navigator) {{
+    if ("vibrate" in navigator) {
         navigator.vibrate([250, 100, 250, 100, 400]);
-    }}
+    }
 
     // 2. 原生音频标签无延迟播放
     var audio = document.getElementById('real_alert_sound');
-    if (audio) {{
+    if (audio) {
         audio.currentTime = 0;
         audio.volume = 1.0;
-        audio.play().then(function() {{
+        audio.play().then(function() {
             document.getElementById('status_msg').style.display = 'block';
-        }}).catch(function(err) {{
-            // 备选 Web Audio 合成音
-            try {{
+        }).catch(function(err) {
+            try {
                 var ctx = new (window.AudioContext || window.webkitAudioContext)();
                 var osc = ctx.createOscillator();
                 var gain = ctx.createGain();
@@ -117,38 +116,39 @@ document.getElementById('direct_play_btn').addEventListener('click', function(e)
                 osc.start();
                 osc.stop(ctx.currentTime + 0.3);
                 document.getElementById('status_msg').style.display = 'block';
-            }} catch(e) {{}}
-        }});
-    }}
+            } catch(e) {}
+        });
+    }
 
     // 3. 申请系统级通知
-    if ("Notification" in window) {{
+    if ("Notification" in window) {
         Notification.requestPermission();
-    }}
+    }
 });
 </script>
-"""
+""".replace("AUDIO_PLACEHOLDER", LOUD_WAV_B64)
+
 components.html(native_audio_html, height=140)
 
 def trigger_play_on_done(count_num):
-    js = f"""
+    js = """
     <audio id="done_alert_sound" autoplay>
-        <source src="data:audio/wav;base64,{LOUD_WAV_B64}" type="audio/wav">
+        <source src="data:audio/wav;base64,AUDIO_PLACEHOLDER" type="audio/wav">
     </audio>
     <script>
-    (function() {{
-        if ("vibrate" in navigator) {{ navigator.vibrate([250, 100, 250, 100, 400]); }}
+    (function() {
+        if ("vibrate" in navigator) { navigator.vibrate([250, 100, 250, 100, 400]); }
         var aud = document.getElementById('done_alert_sound');
-        if (aud) {{ aud.play().catch(function(){{}}); }}
-        if ("Notification" in window && Notification.permission === "granted") {{
-            new Notification("🎉 旅游海报扫描完成！", {{
-                body: "成功提取全量数据，总库共有 " + {count_num} + " 条团期！",
+        if (aud) { aud.play().catch(function(){}); }
+        if ("Notification" in window && Notification.permission === "granted") {
+            new Notification("🎉 旅游海报扫描完成！", {
+                body: "成功提取全量数据，总库共有 COUNT_PLACEHOLDER 条团期！",
                 icon: "✈️"
-            }});
-        }}
-    }})();
+            });
+        }
+    })();
     </script>
-    """
+    """.replace("AUDIO_PLACEHOLDER", LOUD_WAV_B64).replace("COUNT_PLACEHOLDER", str(count_num))
     components.html(js, height=0)
 
 OFFICIAL_HOLIDAYS = [
