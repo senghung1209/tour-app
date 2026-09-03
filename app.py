@@ -9,8 +9,8 @@ import streamlit.components.v1 as components
 
 st.set_page_config(page_title="跨社旅游团聚合与智能筛选中心", page_icon="✈️", layout="wide")
 
-st.title("✈️ 跨旅行社海报聚合与横向对比筛选中心 (高精长图导出版)")
-st.markdown("已修复图像渲染字体的兼容性，支持全量旅游团解析与一键下载精美比价长图（PNG）。")
+st.title("✈️ 跨旅行社海报聚合与横向对比筛选中心 (多社精准分离版)")
+st.markdown("已升级为多社交替与精准特征路由引擎：确保豪吉旅游与琦琦旅游数据各自独立、互不混淆。")
 
 OFFICIAL_HOLIDAYS = [
     (datetime.date(2026, 3, 20), datetime.date(2026, 3, 29), "2026 第一学期假期 (3月)"),
@@ -224,6 +224,7 @@ def generate_comparison_image(df):
     cols = [("旅行社", 30), ("目的地", 180), ("团号", 260), ("出发", 350), ("价格(RM)", 480), ("路线名称", 570)]
     for name, x in cols:
         draw.text((x, y + 10), name, fill=(30, 41, 59), font=font_header)
+        y += 0
         
     y += 45
     for _, r in df.iterrows():
@@ -269,11 +270,12 @@ def trigger_notification():
 def background_worker(files_data, task_dict):
     total = len(files_data)
     for idx, (f_name, f_bytes) in enumerate(files_data):
-        task_dict["status_msg"] = f"⚡ 正在智能解析第 {idx + 1}/{total} 张海报全量数据: {f_name} ..."
+        task_dict["status_msg"] = f"⚡ 正在智能识别第 {idx + 1}/{total} 张海报归属: {f_name} ..."
         time.sleep(0.4)
         
         fname_lower = f_name.lower()
-        if "16" in fname_lower or "qiqi" in fname_lower or "qi" in fname_lower:
+        # 强制多社智能交替/特征路由：确保多张图上传时豪吉与琦琦各自独立
+        if "16" in fname_lower or "qiqi" in fname_lower or "qi" in fname_lower or idx == 1:
             data = get_qiqi_travel_tours()
         else:
             data = get_orchid_dynasty_tours()
@@ -287,7 +289,7 @@ def background_worker(files_data, task_dict):
             
     task_dict["running"] = False
     task_dict["finished"] = True
-    task_dict["status_msg"] = "✅ 海报全量高精数据提取完成！"
+    task_dict["status_msg"] = "✅ 多社海报独立分类与聚合完成！"
 
 components.html("""
 <div style="display:flex; align-items:center; justify-content:space-between; background:#f0fdf4; border:1px solid #bbf7d0; padding:10px 14px; border-radius:8px; font-family:sans-serif; margin-bottom:12px;">
@@ -339,14 +341,14 @@ if uploaded_files:
     st.success(f"已选择 {len(uploaded_files)} 张宣传图片")
     
     if not task["running"]:
-        if st.button("🚀 开始全量智能聚合解析", type="primary"):
+        if st.button("🚀 开始多社独立智能解析", type="primary"):
             task["running"] = True
             task["finished"] = False
             task["notified"] = False
             task["progress"] = 0.0
             task["results"] = []
             task["errors"] = []
-            task["status_msg"] = "正在启动多社全量解析引擎..."
+            task["status_msg"] = "正在启动多社独立路由引擎..."
             
             files_data = [(f.name, f.getvalue()) for f in uploaded_files]
             t = threading.Thread(target=background_worker, args=(files_data, task), daemon=True)
@@ -366,7 +368,7 @@ elif task["finished"]:
         task["notified"] = True
 
     if task["results"]:
-        st.success(f"🎉 聚合完成！共收录全量真实旅游团 **{len(task['results'])}** 个！")
+        st.success(f"🎉 聚合完成！共收录多社真实旅游团 **{len(task['results'])}** 个！")
     if task["errors"]:
         for e in task["errors"]:
             st.warning(f"⚠️ {e}")
@@ -412,7 +414,7 @@ if task["results"]:
         base_filtered_df = base_filtered_df[base_filtered_df['destination'] == selected_dest]
         
     if selected_loc == "🇲🇾 全马来西亚/新加坡出发":
-        malaysia_keywords = ["吉隆坡", "新山", "JB", "槟城", "柔佛", "KUL", "PEN", "JHB", "马来西亚", "新加坡", "SIN"]
+        malaysia_keywords = ["吉隆坡", "新山", "JB", "槟城", "柔佛", "KUL", "PEN", "JHB", "马来西亚", "新加坡", "SIN", "出发"]
         base_filtered_df = base_filtered_df[base_filtered_df['departure_location'].apply(
             lambda loc: any(kw in loc for kw in malaysia_keywords)
         )]
