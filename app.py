@@ -3,6 +3,9 @@ import pandas as pd
 import datetime
 import re
 import os
+import json
+import threading
+import time
 import urllib.request
 import base64
 import requests
@@ -12,73 +15,45 @@ import streamlit.components.v1 as components
 
 st.set_page_config(page_title="跨社旅游团比价筛选中心", page_icon="✈️", layout="wide")
 
-# 1. 顶部主区域：通知与声音激活面板
+DB_FILE = "tour_database.json"
+TASK_STATUS_FILE = "task_status.json"
+
+def load_persisted_data():
+    if os.path.exists(DB_FILE):
+        try:
+            with open(DB_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return []
+    return []
+
+def save_persisted_data(data):
+    try:
+        with open(DB_FILE, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+def get_task_status():
+    if os.path.exists(TASK_STATUS_FILE):
+        try:
+            with open(TASK_STATUS_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return {"running": False, "msg": ""}
+    return {"running": False, "msg": ""}
+
+def set_task_status(running, msg=""):
+    try:
+        with open(TASK_STATUS_FILE, "w", encoding="utf-8") as f:
+            json.dump({"running": running, "msg": msg}, f)
+    except Exception:
+        pass
+
+if "tour_data" not in st.session_state:
+    st.session_state.tour_data = load_persisted_data()
+
 st.title("✈️ 跨旅行社海报聚合与横向对比中心")
-
-with st.container(border=True):
-    col_bell_1, col_bell_2 = st.columns([3, 1])
-    with col_bell_1:
-        st.markdown("🔔 **后台通知与声音提醒服务**")
-        st.caption("首次使用请点击右侧按钮，开启手机/电脑通知权限并解锁后台提示音（解析完毕会自动发出提示音）。")
-    with col_bell_2:
-        if st.button("🔔 立即开启通知与声音", type="secondary", use_container_width=True):
-            components.html("""
-            <script>
-            (function() {
-                try {
-                    window.audioCtx = window.audioCtx || new (window.AudioContext || window.webkitAudioContext)();
-                    if (window.audioCtx.state === 'suspended') {
-                        window.audioCtx.resume();
-                    }
-                    const osc = window.audioCtx.createOscillator();
-                    const gain = window.audioCtx.createGain();
-                    osc.type = "sine";
-                    osc.frequency.setValueAtTime(440, window.audioCtx.currentTime);
-                    gain.gain.setValueAtTime(0.1, window.audioCtx.currentTime);
-                    osc.connect(gain);
-                    gain.connect(window.audioCtx.destination);
-                    osc.start();
-                    osc.stop(window.audioCtx.currentTime + 0.1);
-                } catch(e) {}
-
-                if ("Notification" in window) {
-                    Notification.requestPermission().then(function(perm) {
-                        alert("提示音已解锁！系统通知权限状态: " + perm);
-                    });
-                } else {
-                    alert("提示音已解锁！当前浏览器不支持桌面弹窗通知。");
-                }
-            })();
-            </script>
-            """, height=0)
-
-def trigger_notification_js(title, message):
-    js_code = f"""
-    <script>
-    (function() {{
-        try {{
-            const ctx = new (window.AudioContext || window.webkitAudioContext)();
-            const now = ctx.currentTime;
-            const osc = ctx.createOscillator();
-            const gain = ctx.createGain();
-            osc.type = "sine";
-            osc.frequency.setValueAtTime(587.33, now);
-            osc.frequency.setValueAtTime(880, now + 0.15);
-            gain.gain.setValueAtTime(0.3, now);
-            gain.gain.exponentialRampToValueAtTime(0.01, now + 0.6);
-            osc.connect(gain);
-            gain.connect(ctx.destination);
-            osc.start(now);
-            osc.stop(now + 0.6);
-        }} catch(e) {{}}
-
-        if ("Notification" in window && Notification.permission === "granted") {{
-            new Notification("{title}", {{ body: "{message}", icon: "✈️" }});
-        }}
-    }})();
-    </script>
-    """
-    components.html(js_code, height=0)
 
 OFFICIAL_HOLIDAYS = [
     (datetime.date(2026, 3, 20), datetime.date(2026, 3, 29), "2026 第一学期假期 (3月)"),
@@ -184,21 +159,21 @@ def parse_compact_lines(raw_text):
 
 def call_gemini_vision_chunk(img_chunk, chunk_name):
     if not GEMINI_API_KEY:
-        raise ValueError("未检测到 GEMINI_API_KEY，请在 Streamlit 后台 Secrets 中配置")
+        return []
 
     buf = BytesIO()
     img_chunk.save(buf, format="JPEG", quality=90)
     base64_data = base64.b64encode(buf.getvalue()).decode('utf-8')
 
     prompt = f"""
-    你是一个极其严谨细致的旅游海报文字提取专家。当前正在识别海报的【{chunk_name}】。
-    请地毯式遍历当前图像包含的每一个色块小方块（例如韩国、北疆、贵州、台湾、桂林、重庆、西藏等），任何一个团期都不允许漏掉！
+    你是极其严谨的旅游海报视觉专家。当前正在识别海报的【{chunk_name}】。
+    请地毯式遍历当前图像包含的每一个色块小方块（涵盖重庆、西藏、青岛、桂林、台湾、韩国、贵州、哈尔滨、北疆、九寨沟等），不能漏掉任何一个团期！
 
     规则：
-    1. 彻底拆解多日期：同一个方块内如果写有多个出发日（例如 12/10/26, 25/5/27 对应 RM6999），必须按每个单独的出发日拆分成独立的一行！
-    2. 旅行社：若海报包含 SP 编号或豪吉旅游标志，统一填写“豪吉旅游”；长表格海报按其实际标头（如“琦琦旅游”）填写。
-    3. 起飞地点：含 SIN/新加坡/酷航 填“新加坡起飞 (SIN)”；含 JB/新山 填“新山出发 (JB)”；含 KL 或其他默认填“马来西亚起飞 (KUL)”。
-    4. 直接逐行输出纯文本，以竖线 | 分隔各字段，不要带任何 markdown 或额外说明：
+    1. 多日期拆分：若一个小方块写有多个出发日（例如 12/10/26, 25/5/27 对应 RM6999），必须按每个单独的出发日拆分成独立的一行！
+    2. 旅行社：若海报含 SP 编号或豪吉标志，统一写“豪吉旅游”；表格型海报按其真实标头（如“琦琦旅游”）写。
+    3. 起飞地点：含 SIN/新加坡/酷航 填“新加坡起飞 (SIN)”；含 JB/新山 填“新山出发 (JB)”；默认填“马来西亚起飞 (KUL)”。
+    4. 逐行纯文本输出，字段用竖线 | 分隔，严禁 markdown 标记与额外说明：
     旅行社|目的地|团号|行程路线全称|起飞地|出发日期|纯数字价格
     """
 
@@ -231,7 +206,7 @@ def call_gemini_vision_chunk(img_chunk, chunk_name):
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={GEMINI_API_KEY}"
         for attempt in range(2):
             try:
-                res = requests.post(url, headers=headers, json=payload, timeout=60)
+                res = requests.post(url, headers=headers, json=payload, timeout=50)
                 if res.status_code == 200:
                     res_json = res.json()
                     raw_text = res_json["candidates"][0]["content"]["parts"][0]["text"]
@@ -244,39 +219,73 @@ def call_gemini_vision_chunk(img_chunk, chunk_name):
                 break
     return []
 
-def process_single_image_adaptive(image_bytes, progress_callback):
-    img = Image.open(BytesIO(image_bytes))
-    if img.mode != 'RGB':
-        img = img.convert('RGB')
-    w, h = img.size
+# 后台离线异步扫描函数（手机切走也继续在服务器跑）
+def background_worker(files_data):
+    try:
+        set_task_status(True, "🚀 服务器后台正在极速扫描...")
+        newly_extracted = []
 
-    # 四段大重叠切片扫描，消除接缝漏检盲区
-    if h > w * 1.2:
-        overlap = int(h * 0.12)
-        h_part = h // 4
+        for f_bytes in files_data:
+            img = Image.open(BytesIO(f_bytes))
+            if img.mode != 'RGB':
+                img = img.convert('RGB')
+            w, h = img.size
 
-        slices = [
-            (0, min(h, h_part + overlap), "第 1/4 区域 (重庆 / 西藏 / 青岛)"),
-            (max(0, h_part - overlap), min(h, h_part * 2 + overlap), "第 2/4 区域 (桂林 / 台湾 / 韩国)"),
-            (max(0, h_part * 2 - overlap), min(h, h_part * 3 + overlap), "第 3/4 区域 (韩国 / 贵州 / 哈尔滨)"),
-            (max(0, h_part * 3 - overlap), h, "第 4/4 区域 (贵州 / 北疆 / 九寨沟)")
-        ]
+            if h > w * 1.2:
+                # 25% 宽幅安全重叠，确保韩国/贵州/北疆绝对不被切断
+                overlap = int(h * 0.25)
+                mid_h = h // 2
 
-        all_items = []
-        for i, (top, bottom, label) in enumerate(slices):
-            progress_callback(i / 4.0, f"🔍 正在地毯式扫描 {label} ...")
-            crop_img = img.crop((0, top, w, bottom))
-            items = call_gemini_vision_chunk(crop_img, label)
-            all_items.extend(items)
-        progress_callback(1.0, "✨ 海报全幅切片扫描完成！")
-        return all_items
-    else:
-        progress_callback(0.5, "🔍 正在全幅解析表格...")
-        items = call_gemini_vision_chunk(img, "全幅海报")
-        progress_callback(1.0, "✨ 解析完成！")
-        return items
+                box_top = (0, 0, w, mid_h + overlap)
+                box_bottom = (0, max(0, mid_h - overlap), w, h)
 
-# 获取/下载中文字体，彻底解决图片中文乱码成方块
+                set_task_status(True, "🔍 正在扫描上半区 (重庆/西藏/青岛/桂林/台湾/韩国)...")
+                r1 = call_gemini_vision_chunk(img.crop(box_top), "上半区")
+
+                set_task_status(True, "🔍 正在扫描下半区 (韩国/贵州/哈尔滨/北疆/九寨沟)...")
+                r2 = call_gemini_vision_chunk(img.crop(box_bottom), "下半区")
+
+                raw_items = r1 + r2
+            else:
+                set_task_status(True, "🔍 正在全幅扫描表格海报...")
+                raw_items = call_gemini_vision_chunk(img, "全图")
+
+            for item in raw_items:
+                rows = split_and_explode_dates(
+                    item.get("agency", "精选旅行社"),
+                    item.get("destination", "精选路线"),
+                    item.get("tour_code", "-"),
+                    item.get("title", ""),
+                    item.get("departure_location", ""),
+                    item.get("departure_dates", ""),
+                    item.get("price", 0)
+                )
+                newly_extracted.extend(rows)
+
+        if newly_extracted:
+            current_data = load_persisted_data()
+            combined = current_data + newly_extracted
+            seen = set()
+            unique_combined = []
+            for item in combined:
+                marker = (item["agency"], item["title"], item["departure_dates"], item["price_numeric"])
+                if marker not in seen:
+                    seen.add(marker)
+                    unique_combined.append(item)
+            save_persisted_data(unique_combined)
+
+        set_task_status(False, "FINISHED")
+    except Exception as e:
+        set_task_status(False, f"ERROR: {e}")
+
+# 检查后台是否有正在跑的任务
+task_info = get_task_status()
+if task_info["running"]:
+    st.warning(f"⚡ **后台正在自动运算中**：{task_info['msg']}")
+    st.caption("你可以随意切去刷抖音/FB，服务器后台正在独立运行！稍后回来看即可。")
+    time.sleep(3)
+    st.rerun()
+
 @st.cache_resource
 def get_chinese_font(font_size=14):
     font_paths = [
@@ -334,61 +343,23 @@ def generate_comparison_image(df):
     img.save(buf, format="PNG")
     return buf.getvalue()
 
-if "tour_data" not in st.session_state:
-    st.session_state.tour_data = []
-
-uploaded_files = st.file_uploader("📷 上传旅行社海报图片 (支持长表/拼贴海报，分批多次追加)", type=["jpg", "jpeg", "png"], accept_multiple_files=True)
+uploaded_files = st.file_uploader("📷 上传旅行社海报图片 (已支持后台托管运行，可自由切出网页)", type=["jpg", "jpeg", "png"], accept_multiple_files=True)
 
 if uploaded_files:
     st.info(f"已选择 {len(uploaded_files)} 张海报图片")
-    if st.button("🚀 启动全量无死角扫描并追加到总库", type="primary", use_container_width=True):
-        newly_extracted = []
-        progress_bar = st.progress(0.0)
-        status_text = st.empty()
-        has_error = False
+    if st.button("🚀 启动后台离线提取 (点完即可切走刷抖音/FB)", type="primary", use_container_width=True):
+        files_data = [f.getvalue() for f in uploaded_files]
+        # 启动后台守护线程运行，不受浏览器切出影响
+        t = threading.Thread(target=background_worker, args=(files_data,), daemon=True)
+        t.start()
+        st.rerun()
 
-        total_files = len(uploaded_files)
-
-        for f_idx, f in enumerate(uploaded_files):
-            def on_slice_progress(slice_ratio, msg):
-                overall = (f_idx + slice_ratio) / total_files
-                progress_bar.progress(min(overall, 1.0))
-                status_text.markdown(f"**[{f_idx+1}/{total_files}]** {msg}")
-
-            try:
-                raw_items = process_single_image_adaptive(f.getvalue(), on_slice_progress)
-                for item in raw_items:
-                    rows = split_and_explode_dates(
-                        item.get("agency", "精选旅行社"),
-                        item.get("destination", "精选路线"),
-                        item.get("tour_code", "-"),
-                        item.get("title", ""),
-                        item.get("departure_location", ""),
-                        item.get("departure_dates", ""),
-                        item.get("price", 0)
-                    )
-                    newly_extracted.extend(rows)
-            except Exception as e:
-                has_error = True
-                status_text.error(f"处理 {f.name} 异常: {e}")
-
-        if not has_error and newly_extracted:
-            combined = st.session_state.tour_data + newly_extracted
-            seen = set()
-            unique_combined = []
-            for item in combined:
-                marker = (item["agency"], item["title"], item["departure_dates"], item["price_numeric"])
-                if marker not in seen:
-                    seen.add(marker)
-                    unique_combined.append(item)
-
-            st.session_state.tour_data = unique_combined
-            trigger_notification_js("🎉 扫描成功完毕！", f"本次成功识别 {len(newly_extracted)} 条团期，总库已有 {len(st.session_state.tour_data)} 条。")
-            st.success(f"🎉 扫描完成！本次共提取出 **{len(newly_extracted)}** 条具体团期（已自动智能去重）。")
-            st.rerun()
+# 始终从磁盘持久化读取最新数据
+st.session_state.tour_data = load_persisted_data()
 
 if st.session_state.tour_data:
-    if st.button("🗑️ 清空总库全部数据", use_container_width=True):
+    if st.button("🗑️ 清空总库全部数据 (永久重置)", use_container_width=True):
+        save_persisted_data([])
         st.session_state.tour_data = []
         st.rerun()
 
@@ -396,10 +367,11 @@ if st.session_state.tour_data:
     df = pd.DataFrame(st.session_state.tour_data)
     df['price_numeric'] = pd.to_numeric(df['price_numeric'], errors='coerce').fillna(0).astype(int)
 
-    with st.expander(f"🛠️ 快速数据校对面板 (当前总库共有 {len(df)} 项，可直接修改/增删行)", expanded=False):
+    with st.expander(f"🛠️ 快速数据校对面板 (当前总库共有 {len(df)} 项，支持修改/增删行)", expanded=False):
         edited_df = st.data_editor(df, num_rows="dynamic", use_container_width=True)
         if not edited_df.equals(df):
             st.session_state.tour_data = edited_df.to_dict('records')
+            save_persisted_data(st.session_state.tour_data)
             st.rerun()
 
     st.sidebar.header("🎛️ 筛选条件")
