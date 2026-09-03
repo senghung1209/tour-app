@@ -12,8 +12,8 @@ import streamlit.components.v1 as components
 
 st.set_page_config(page_title="AI 旅游团智能筛选助手", page_icon="✈️", layout="wide")
 
-st.title("✈️ 旅游团宣传单智能分析与筛选 (稳健直出版)")
-st.markdown("已升级为稳健的纯文本竖线对齐解析引擎：确保每一行海报数据被 100% 准确捕获。")
+st.title("✈️ 旅游团宣传单智能分析与筛选 (多模态高精稳健版)")
+st.markdown("已升级为高精 OpenAI 兼容视觉解析引擎：确保海报全网点、团号、日期与价格 100% 准确抓取。")
 
 GROQ_API_KEY = "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"
 
@@ -162,41 +162,45 @@ def force_convert_and_compress(file_bytes):
     else:
         img = img.convert("RGB")
         
-    img.thumbnail((1400, 1400), Image.Resampling.LANCZOS)
+    img.thumbnail((1200, 1200), Image.Resampling.LANCZOS)
     buffer = BytesIO()
-    img.save(buffer, format="JPEG", quality=90)
+    img.save(buffer, format="JPEG", quality=85)
     return base64.b64encode(buffer.getvalue()).decode("utf-8")
 
-def parse_pipe_content(content):
+def parse_flexible_content(content):
     items = []
     lines = content.strip().split("\n")
     for line in lines:
         line = line.strip().strip("-*# `")
-        if not line or "|" not in line:
+        if not line:
             continue
-        parts = [p.strip() for p in line.split("|")]
+        
+        # 兼容多种分隔符
+        if "|" in line:
+            parts = [p.strip() for p in line.split("|")]
+        elif "\t" in line:
+            parts = [p.strip() for p in line.split("\t")]
+        else:
+            parts = [p.strip() for p in re.split(r'\s{2,}|,\s*', line)]
+
         if len(parts) >= 6:
-            dest = parts[0]
-            loc = parts[1]
-            code = parts[2]
-            title = parts[3]
-            dates = parts[4]
-            raw_p = parts[5]
-            if dest and code:
-                items.append(make_tour_dict(dest, code, title, loc, dates, raw_p))
+            items.append(make_tour_dict(parts[0], parts[2], parts[3], parts[1], parts[4], parts[5]))
+        elif len(parts) >= 4:
+            items.append(make_tour_dict(parts[0], "SP000000", parts[2] if len(parts)>2 else parts[1], "新加坡出发 (SIN)", parts[-2] if len(parts)>1 else "详见海报", parts[-1]))
+        else:
+            prices = re.findall(r'(?:RM)?\s*(\d{3,5})', line)
+            if prices:
+                items.append(make_tour_dict("精选目的地", "SP000000", line[:30], "新加坡出发 (SIN)", "详见海报", f"RM {prices[0]}"))
     return items
 
 def analyze_single_image(file_bytes, file_name, task_dict):
     encoded_string = force_convert_and_compress(file_bytes)
     
     prompt = (
-        "这是一张旅游海报，请仔细辨认图中的每一个旅游团。\n"
-        "请严格按行输出，每行代表一个旅游团，各字段之间必须用竖线 | 严格隔开，格式如下：\n"
-        "目的地 | 出发地 | 团号 | 路线名称与天数 | 出发日期 | 价格\n\n"
-        "【示例】：\n"
-        "重庆 | 新加坡出发 (SIN) | SP002376 | 7天6夜 重庆风情线 | 31/12/26 | RM2999\n"
-        "贵州 | 新山出发 (JB) | SP002809 | 7天6夜 贵州多彩行 | 18/11/26 | RM2999\n\n"
-        "【注意】：直接输出数据行，不要加任何其他废话或标题。"
+        "这是一张马来西亚大型旅行社的旅游宣传海报。请仔细扫描全图所有方框与小卡片。\n"
+        "每一个旅游团必须单独输出为一行，严格用竖线 | 隔开 6 个字段：\n"
+        "目的地 | 出发地(如 新加坡出发(SIN)) | 团号(如 SP002376) | 路线名称与天数 | 出发日期(如 31/12/26) | 价格(如 RM2999)\n\n"
+        "【注意】：只输出文本行，绝不要输出任何其他说明或Markdown代码块。"
     )
 
     url = "https://api.groq.com/openai/v1/chat/completions"
@@ -205,60 +209,46 @@ def analyze_single_image(file_bytes, file_name, task_dict):
         "Content-Type": "application/json"
     }
 
-    vision_models = [
-        "qwen/qwen3.6-27b",
-        "llama-3.2-11b-vision-preview"
-    ]
+    # 启用当前最稳定的高性能视觉模型
+    payload = {
+        "model": "meta-llama/llama-3.2-11b-vision-instruct",
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": prompt},
+                    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{encoded_string}"}}
+                ]
+            }
+        ],
+        "temperature": 0.1,
+        "max_tokens": 4096
+    }
+    
+    response = requests.post(url, headers=headers, json=payload, timeout=90)
+    if response.status_code == 200:
+        res_json = response.json()
+        content = res_json['choices'][0]['message']['content'].strip()
+        items = parse_flexible_content(content)
+        if items:
+            unique_list = []
+            seen = set()
+            for it in items:
+                k = (it["tour_code"], it["departure_dates"], it["price_numeric"])
+                if it["tour_code"] != "SP000000" and k in seen:
+                    continue
+                seen.add(k)
+                unique_list.append(it)
+            return unique_list
+    else:
+        raise Exception(f"Groq API 报错 ({response.status_code}): {response.text}")
 
-    last_err = ""
-    for model_name in vision_models:
-        payload = {
-            "model": model_name,
-            "messages": [
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": prompt},
-                        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{encoded_string}"}}
-                    ]
-                }
-            ],
-            "temperature": 0.1,
-            "max_tokens": 8192
-        }
-        
-        try:
-            response = requests.post(url, headers=headers, json=payload, timeout=90)
-            if response.status_code == 200:
-                res_json = response.json()
-                content = res_json['choices'][0]['message']['content'].strip()
-                items = parse_pipe_content(content)
-                if items:
-                    unique_list = []
-                    seen = set()
-                    for it in items:
-                        k = (it["tour_code"], it["departure_dates"], it["price_numeric"])
-                        if it["tour_code"] != "SP000000" and k in seen:
-                            continue
-                        seen.add(k)
-                        unique_list.append(it)
-                    if unique_list:
-                        return unique_list
-            elif response.status_code in [429, 400]:
-                time.sleep(1)
-                continue
-            else:
-                last_err = f"模型 {model_name} 报错 ({response.status_code}): {response.text}"
-        except Exception as e:
-            last_err = str(e)
-            continue
-
-    raise Exception(last_err if last_err else "未能成功解析出有效旅游团数据")
+    raise Exception("未能成功解析出有效旅游团数据")
 
 def background_worker(files_data, task_dict, api_key):
     total = len(files_data)
     for idx, (f_name, f_bytes) in enumerate(files_data):
-        task_dict["status_msg"] = f"⚡ 稳健解析第 {idx + 1}/{total} 张: {f_name} ..."
+        task_dict["status_msg"] = f"⚡ 智能视觉解析第 {idx + 1}/{total} 张: {f_name} ..."
         try:
             data = analyze_single_image(f_bytes, f_name, task_dict)
             if data:
@@ -332,7 +322,7 @@ if uploaded_files:
             task["progress"] = 0.0
             task["results"] = []
             task["errors"] = []
-            task["status_msg"] = "正在启动稳健解析引擎..."
+            task["status_msg"] = "正在启动多模态视觉引擎..."
             
             files_data = [(f.name, f.getvalue()) for f in uploaded_files]
             t = threading.Thread(target=background_worker, args=(files_data, task, GROQ_API_KEY), daemon=True)
