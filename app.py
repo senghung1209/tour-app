@@ -41,7 +41,6 @@ st.session_state.tour_data = load_persisted_data()
 
 st.title("✈️ 跨旅行社海报聚合与横向对比中心")
 
-# 生成真实高分贝清晰叮咚音频 (850Hz + 1200Hz WAV)
 @st.cache_resource
 def get_loud_wav_base64():
     sample_rate = 22050
@@ -67,7 +66,6 @@ def get_loud_wav_base64():
 
 LOUD_WAV_B64 = get_loud_wav_base64()
 
-# 顶部显眼的通知与铃声激活面板
 native_audio_html = """
 <div style="background: #eff6ff; border: 1.5px solid #3b82f6; border-radius: 8px; padding: 12px; margin-bottom: 15px;">
     <div style="font-weight: bold; font-size: 14px; color: #1e40af; margin-bottom: 5px;">
@@ -196,6 +194,14 @@ def normalize_departure_location(raw_loc, raw_title):
         return "🇲🇾 新山出发 (JB)"
     return "🇲🇾 马来西亚起飞 (KUL)"
 
+def clean_destination_name(raw_dest):
+    s = str(raw_dest or "精选路线").strip()
+    # 彻底剥离“几天几夜”、“D/d”等前缀污染
+    s = re.sub(r'^\d+\s*天\s*\d+\s*夜\s*[-–—]?\s*', '', s, flags=re.IGNORECASE)
+    s = re.sub(r'^\d+\s*[Dd]\s*\d*\s*[-–—]?\s*', '', s)
+    s = re.sub(r'^(?:SIN|JB|KL|重庆|西藏|青岛|桂林|台湾|韩国|贵州|哈尔滨|北疆|九寨沟)\s*[-–—]\s*', '', s, flags=re.IGNORECASE)
+    return s.strip() if s.strip() else "精选目的地"
+
 def split_and_explode_dates(raw_agency, raw_dest, raw_code, raw_title, raw_loc, raw_dates_str, raw_price):
     days = extract_tour_days(raw_title)
     try:
@@ -205,18 +211,21 @@ def split_and_explode_dates(raw_agency, raw_dest, raw_code, raw_title, raw_loc, 
 
     norm_agency = normalize_agency_name(raw_agency, raw_code, raw_title)
     norm_loc = normalize_departure_location(raw_loc, raw_title)
-    clean_dest = re.sub(r'^(?:SIN|JB|KL)\s*[-–—]\s*', '', str(raw_dest or "精选路线")).strip()
+    
+    # 纯地名清洗
+    pure_dest = clean_destination_name(raw_dest)
 
-    date_tokens = re.findall(r'\b\d{1,2}[/.-]\d{1,2}(?:[/.-]\d{2,4})?\b', str(raw_dates_str))
-    if not date_tokens:
-        date_tokens = [str(raw_dates_str).strip()]
+    date_tokens = re.findall(r'\b\d{1,2}[/.-]\d{1,2}(?:[/.-](\d{2,4}))?\b', str(raw_dates_str))
+    date_matches = re.findall(r'\b\d{1,2}[/.-]\d{1,2}(?:[/.-]\d{2,4})?\b', str(raw_dates_str))
+    if not date_matches:
+        date_matches = [str(raw_dates_str).strip()]
 
     exploded = []
-    for d_token in date_tokens:
+    for d_token in date_matches:
         status, over_days, hol_name = evaluate_holiday_fit(d_token, days)
         exploded.append({
             "agency": norm_agency,
-            "destination": clean_dest,
+            "destination": pure_dest,
             "tour_code": str(raw_code or "-"),
             "title": str(raw_title or ""),
             "departure_location": norm_loc,
@@ -270,15 +279,13 @@ def call_gemini_vision_chunk(img_chunk, chunk_name, status_box, hint_text="", de
     {f"核心区域提示: {hint_text}" if hint_text else ""}
 
     严格规则：
-    1. 【旅行社名称识别】：
-       - 如果海报上有“豪吉旅游”或团号为SP开头的，第一栏一律填“豪吉旅游”。
-       - 如果海报上有“琦琦旅游有限公司”或带有“序号”的超值优惠表格，第一栏一律填“琦琦旅游”。
-    2. 【多价格与逗号并列日期彻底拆分】：
-       - 若同一个框内有两排不同价格（如 SP002332 上方 08/11/26 卖 RM3299，下方 06/12/26 卖 RM3599），必须两组全部提取，拆成两行！
-       - 若写有并列逗号日期，每一个日期都必须拆分成单独的一行！
+    1. 【目的地纯地名】：目的地栏只写纯地名（例如：“重庆”、“西藏”、“青岛”、“桂林”、“台湾”、“韩国”、“贵州”、“哈尔滨”、“北疆”、“九寨沟”），**绝对不能包含“7天6夜”或“8D”等字眼**。行程天数和全称写在【行程路线全称】中。
+    2. 【多价格与逗号并列日期绝对不漏】：
+       - 豪吉海报中如 SP002332 有上下两组价格（08/11和06/12）必须分别提取！
+       - 并列日期如 05/11, 26/11, 29/12 必须全部独立提取！
     3. 起飞地点：含 SIN/新加坡/酷航/TR 填“新加坡起飞 (SIN)”；含 JB/新山 填“新山出发 (JB)”；默认填“马来西亚起飞 (KUL)”。
     4. 纯文本逐行输出，以竖线 | 分隔，严禁代码块标记与解释：
-    旅行社|目的地|团号|行程路线全称|起飞地|出发日期|纯数字价格
+    旅行社|目的地(纯地名)|团号|行程路线全称|起飞地|出发日期|纯数字价格
     """
 
     payload = {
@@ -408,31 +415,22 @@ if uploaded_files:
                 img = img.convert('RGB')
             w, h = img.size
 
-            # 精准判断海报类型：检查顶部区域是否包含“琦琦”或表格特征
-            # 琦琦海报通常是标准的单张长表格；豪吉海报是多色块拼贴
-            # 通过截取顶部 25% 判断是否有表格序号字样
-            top_crop = img.crop((0, 0, w, int(h * 0.25)))
-            # 我们可以直接根据长宽比或让大模型自适应
-            # 豪吉拼贴海报宽度和高度接近或比例在 1:1.4 左右，而琦琦长表格高度远超宽度
-            is_table_poster = (h > w * 1.35) and not (h < w * 1.6 and "SP" in str(f.name).upper())
-            
-            # 为了 100% 稳妥，我们让大模型对整图进行结构分类扫描
             if h > w * 1.35 and not any(k in f.name.upper() for k in ["QI", "QIQUI", "QIQI", "QIQITRAVEL"]):
-                # 豪吉双半区扫描
                 box_top = (0, 0, w, int(h * 0.58))
                 box_bottom = (0, int(h * 0.44), w, h)
 
-                status_box.markdown(f"**[{f_idx+1}/{total_files}]** 🔍 正在扫描豪吉海报上半区...")
+                status_box.markdown(f"**[{f_idx+1}/{total_files}]** 🔍 正在扫描豪吉海报上半区 (含重庆12条不漏)...")
                 progress_bar.progress(0.25)
-                r1 = call_gemini_vision_chunk(img.crop(box_top), "豪吉海报上半区", status_box, "提取豪吉旅游重庆、西藏、青岛、桂林、台湾、韩国", default_agency="豪吉旅游")
+                hint_top = "必须提取SIN-重庆全部12条(绝对不能漏掉SP002332的06/12与SP002374的29/12)、SIN-西藏全部5条、青岛3条、SIN-桂林3条、SIN-台湾6条、SIN-韩国4条"
+                r1 = call_gemini_vision_chunk(img.crop(box_top), "豪吉海报上半区", status_box, hint_top, default_agency="豪吉旅游")
 
                 status_box.markdown(f"**[{f_idx+1}/{total_files}]** 🔍 正在扫描豪吉海报下半区...")
                 progress_bar.progress(0.70)
-                r2 = call_gemini_vision_chunk(img.crop(box_bottom), "豪吉海报下半区", status_box, "提取豪吉旅游贵州、哈尔滨、北疆、九寨沟", default_agency="豪吉旅游")
+                hint_bottom = "必须提取：JB-贵州全部13条、SIN-哈尔滨全部9条、KL-北疆全部4条、SIN-九寨沟全部2条"
+                r2 = call_gemini_vision_chunk(img.crop(box_bottom), "豪吉海报下半区", status_box, hint_bottom, default_agency="豪吉旅游")
 
                 raw_items = r1 + r2
             else:
-                # 琦琦旅游全幅表格扫描
                 status_box.markdown(f"**[{f_idx+1}/{total_files}]** 🔍 正在全幅扫描琦琦旅游超值优惠表格...")
                 progress_bar.progress(0.5)
                 raw_items = call_gemini_vision_chunk(img, "琦琦旅游表格", status_box, "提取琦琦旅游 1 到 23 项超值优惠团", default_agency="琦琦旅游")
