@@ -216,18 +216,18 @@ def call_gemini_vision(img_bytes, poster_type):
         img_obj = Image.open(BytesIO(img_bytes))
         if img_obj.mode != 'RGB':
             img_obj = img_obj.convert('RGB')
-        max_dim = 1400
+        max_dim = 1600
         if max(img_obj.size) > max_dim:
             img_obj.thumbnail((max_dim, max_dim), Image.Resampling.LANCZOS)
         buf_compressed = BytesIO()
-        img_obj.save(buf_compressed, format="JPEG", quality=85)
+        img_obj.save(buf_compressed, format="JPEG", quality=90)
         base64_data = base64.b64encode(buf_compressed.getvalue()).decode('utf-8')
     except Exception:
         base64_data = base64.b64encode(img_bytes).decode('utf-8')
     
     if poster_type == "haoji":
         prompt = """
-        你是豪吉旅游海报专家。请把整张海报内所有的团期全部提取出来，绝对不能遗漏！
+        你是豪吉旅游海报专家。请把整张海报内所有的团期全部提取出来，绝对不能遗漏任何一个方块！
         并列日期或上下两排不同价格必须拆为独立行。
         纯文本逐行输出，竖线 | 分隔，不要代码块：
         目的地纯地名|团号(SP开头)|路线全称|起飞地|出发日期|纯数字价格
@@ -246,7 +246,6 @@ def call_gemini_vision(img_bytes, poster_type):
     url = f"[https://generativelanguage.googleapis.com/v1beta/models/](https://generativelanguage.googleapis.com/v1beta/models/){PRIMARY_MODEL}:generateContent?key={GEMINI_API_KEY}"
     
     try:
-        # 延长超时限制至 60 秒
         res = requests.post(url, headers={"Content-Type": "application/json"}, json=payload, timeout=60)
         if res.status_code == 200:
             raw_text = res.json()["candidates"][0]["content"]["parts"][0]["text"]
@@ -314,53 +313,39 @@ def generate_comparison_image(df):
     img.save(buf, format="PNG", quality=95)
     return buf.getvalue()
 
-uploaded_files = st.file_uploader("📷 上传海报图片 (支持多选，后台将自动排队逐张安全处理)", type=["jpg", "jpeg", "png"], accept_multiple_files=True)
+# 严格恢复每次只上传单张图片的交互
+uploaded_file = st.file_uploader("📷 上传单张海报图片 (请一张一张上传并独立分析)", type=["jpg", "jpeg", "png"])
 
-if uploaded_files:
-    st.info(f"已选择 {len(uploaded_files)} 张海报图片")
-    if st.button("🚀 启动防超时安全队列扫描", type="primary", use_container_width=True):
-        total_files = len(uploaded_files)
-        progress_bar = st.progress(0.0)
-        status_box = st.empty()
-        
-        all_new_items = []
-        
-        for idx, uploaded_file in enumerate(uploaded_files):
-            status_box.markdown(f"**[正在处理第 {idx+1}/{total_files} 张]**：`{uploaded_file.name}` (已启用 60 秒强力超时保护)...")
+if uploaded_file is not None:
+    st.image(uploaded_file, caption="当前待分析海报", width=300)
+    
+    # 让你选择当前这张图是豪吉还是琦琦，确保 100% 精准不误判
+    poster_type_choice = st.radio("请确认这张海报属于哪家旅行社：", ["豪吉旅游 (拼贴海报)", "琦琦旅游 (超值表格)"], horizontal=True)
+    poster_type = "haoji" if "豪吉" in poster_type_choice else "qiqi"
+
+    if st.button("🚀 立即独占深度分析该单张海报", type="primary", use_container_width=True):
+        with st.spinner("🔍 正在全神贯注精准提取该张海报的所有团期，请稍候..."):
             img_bytes = uploaded_file.getvalue()
-            img = Image.open(BytesIO(img_bytes))
-            w, h = img.size
-            
-            filename_upper = uploaded_file.name.upper()
-            if "QIQI" in filename_upper or h > w * 1.5 or "QI" in filename_upper:
-                poster_type = "qiqi"
+            newly_extracted = call_gemini_vision(img_bytes, poster_type)
+
+            if newly_extracted:
+                combined = st.session_state.tour_data + newly_extracted
+                seen = set()
+                unique_combined = []
+                for item in combined:
+                    marker = (item["agency"], item["tour_code"], item["departure_dates"], item["price_numeric"])
+                    if marker not in seen:
+                        seen.add(marker)
+                        unique_combined.append(item)
+
+                st.session_state.tour_data = unique_combined
+                save_persisted_data(unique_combined)
+                trigger_play_on_done(len(st.session_state.tour_data))
+                st.success(f"🎉 成功从该张海报中精准提取 {len(newly_extracted)} 项！当前总库共有 **{len(st.session_state.tour_data)}** 项团期。")
+                time.sleep(1.0)
+                st.rerun()
             else:
-                poster_type = "haoji"
-            
-            single_extracted = call_gemini_vision(img_bytes, poster_type)
-            if single_extracted:
-                all_new_items.extend(single_extracted)
-            
-            progress_bar.progress((idx + 1) / total_files)
-
-        if all_new_items:
-            combined = st.session_state.tour_data + all_new_items
-            seen = set()
-            unique_combined = []
-            for item in combined:
-                marker = (item["agency"], item["tour_code"], item["departure_dates"], item["price_numeric"])
-                if marker not in seen:
-                    seen.add(marker)
-                    unique_combined.append(item)
-
-            st.session_state.tour_data = unique_combined
-            save_persisted_data(unique_combined)
-            trigger_play_on_done(len(st.session_state.tour_data))
-            status_box.success(f"🎉 队列海报全部扫描完毕！总库现有 **{len(st.session_state.tour_data)}** 项团期。")
-            time.sleep(1.0)
-            st.rerun()
-        else:
-            status_box.warning("⚠️ 队列中的海报处理超时或未能解析出有效团期。")
+                st.warning("⚠️ 未能从该图中解析出有效团期，请确认图片清晰度或重新点击分析。")
 
 if st.session_state.tour_data:
     if st.button("🗑️ 清空总库全部数据 (永久重置)", use_container_width=True):
