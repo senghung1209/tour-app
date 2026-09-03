@@ -164,7 +164,7 @@ def parse_lines_robust(raw_text, poster_type):
                 loc = "🇸🇬 新加坡起飞 (SIN)" if any(k in line.upper() for k in ["SIN", "新加坡", "TR"]) else "🇲🇾 马来西亚起飞 (KUL)"
                 dates = parts[4] if len(parts) > 4 else parts[len(parts) - 2]
 
-                date_tokens = re.findall(r'\b\d{1,2}[/.-]\d{1,2}(?:[/.-]\d{2,4})?\b', dates)
+                date_tokens = re.findall(r'\b\d{1,2}[/.-]\d{1,2}(?:[/.-](\d{2,4}))?\b', dates)
                 if not date_tokens:
                     date_tokens = [dates]
 
@@ -441,4 +441,41 @@ if st.session_state.tour_data:
     st.markdown(f"### 符合条件的出发选项共 **{total_filtered_count}** 个：")
     col1, col2 = st.columns(2)
     with col1:
-        st.download_button("📊 下载 CSV 比价清单", data=filtered_df.to_csv(index=False).encode('utf-8-sig
+        csv_bytes = filtered_df.to_csv(index=False).encode('utf-8-sig')
+        st.download_button(
+            label="📊 下载 CSV 比价清单",
+            data=csv_bytes,
+            file_name="智能比价清单.csv",
+            mime="text/csv",
+            use_container_width=True
+        )
+    with col2:
+        img_bytes_render = generate_comparison_image(filtered_df)
+        st.download_button(
+            label="🖼️ 下载高清长图 (.png)",
+            data=img_bytes_render,
+            file_name="智能比价长图.png",
+            mime="image/png",
+            use_container_width=True
+        )
+
+    st.dataframe(filtered_df[['agency', 'destination', 'tour_code', 'departure_location', 'departure_dates', 'price_text', 'title']], use_container_width=True)
+
+    st.markdown("#### 📋 行程比对卡片")
+    for _, row in filtered_df.iterrows():
+        with st.container(border=True):
+            c1, c2, c3 = st.columns([3, 2, 2])
+            with c1:
+                st.markdown(f"### 📍 **{row['destination']}** <small style='color:gray;'>({row['agency']})</small>", unsafe_allow_html=True)
+                st.write(f"**路线：** {row['title']}")
+                st.write(f"**团号：** `{row['tour_code']}`")
+            with c2:
+                st.markdown(f"🛫 **出发地：** `{row['departure_location']}`")
+                st.write(f"📅 **出发日期：** {row['departure_dates']}")
+                h_stat = row['holiday_status']
+                if h_stat == 'exact':
+                    st.success(f"🎒 完美在校假内 ({row['holiday_name']})")
+                elif h_stat == 'slight_over':
+                    st.warning(f"⚠️ 包含校假，超 {row['over_days']} 天 (需请假)")
+            with c3:
+                st.markdown(f"### 💰 **{row['price_text']}**")
