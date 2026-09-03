@@ -13,10 +13,12 @@ import streamlit.components.v1 as components
 
 st.set_page_config(page_title="AI 旅游团智能筛选助手", page_icon="✈️", layout="wide")
 
-st.title("✈️ 旅游团宣传单智能分析与筛选")
-st.markdown("高精细度全板块识别，支持精准区分出发机场、2026学校假期超期校验与后台完成提醒。")
+st.title("✈️ 旅游团宣传单智能分析与筛选 (Gemini 极速版)")
+st.markdown("搭载 Google 视觉引擎：秒级高并发、彻底告别排队限流、精准识别各省板块与 2026 学校假期。")
 
-GROQ_API_KEY = "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"
+# 已为你配置好你的专属 Google 密钥
+DEFAULT_GEMINI_KEY = "AQ.Ab8RN6LbXfnPZoT1BUFEDZ2MWyE8Tr9V0Q-k8Xovtr2h7ou7oA"
+GEMINI_API_KEY = st.secrets.get("GEMINI_API_KEY", DEFAULT_GEMINI_KEY)
 
 OFFICIAL_HOLIDAYS = [
     (datetime.date(2026, 3, 20), datetime.date(2026, 3, 29), "2026 第一学期假期 (3月)"),
@@ -26,7 +28,6 @@ OFFICIAL_HOLIDAYS = [
     (datetime.date(2027, 1, 23), datetime.date(2027, 2, 16), "2027 农历新年与跨年假期")
 ]
 
-# 服务器级常驻任务管理器（关机断网重启依然能接续读取）
 @st.cache_resource
 def get_global_task_store():
     return {
@@ -151,7 +152,7 @@ def trigger_notification():
     """
     components.html(js, height=0)
 
-def compress_image(uploaded_file, max_size=850, quality=68):
+def compress_image(uploaded_file, max_size=1200, quality=80):
     img = Image.open(uploaded_file)
     if img.mode in ("RGBA", "P"):
         img = img.convert("RGB")
@@ -160,193 +161,115 @@ def compress_image(uploaded_file, max_size=850, quality=68):
     img.save(buffer, format="JPEG", quality=quality)
     return base64.b64encode(buffer.getvalue()).decode("utf-8")
 
-def extract_partial_items(content):
+def parse_pipe_lines(content):
     items = []
-    blocks = re.findall(r'\{[^{}]*\}', content)
-    for b in blocks:
-        try:
-            it = json.loads(b)
-            if "destination" in it or "tour_code" in it or "title" in it:
-                dest = str(it.get("destination", "精选目的地")).strip()
-                code = str(it.get("tour_code", "")).strip()
-                title = str(it.get("title", dest + "游")).strip()
-                loc = str(it.get("departure_location", "详见海报")).strip()
-                dates = str(it.get("departure_dates", "见海报")).strip()
-                p_raw = it.get("price_numeric", 0)
-                try:
-                    p_val = int(re.sub(r'[^\d]', '', str(p_raw)))
-                except Exception:
-                    p_val = 0
-                
-                raw_text = it.get("price_text")
-                if raw_text:
-                    p_text = str(raw_text).strip()
-                elif p_val > 0:
-                    p_text = "RM " + str(p_val)
-                else:
-                    p_text = "详见海报"
-
-                item = make_tour_dict(
-                    dest if dest else "精选目的地",
-                    code,
-                    title,
-                    loc if loc else "详见海报",
-                    dates,
-                    p_val,
-                    p_text
-                )
-                items.append(item)
-        except Exception:
+    for line in content.strip().split("\n"):
+        line = line.strip().strip("-*# `")
+        if "|" not in line:
             continue
+        parts = [p.strip() for p in line.split("|")]
+        if len(parts) >= 6:
+            dest = parts[0]
+            loc = parts[1]
+            code = parts[2]
+            title = parts[3]
+            dates = parts[4]
+            p_str = parts[5]
+            
+            try:
+                p_val = int(re.sub(r'[^\d]', '', p_str))
+            except Exception:
+                p_val = 0
+            
+            if dest and (code or title):
+                p_text = ("RM " + str(p_val)) if p_val > 0 else p_str
+                items.append(make_tour_dict(dest, code, title, loc, dates, p_val, p_text))
     return items
 
-def analyze_single_image(file_bytes, file_name, task_dict):
+def analyze_single_image(file_bytes, file_name, api_key):
     encoded_string = compress_image(BytesIO(file_bytes))
     
     prompt = (
-        "仔细扫描整张海报，提取所有板块的旅游团项目，返回纯 JSON 数组：\n"
-        "1. 包含海报中所有板块（如 重庆、西藏、青岛、桂林、台湾、贵州、韩国、北疆、哈尔滨、九寨沟等）。\n"
-        "2. 【起飞机场 departure_location】：根据卡片标题或右下角小字，准确标注『新加坡出发 (SIN)』、『新山出发 (JB)』或『吉隆坡出发 (KL)』。\n"
-        "3. destination 填具体城市/国家。\n"
-        "4. 同一行程如有多个出发日期，合并在 departure_dates 字段（如 '26/10, 28/10'）。\n"
-        "输出 JSON 字段：destination, departure_location, tour_code, title, departure_dates, price_numeric, price_text。"
+        "仔细扫描整张海报中所有的旅游团板块（例如 重庆、西藏、青岛、桂林、台湾、贵州、韩国、北疆、哈尔滨、九寨沟等）。\n"
+        "每行提取一个旅游团，严格使用竖线 | 隔开字段，格式如下：\n"
+        "目的地|出发地|团号|天数路线|出发日期|价格\n\n"
+        "【示范】：\n"
+        "重庆|新加坡出发 (SIN)|SP002376|7天6夜 重庆8D风情线|31/12/26|RM2999\n"
+        "贵州|新山出发 (JB)|SP002809|7天6夜 一路黔行 多彩贵州|18/11/26|RM2999\n"
+        "贵州|新加坡出发 (SIN)|SP002729|7天6夜 一路黔行 多彩贵州|28/10, 06/11|RM2699\n\n"
+        "【关键要求】：\n"
+        "1. 仔细观察卡片右下角小字与航空标示，严格精确区分『新加坡出发 (SIN)』还是『新山出发 (JB)』还是『吉隆坡出发 (KL)』！\n"
+        "2. 同一个团号如有多个出发日期，合并在同一行用逗号分隔，不要输出任何重复行。\n"
+        "3. 不要输出 Markdown 表头或多余文字，只输出符合格式的有效数据行。"
     )
 
-    url = "https://api.groq.com/openai/v1/chat/completions"
-    headers = {
-        "Authorization": "Bearer " + GROQ_API_KEY,
-        "Content-Type": "application/json"
-    }
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api_key}"
+    headers = {"Content-Type": "application/json"}
     payload = {
-        "model": "qwen/qwen3.6-27b",
-        "messages": [
-            {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": prompt},
-                    {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64," + encoded_string}}
-                ]
-            }
-        ],
-        "temperature": 0.05,
-        "max_tokens": 4096,
-        "reasoning_effort": "none"
+        "contents": [{
+            "parts": [
+                {"text": prompt},
+                {
+                    "inline_data": {
+                        "mime_type": "image/jpeg",
+                        "data": encoded_string
+                    }
+                }
+            ]
+        }],
+        "generationConfig": {
+            "temperature": 0.1,
+            "maxOutputTokens": 4096
+        }
     }
     
-    last_error = ""
-    # 最多尝试 6 次，确保遇到免费额度限流能充分排队等候
-    for attempt in range(6):
+    response = requests.post(url, headers=headers, json=payload, timeout=60)
+    
+    if response.status_code == 200:
+        res_json = response.json()
         try:
-            response = requests.post(url, headers=headers, data=json.dumps(payload), timeout=180)
-        except requests.exceptions.Timeout:
-            last_error = "请求超时(180s)"
-            time.sleep(3)
-            continue
-        except Exception as e:
-            last_error = "网络异常: " + str(e)
-            time.sleep(3)
-            continue
-            
-        if response.status_code == 200:
-            content = response.json()['choices'][0]['message']['content'].strip()
-            if "</think>" in content:
-                content = content.split("</think>")[-1].strip()
-            content = re.sub(r'```(?:json)?', '', content).strip()
-            
-            items_raw = []
-            json_match = re.search(r'\[\s*\{.*\}\s*\]', content, re.DOTALL)
-            if json_match:
-                try:
-                    parsed = json.loads(json_match.group(0))
-                    if isinstance(parsed, list) and len(parsed) > 0:
-                        items_raw = parsed
-                except Exception:
-                    pass
-            
-            if not items_raw:
-                items_raw = extract_partial_items(content)
-                
-            if items_raw:
-                std_list = []
-                seen_keys = set()
-                for it in items_raw:
-                    p_raw = it.get("price_numeric", 0)
-                    try:
-                        p_val = int(re.sub(r'[^\d]', '', str(p_raw)))
-                    except Exception:
-                        p_val = 0
-                    
-                    dest_str = str(it.get("destination", "精选目的地")).strip()
-                    code_str = str(it.get("tour_code", "")).strip()
-                    title_str = str(it.get("title", "")).strip()
-                    loc_str = str(it.get("departure_location", "详见海报")).strip()
-                    date_str = str(it.get("departure_dates", "见海报")).strip()
-                    
-                    raw_price_str = it.get("price_text")
-                    if raw_price_str:
-                        final_price_str = str(raw_price_str).strip()
-                    elif p_val > 0:
-                        final_price_str = "RM " + str(p_val)
-                    else:
-                        final_price_str = "详见海报"
-
-                    unique_key = (code_str, dest_str, loc_str, p_val, date_str)
-                    if code_str and unique_key in seen_keys:
+            content = res_json['candidates'][0]['content']['parts'][0]['text'].strip()
+            items = parse_pipe_lines(content)
+            if items:
+                unique_list = []
+                seen = set()
+                for it in items:
+                    k = (it["tour_code"], it["destination"], it["departure_location"], it["price_numeric"])
+                    if it["tour_code"] and k in seen:
                         continue
-                    seen_keys.add(unique_key)
+                    seen.add(k)
+                    unique_list.append(it)
+                return unique_list
+        except Exception:
+            pass
+        raise Exception("未能成功解析出旅游团数据行")
+    else:
+        err_msg = response.text
+        try:
+            err_msg = response.json().get("error", {}).get("message", response.text)
+        except Exception:
+            pass
+        raise Exception(f"Gemini API 报错 ({response.status_code}): {err_msg}")
 
-                    entry = make_tour_dict(
-                        dest_str,
-                        code_str,
-                        title_str,
-                        loc_str,
-                        date_str,
-                        p_val,
-                        final_price_str
-                    )
-                    std_list.append(entry)
-                return std_list
-                
-            last_error = "未能识别出旅游团格式"
-        elif response.status_code == 429:
-            # 遇到 429 限流保护，读取等待时间并多缓冲 5 秒，彻底释放 TPM 额度
-            wait_seconds = 30
-            match = re.search(r'try again in ([\d\.]+)s', response.text)
-            if match:
-                wait_seconds = int(float(match.group(1))) + 5
-            for remaining in range(wait_seconds, 0, -1):
-                task_dict["status_msg"] = f"⏳ 正在冷却每分钟配额，后台等待 {remaining} 秒继续处理 {file_name} ..."
-                time.sleep(1)
-            continue
-        else:
-            last_error = "API 返回错误码 " + str(response.status_code)
-            time.sleep(4)
-            
-    raise Exception(last_error if last_error else "多次尝试仍未能获取有效数据")
-
-def background_worker(files_data, task_dict):
+def background_worker(files_data, task_dict, api_key):
     total = len(files_data)
     for idx, (f_name, f_bytes) in enumerate(files_data):
-        task_dict["status_msg"] = "⚡ 后台正在解析第 " + str(idx + 1) + "/" + str(total) + " 张: " + f_name + " ..."
+        task_dict["status_msg"] = f"⚡ Gemini 正在极速全板块解析第 {idx + 1}/{total} 张: {f_name} ..."
         try:
-            data = analyze_single_image(f_bytes, f_name, task_dict)
+            data = analyze_single_image(f_bytes, f_name, api_key)
             if data:
                 task_dict["results"].extend(data)
             else:
-                task_dict["errors"].append(f_name + ": 未能提取到有效数据")
+                task_dict["errors"].append(f"{f_name}: 未能提取到有效数据")
         except Exception as err:
-            task_dict["errors"].append(f_name + ": " + str(err))
+            task_dict["errors"].append(f"{f_name}: {str(err)}")
             
         task_dict["progress"] = (idx + 1) / total
-        # 多图之间强制缓冲 12 秒，确保下一张图执行时每分钟 Token 计数器已经回满
-        if idx + 1 < total:
-            for c in range(12, 0, -1):
-                task_dict["status_msg"] = f"☕ 配额平稳回血中，{c} 秒后开始分析下一张..."
-                time.sleep(1)
+        time.sleep(1.0)
             
     task_dict["running"] = False
     task_dict["finished"] = True
-    task_dict["status_msg"] = "✅ 全部图片已在后台高精度解析完成！"
+    task_dict["status_msg"] = "✅ 全部图片已在后台极速解析完成！"
 
 components.html("""
 <div style="display:flex; align-items:center; justify-content:space-between; background:#f0fdf4; border:1px solid #bbf7d0; padding:10px 14px; border-radius:8px; font-family:sans-serif; margin-bottom:12px;">
@@ -381,20 +304,20 @@ uploaded_files = st.file_uploader(
 )
 
 if uploaded_files:
-    st.success("已选择 " + str(len(uploaded_files)) + " 张图片")
+    st.success(f"已选择 {len(uploaded_files)} 张图片")
     
     if not task["running"]:
-        if st.button("🚀 开始后台批量分析", type="primary"):
+        if st.button("🚀 开始极速后台批量分析", type="primary"):
             task["running"] = True
             task["finished"] = False
             task["notified"] = False
             task["progress"] = 0.0
             task["results"] = []
             task["errors"] = []
-            task["status_msg"] = "正在启动独立工作线程..."
+            task["status_msg"] = "正在启动 Gemini 高速引擎..."
             
             files_data = [(f.name, f.getvalue()) for f in uploaded_files]
-            t = threading.Thread(target=background_worker, args=(files_data, task), daemon=True)
+            t = threading.Thread(target=background_worker, args=(files_data, task, GEMINI_API_KEY), daemon=True)
             t.start()
             st.rerun()
 
@@ -411,10 +334,10 @@ elif task["finished"]:
         task["notified"] = True
 
     if task["results"]:
-        st.success("🎉 深度提取完成！共准确获取到 " + str(len(task['results'])) + " 条全板块旅游团信息！")
+        st.success(f"🎉 极速提取完成！共准确获取到 {len(task['results'])} 条全板块旅游团信息！")
     if task["errors"]:
         for e in task["errors"]:
-            st.warning("⚠️ " + str(e))
+            st.warning(f"⚠️ {e}")
 
 if task["results"]:
     st.markdown("---")
@@ -485,7 +408,7 @@ if task["results"]:
         type="primary"
     )
         
-    st.markdown("### 符合条件的旅游团共 **" + str(len(filtered_df)) + "** 个：")
+    st.markdown(f"### 符合条件的旅游团共 **{len(filtered_df)}** 个：")
     
     display_cols = [c for c in ['destination', 'tour_code', 'departure_location', 'departure_dates', 'price_text', 'title'] if c in filtered_df.columns]
     st.dataframe(filtered_df[display_cols], use_container_width=True)
@@ -494,17 +417,17 @@ if task["results"]:
         with st.container(border=True):
             c1, c2, c3 = st.columns([3, 2, 2])
             with c1:
-                st.markdown("### 📍 **" + str(row.get('destination', '未知')) + "**")
-                st.write("**路线：** " + str(row.get('title', '无')))
-                st.write("**团号：** `" + str(row.get('tour_code', '无')) + "`")
+                st.markdown(f"### 📍 **{row.get('destination', '未知')}**")
+                st.write(f"**路线：** {row.get('title', '无')}")
+                st.write(f"**团号：** `{row.get('tour_code', '无')}`")
             with c2:
-                st.markdown("🛫 **出发地：** `" + str(row.get('departure_location', '详见海报')) + "`")
-                st.write("📅 **出发日期：** " + str(row.get('departure_dates', '见海报')))
+                st.markdown(f"🛫 **出发地：** `{row.get('departure_location', '详见海报')}`")
+                st.write(f"📅 **出发日期：** {row.get('departure_dates', '见海报')}")
                 
                 h_status = row.get('holiday_status')
                 if h_status == 'exact':
-                    st.success("🎒 完美在校假内 (" + str(row.get('holiday_name')) + ")")
+                    st.success(f"🎒 完美在校假内 ({row.get('holiday_name')})")
                 elif h_status == 'slight_over':
-                    st.warning("⚠️ 包含校假，但超出 " + str(row.get('over_days')) + " 天（需请假）")
+                    st.warning(f"⚠️ 包含校假，但超出 {row.get('over_days')} 天（需请假）")
             with c3:
-                st.markdown("### 💰 **" + str(row.get('price_text', '无')) + "**")
+                st.markdown(f"### 💰 **{row.get('price_text', '无')}**")
