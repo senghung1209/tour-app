@@ -24,12 +24,12 @@ OFFICIAL_HOLIDAYS = [
 RAW_KEY = st.secrets.get("GEMINI_API_KEY", "")
 GEMINI_API_KEY = str(RAW_KEY).strip() if RAW_KEY else ""
 
-# 依你账号的可用列表，按视觉响应速度从优排序
-PRIORITY_MODELS = [
-    "gemini-2.5-flash-image",
+# 依据你的账户列表筛选出的 4 个最稳定视觉模型
+CANDIDATE_MODELS = [
     "gemini-3.5-flash",
     "gemini-3.1-flash-lite",
-    "gemini-flash-latest"
+    "gemini-flash-latest",
+    "gemini-2.5-flash-lite"
 ]
 
 def extract_tour_days(title_str):
@@ -95,7 +95,7 @@ def split_and_explode_dates(raw_agency, raw_dest, raw_code, raw_title, raw_loc, 
         })
     return exploded
 
-def call_gemini_vision_with_logs(image_bytes, status_placeholder, chosen_model=""):
+def call_gemini_vision_robust(image_bytes, status_placeholder):
     if not GEMINI_API_KEY:
         raise ValueError("未检测到 GEMINI_API_KEY，请在 Streamlit 后台 Secrets 中配置")
 
@@ -103,18 +103,19 @@ def call_gemini_vision_with_logs(image_bytes, status_placeholder, chosen_model="
     if img.mode != 'RGB':
         img = img.convert('RGB')
     w, h = img.size
-    if max(w, h) > 1600:
-        scale = 1600.0 / max(w, h)
+    if max(w, h) > 1800:
+        scale = 1800.0 / max(w, h)
         img = img.resize((int(w * scale), int(h * scale)), Image.Resampling.LANCZOS)
 
     buf = BytesIO()
-    img.save(buf, format="JPEG", quality=80)
+    img.save(buf, format="JPEG", quality=82)
     base64_data = base64.b64encode(buf.getvalue()).decode('utf-8')
 
     prompt = """
-    你是一个专业高精度旅游海报提取引擎。请逐行阅读海报表格，提取所有行（如 1~23 行全量提取，绝不遗漏）：
-    1. 若写有“新加坡起飞”或航司为 TR，departure_location 填“新加坡起飞 (SIN)”，否则填“马来西亚起飞 (KUL)”；
-    2. 只输出纯 JSON 数组，绝不要包含 Markdown 代码块标记：
+    你是一个专业高精度旅游海报提取引擎。请仔细逐行阅读海报表格中的每一行（如 1~23 行完整提取）：
+    1. 若写有“新加坡起飞”或航司为 TR，departure_location 填写“新加坡起飞 (SIN)”，否则填写“马来西亚起飞 (KUL)”；
+    2. 团号若无则填写'-'；
+    3. 只输出纯 JSON 数组，严禁包含任何 Markdown 格式符号：
     [{"agency":"旅行社名","destination":"目的地","tour_code":"团号","title":"行程名","departure_location":"起飞地","departure_dates":"日期","price":2999}]
     """
 
@@ -144,13 +145,14 @@ def call_gemini_vision_with_logs(image_bytes, status_placeholder, chosen_model="
         "x-goog-api-key": GEMINI_API_KEY
     }
 
-    test_queue = [chosen_model] if chosen_model and chosen_model != "自动探测" else PRIORITY_MODELS
+    error_logs = []
 
-    for m_name in test_queue:
-        status_placeholder.text(f"⏳ 正在尝试连接模型: [{m_name}] (限时 12 秒)...")
+    for m_name in CANDIDATE_MODELS:
+        status_placeholder.text(f"🚀 正在连接官方模型: [{m_name}] (深度推理中，请稍候)...")
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{m_name}:generateContent?key={GEMINI_API_KEY}"
+        
         try:
-            res = requests.post(url, headers=headers, json=payload, timeout=12)
+            res = requests.post(url, headers=headers, json=payload, timeout=45)
             if res.status_code == 200:
                 res_json = res.json()
                 raw_text = res_json["candidates"][0]["content"]["parts"][0]["text"]
@@ -158,11 +160,14 @@ def call_gemini_vision_with_logs(image_bytes, status_placeholder, chosen_model="
                 parsed = json.loads(clean_json.group(0)) if clean_json else json.loads(raw_text)
                 return parsed, m_name
             else:
-                status_placeholder.text(f"⚠️ [{m_name}] 报错 HTTP {res.status_code}，立即切换下一个...")
-        except Exception:
-            status_placeholder.text(f"⚠️ [{m_name}] 响应超时，立即切换下一个...")
+                msg = f"{m_name} 响应 HTTP {res.status_code}: {res.text[:80]}"
+                error_logs.append(msg)
+        except requests.exceptions.Timeout:
+            error_logs.append(f"{m_name} 请求超时 (超过 45 秒)")
+        except Exception as e:
+            error_logs.append(f"{m_name} 异常: {str(e)[:80]}")
 
-    raise RuntimeError("所有优先视觉模型尝试完毕，请检查网络或在侧边栏手动切换指定模型。")
+    raise RuntimeError("所有模型连接失败，具体诊断信息：\n" + "\n".join(error_logs))
 
 def generate_comparison_image(df):
     w, rh, hh = 850, 40, 70
@@ -198,14 +203,11 @@ def generate_comparison_image(df):
 if "tour_data" not in st.session_state:
     st.session_state.tour_data = []
 
-# 侧边栏允许手动强制指定模型
-manual_model = st.sidebar.selectbox("🎯 指定模型通道 (如遇卡顿可手动选)", ["自动探测"] + PRIORITY_MODELS)
-
-uploaded_files = st.file_uploader("📷 上传旅行社海报图片 (支持多选，自动累加)", type=["jpg", "jpeg", "png"], accept_multiple_files=True)
+uploaded_files = st.file_uploader("📷 上传旅行社海报图片 (支持分批多次上传)", type=["jpg", "jpeg", "png"], accept_multiple_files=True)
 
 if uploaded_files:
     st.info(f"已选择 {len(uploaded_files)} 张海报图片")
-    if st.button("🚀 启动视觉解析 (透明实时状态)", type="primary", use_container_width=True):
+    if st.button("🚀 启动 Google 官方视觉解析", type="primary", use_container_width=True):
         newly_extracted = []
         progress_bar = st.progress(0.0)
         status_text = st.empty()
@@ -214,7 +216,7 @@ if uploaded_files:
 
         for idx, f in enumerate(uploaded_files):
             try:
-                raw_items, success_model_name = call_gemini_vision_with_logs(f.getvalue(), status_text, manual_model)
+                raw_items, success_model_name = call_gemini_vision_robust(f.getvalue(), status_text)
                 for item in raw_items:
                     rows = split_and_explode_dates(
                         item.get("agency", "精选旅行社"),
@@ -228,7 +230,7 @@ if uploaded_files:
                     newly_extracted.extend(rows)
             except Exception as e:
                 has_error = True
-                status_text.error(f"处理 {f.name} 时提示: {e}")
+                status_text.error(f"处理 {f.name} 时提示:\n{e}")
 
             progress_bar.progress((idx + 1) / len(uploaded_files))
 
