@@ -12,7 +12,7 @@ from PIL import Image, ImageDraw, ImageFont
 st.set_page_config(page_title="跨社旅游团比价筛选中心", page_icon="✈️", layout="wide")
 
 st.title("✈️ 跨旅行社海报聚合与横向对比中心 (Gemini 官方极速版)")
-st.markdown("已接入 Google 官方新一代视觉通道，具备模型动态自动探测能力，永不报 404。")
+st.markdown("已接入 Google 官方新一代视觉通道，具备模型动态自动探测能力。")
 
 OFFICIAL_HOLIDAYS = [
     (datetime.date(2026, 3, 20), datetime.date(2026, 3, 29), "2026 第一学期假期 (3月)"),
@@ -66,12 +66,12 @@ def split_and_explode_dates(raw_agency, raw_dest, raw_code, raw_title, raw_loc, 
     for d_token in date_tokens:
         status, over_days, hol_name = evaluate_holiday_fit(d_token, days)
         exploded.append({
-            "agency": raw_agency,
-            "destination": raw_dest,
-            "tour_code": raw_code,
-            "title": raw_title,
-            "departure_location": raw_loc,
-            "departure_dates": d_token,
+            "agency": str(raw_agency or "精选旅行社"),
+            "destination": str(raw_dest or "精选路线"),
+            "tour_code": str(raw_code or "-"),
+            "title": str(raw_title or ""),
+            "departure_location": str(raw_loc or "SIN/KUL出发"),
+            "departure_dates": str(d_token),
             "price_numeric": clean_price,
             "price_text": f"RM {clean_price}",
             "holiday_status": status,
@@ -82,7 +82,6 @@ def split_and_explode_dates(raw_agency, raw_dest, raw_code, raw_title, raw_loc, 
 
 @st.cache_data(ttl=3600)
 def get_available_gemini_models():
-    """自动探测当前 Key 在 Google 官方支持 generateContent 的可用模型"""
     list_url = f"https://generativelanguage.googleapis.com/v1beta/models?key={GEMINI_API_KEY}"
     headers = {"x-goog-api-key": GEMINI_API_KEY}
     candidates = []
@@ -98,20 +97,17 @@ def get_available_gemini_models():
     except Exception:
         pass
     
-    # 如果接口查询成功，优先排布 flash 系列
     if candidates:
         flash_models = [m for m in candidates if "flash" in m]
         other_models = [m for m in candidates if "flash" not in m]
         return flash_models + other_models
 
-    # 保底静态列表（使用 3.x 及通用活跃端点）
     return ["gemini-3.5-flash", "gemini-3.7-flash", "gemini-3.8-flash", "gemini-2.5-flash"]
 
 def call_gemini_official_vision(image_bytes):
     if not GEMINI_API_KEY:
         raise ValueError("未检测到 GEMINI_API_KEY，请在 Streamlit 后台 Secrets 中配置")
 
-    # 规范化轻量压缩：1600px 保证清晰度同时实现秒传
     img = Image.open(BytesIO(image_bytes))
     if img.mode != 'RGB':
         img = img.convert('RGB')
@@ -273,18 +269,24 @@ if st.session_state.tour_data:
     df = pd.DataFrame(st.session_state.tour_data)
     df['price_numeric'] = pd.to_numeric(df['price_numeric'], errors='coerce').fillna(0).astype(int)
 
+    # 快捷校对编辑面板
     with st.expander("🛠️ 快速数据校对面板 (双击可修改文字/价格，可自主增删行)", expanded=False):
         edited_df = st.data_editor(df, num_rows="dynamic", use_container_width=True)
         if not edited_df.equals(df):
             st.session_state.tour_data = edited_df.to_dict('records')
             st.rerun()
 
+    # 侧边栏筛选器（安全字符串转换与排序）
     st.sidebar.header("🎛️ 筛选条件")
-    selected_agency = st.sidebar.selectbox("选择旅行社", ["全部"] + sorted([a for a in df['agency'].unique() if a]))
-    selected_dest = st.sidebar.selectbox("选择目的地", ["全部"] + sorted([d for d in df['destination'].unique() if d]))
+    
+    clean_agencies = sorted(list({str(a) for a in df['agency'] if pd.notna(a) and str(a).strip()}))
+    selected_agency = st.sidebar.selectbox("选择旅行社", ["全部"] + clean_agencies)
 
-    raw_locs = sorted([l for l in df['departure_location'].unique() if l])
-    loc_options = ["全部", "🇲🇾 全马/新出发 (KUL/JB/SIN)"] + raw_locs
+    clean_dests = sorted(list({str(d) for d in df['destination'] if pd.notna(d) and str(d).strip()}))
+    selected_dest = st.sidebar.selectbox("选择目的地", ["全部"] + clean_dests)
+
+    clean_locs = sorted(list({str(l) for l in df['departure_location'] if pd.notna(l) and str(l).strip()}))
+    loc_options = ["全部", "🇲🇾 全马/新出发 (KUL/JB/SIN)"] + clean_locs
     selected_loc = st.sidebar.selectbox("选择起飞地点", loc_options)
 
     selected_hol = st.sidebar.selectbox("🗓️ 学校假期筛选", ["全部日期", "🎒 包含学校假期 (含超出2天内)", "✨ 严格在学校假期内 (0超出)", "💼 仅平时非假期"])
@@ -310,6 +312,8 @@ if st.session_state.tour_data:
 
     p_min = int(df['price_numeric'].min()) if not df.empty else 1000
     p_max = int(df['price_numeric'].max()) if not df.empty else 9000
+    if p_min >= p_max:
+        p_max = p_min + 100
     price_range = st.sidebar.slider("💰 团费预算范围 (RM)", min_value=p_min, max_value=p_max, value=(p_min, p_max), step=100)
     filtered_df = filtered_df[(filtered_df['price_numeric'] >= price_range[0]) & (filtered_df['price_numeric'] <= price_range[1])]
 
