@@ -22,9 +22,10 @@ OFFICIAL_HOLIDAYS = [
     (datetime.date(2027, 1, 23), datetime.date(2027, 2, 16), "2027 农历新年与跨年假期")
 ]
 
-# 从 Streamlit Secrets 安全获取 Token
-HF_TOKEN = st.secrets.get("HF_TOKEN", "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")
-API_URL = "https://api-inference.huggingface.co/models/Qwen/Qwen2.5-VL-7B-Instruct/v1/chat/completions"
+# 安全获取 Token（不留明文字符串，防止 GitHub 拦截）
+HF_TOKEN = st.secrets.get("HF_TOKEN", "")
+# Hugging Face 最新官方 Serverless 路由终端
+API_URL = "https://router.huggingface.co/hf-inference/v1/chat/completions"
 
 def extract_tour_days(title_str):
     m = re.search(r'(\d+)\s*(?:天|D|d)', str(title_str))
@@ -83,6 +84,9 @@ def split_and_explode_dates(raw_agency, raw_dest, raw_code, raw_title, raw_loc, 
     return exploded
 
 def call_huggingface_vision(image_bytes):
+    if not HF_TOKEN:
+        raise ValueError("未检测到 HF_TOKEN，请在 Streamlit 后台 Secrets 中配置 HF_TOKEN")
+
     base64_image = base64.b64encode(image_bytes).decode('utf-8')
     headers = {
         "Authorization": f"Bearer {HF_TOKEN}",
@@ -124,21 +128,26 @@ def call_huggingface_vision(image_bytes):
         "temperature": 0.1
     }
 
-    # 包含重试机制，应对 Serverless 模型可能的冷启动加载
+    last_err = ""
     for attempt in range(3):
-        res = requests.post(API_URL, headers=headers, json=payload, timeout=60)
-        if res.status_code == 200:
-            content = res.json()["choices"][0]["message"]["content"]
-            clean_json = re.search(r'\[.*\]', content, re.DOTALL)
-            if clean_json:
-                return json.loads(clean_json.group(0))
-            return json.loads(content)
-        elif res.status_code == 503:
-            time.sleep(10)
-        else:
+        try:
+            res = requests.post(API_URL, headers=headers, json=payload, timeout=60)
+            if res.status_code == 200:
+                content = res.json()["choices"][0]["message"]["content"]
+                clean_json = re.search(r'\[.*\]', content, re.DOTALL)
+                if clean_json:
+                    return json.loads(clean_json.group(0))
+                return json.loads(content)
+            elif res.status_code == 503:
+                time.sleep(8)
+            else:
+                last_err = f"HTTP {res.status_code}: {res.text}"
+                time.sleep(2)
+        except Exception as ex:
+            last_err = str(ex)
             time.sleep(2)
-            
-    raise RuntimeError(f"API 请求异常 (状态码 {res.status_code}): {res.text}")
+
+    raise RuntimeError(f"API 请求失败: {last_err}")
 
 def generate_comparison_image(df):
     w, rh, hh = 850, 40, 70
@@ -189,9 +198,10 @@ if uploaded_files:
         all_exploded = []
         progress_bar = st.progress(0.0)
         status_text = st.empty()
+        has_error = False
 
         for idx, f in enumerate(uploaded_files):
-            status_text.text(f"🔍 正在由 Qwen2.5-VL 视觉理解海报排版: {f.name} ...")
+            status_text.text(f"🔍 正在由 Qwen2.5-VL 解析海报: {f.name} ...")
             try:
                 raw_items = call_huggingface_vision(f.getvalue())
                 for item in raw_items:
@@ -206,15 +216,18 @@ if uploaded_files:
                     )
                     all_exploded.extend(rows)
             except Exception as e:
+                has_error = True
                 st.error(f"处理 {f.name} 时发生错误: {e}")
 
             progress_bar.progress((idx + 1) / len(uploaded_files))
 
-        unique_dict = {(x["agency"], x["tour_code"], x["departure_dates"]): x for x in all_exploded}
-        st.session_state.tour_data = list(unique_dict.values())
-        status_text.text("✅ 全部海报视觉解析与独立日期拆分完成！")
-        time.sleep(0.5)
-        st.rerun()
+        if not has_error and all_exploded:
+            unique_dict = {(x["agency"], x["tour_code"], x["departure_dates"]): x for x in all_exploded}
+            st.session_state.tour_data = list(unique_dict.values())
+            status_text.text("✅ 解析完成！")
+            st.rerun()
+        elif not has_error and not all_exploded:
+            status_text.text("⚠️ 未能从海报提取到有效团期数据。")
 
 if st.session_state.tour_data:
     st.markdown("---")
