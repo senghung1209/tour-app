@@ -18,7 +18,6 @@ st.markdown("高精细度全板块识别，支持精准区分出发机场、2026
 
 GROQ_API_KEY = "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"
 
-# 2026 马来西亚官方教育部学年假期
 OFFICIAL_HOLIDAYS = [
     (datetime.date(2026, 3, 20), datetime.date(2026, 3, 29), "2026 第一学期假期 (3月)"),
     (datetime.date(2026, 5, 22), datetime.date(2026, 6, 7), "2026 年中假期 (5/6月)"),
@@ -28,7 +27,6 @@ OFFICIAL_HOLIDAYS = [
 ]
 
 def extract_tour_days(title_str):
-    """从标题提取天数（如 8天6夜, 8D6N -> 8）"""
     m = re.search(r'(\d+)\s*(?:天|D|d)', str(title_str))
     if m:
         try:
@@ -38,10 +36,6 @@ def extract_tour_days(title_str):
     return 1
 
 def evaluate_holiday_fit(departure_date_str, duration_days):
-    """
-    匹配 2026 官方假期：
-    返回 (状态: exact/slight_over/none, 超期天数, 假期名称)
-    """
     matches = re.findall(r'(\d{1,2})[/.-](\d{1,2})(?:[/.-](\d{2,4}))?', str(departure_date_str))
     if not matches:
         return 'none', 0, ""
@@ -64,11 +58,9 @@ def evaluate_holiday_fit(departure_date_str, duration_days):
             ret_date = dep_date + datetime.timedelta(days=max(duration_days - 1, 0))
             
             for h_start, h_end, h_name in OFFICIAL_HOLIDAYS:
-                # 完全在假期内
                 if dep_date >= h_start and ret_date <= h_end:
                     return 'exact', 0, h_name
                 
-                # 存在重叠但稍有超出
                 if not (ret_date < h_start or dep_date > h_end):
                     early_days = max((h_start - dep_date).days, 0)
                     late_days = max((ret_date - h_end).days, 0)
@@ -112,7 +104,6 @@ if "task_state" not in st.session_state:
     }
 
 def trigger_notification():
-    """多通道强提醒：连续振动 + 和弦音响 + 浏览器标题闪烁"""
     js = """
     <script>
     (function() {
@@ -124,7 +115,7 @@ def trigger_notification():
 
         try {
             var ctx = new (window.AudioContext || window.webkitAudioContext)();
-            var freqs = [523.25, 659.25, 783.99, 1046.50]; // C5, E5, G5, C6
+            var freqs = [523.25, 659.25, 783.99, 1046.50];
             freqs.forEach(function(f, i) {
                 var osc = ctx.createOscillator();
                 var gain = ctx.createGain();
@@ -156,8 +147,8 @@ def trigger_notification():
     """
     components.html(js, height=0)
 
-def compress_image(uploaded_file, max_size=1100, quality=80):
-    """采用 1100px 高分辨率，确保小字与出发机场角标绝对清晰"""
+def compress_image(uploaded_file, max_size=900, quality=72):
+    """黄金分辨率 900px：文字与角落标记清晰，且绝不超限爆额度"""
     img = Image.open(uploaded_file)
     if img.mode in ("RGBA", "P"):
         img = img.convert("RGB")
@@ -210,20 +201,12 @@ def analyze_single_image(file_bytes, file_name, task_dict):
     encoded_string = compress_image(BytesIO(file_bytes))
     
     prompt = (
-        "你必须对这张宣传海报进行高精度、全板块的深度扫描提取，严禁偷懒遗漏！\n"
-        "海报共包含多个不同板块：【SIN-重庆】、【SIN-西藏】、【青岛】、【SIN-桂林】、【SIN-台湾】、【JB-贵州】、【SIN-韩国】、【KL-北疆】、【SIN-哈尔滨】、【SIN-九寨沟】等。\n\n"
-        "【严格提取准则】：\n"
-        "1. 每一个板块、每一个不同的行程标题必须完整提取，返回纯 JSON 数组。\n"
-        "2. 【起飞机场 departure_location 必须极其精准】：\n"
-        "   - 大标题写 SIN- 的是『新加坡出发 (SIN)』；写 KL- 的是『吉隆坡出发 (KL)』。\n"
-        "   - 特别注意【JB-贵州】板块内部必须逐格看右下角标记：\n"
-        "     * SP002809 右下角写着『新山出发』 -> 填『新山出发 (JB)』\n"
-        "     * SP002729 标有酷航 Scoot 图标，右下角写着『新加坡出发』 -> 填『新加坡出发 (SIN)』\n"
-        "     * SP002777 右下角写着『新山出发』 -> 填『新山出发 (JB)』\n"
-        "     * SP002779 标有酷航 Scoot 图标，右下角写着『新加坡出发』 -> 填『新加坡出发 (SIN)』\n"
-        "3. destination 字段：必须是具体城市名称（重庆、西藏、青岛、桂林、台湾、贵州、韩国、北疆、哈尔滨、九寨沟）。\n"
-        "4. departure_dates 字段：同一个团有多个出发日期时，合并写在一起（如 '26/10, 28/10, 30/10'），不要循环生成几十个无意义的重复条目。\n"
-        "输出 JSON 字段包含：destination, departure_location, tour_code, title, departure_dates, price_numeric, price_text。"
+        "仔细扫描整张海报，提取所有板块的旅游团项目，返回纯 JSON 数组：\n"
+        "1. 包含海报中的所有板块（如 重庆、西藏、青岛、桂林、台湾、贵州、韩国、北疆、哈尔滨、九寨沟等）。\n"
+        "2. 【注意起飞地点】：看卡片标题或右下角标记，精确标注『新加坡出发 (SIN)』、『新山出发 (JB)』或『吉隆坡出发 (KL)』。\n"
+        "3. destination 填写具体的城市或省份。\n"
+        "4. 同一个行程如果有多个日期，合并在 departure_dates（如 '26/10, 28/10'），不要循环重复。\n"
+        "字段格式：destination, departure_location, tour_code, title, departure_dates, price_numeric, price_text。"
     )
 
     url = "https://api.groq.com/openai/v1/chat/completions"
@@ -248,7 +231,7 @@ def analyze_single_image(file_bytes, file_name, task_dict):
     }
     
     last_error = ""
-    for attempt in range(4):
+    for attempt in range(5):
         try:
             response = requests.post(url, headers=headers, data=json.dumps(payload), timeout=180)
         except requests.exceptions.Timeout:
@@ -276,6 +259,7 @@ def analyze_single_image(file_bytes, file_name, task_dict):
                 except Exception:
                     pass
             
+            # 强化救援
             if not items_raw:
                 items_raw = extract_partial_items(content)
                 
@@ -303,7 +287,6 @@ def analyze_single_image(file_bytes, file_name, task_dict):
                     else:
                         final_price_str = "详见海报"
 
-                    # 避免 AI 发生幻觉刷屏重复
                     unique_key = (code_str, dest_str, loc_str, p_val, date_str)
                     if code_str and unique_key in seen_keys:
                         continue
@@ -323,24 +306,25 @@ def analyze_single_image(file_bytes, file_name, task_dict):
                 
             last_error = "未能识别出旅游团格式"
         elif response.status_code == 429:
-            wait_seconds = 25
+            # 遇到限流，精准倒计时，确保冷却完毕
+            wait_seconds = 28
             match = re.search(r'try again in ([\d\.]+)s', response.text)
             if match:
-                wait_seconds = int(float(match.group(1))) + 2
+                wait_seconds = int(float(match.group(1))) + 3
             for remaining in range(wait_seconds, 0, -1):
-                task_dict["status_msg"] = "⏳ 触发配额保护，后台等待 " + str(remaining) + " 秒继续处理 " + file_name + " ..."
+                task_dict["status_msg"] = f"⏳ 正在冷却免费配额，{remaining} 秒后自动继续处理 {file_name} ..."
                 time.sleep(1)
             continue
         else:
             last_error = "API 返回错误码 " + str(response.status_code)
-            time.sleep(3)
+            time.sleep(4)
             
     raise Exception(last_error if last_error else "多次尝试仍未能获取有效数据")
 
 def background_worker(files_data, task_dict):
     total = len(files_data)
     for idx, (f_name, f_bytes) in enumerate(files_data):
-        task_dict["status_msg"] = "⚡ 后台正在全板块高精度解析第 " + str(idx + 1) + "/" + str(total) + " 张: " + f_name + " ..."
+        task_dict["status_msg"] = "⚡ 后台正在解析第 " + str(idx + 1) + "/" + str(total) + " 张: " + f_name + " ..."
         try:
             data = analyze_single_image(f_bytes, f_name, task_dict)
             if data:
@@ -351,14 +335,16 @@ def background_worker(files_data, task_dict):
             task_dict["errors"].append(f_name + ": " + str(err))
             
         task_dict["progress"] = (idx + 1) / total
+        # 多图之间留出 8 秒间隔，让每分钟 Token 计数器充分重置，彻底避免第二张图报黄色错误
         if idx + 1 < total:
-            time.sleep(3.0)
+            for c in range(8, 0, -1):
+                task_dict["status_msg"] = f"☕ 准备分析下一张，平稳缓冲 {c} 秒..."
+                time.sleep(1)
             
     task_dict["running"] = False
     task_dict["finished"] = True
     task_dict["status_msg"] = "✅ 全部图片已在后台高精度解析完成！"
 
-# 页面顶部常驻：点击开启浏览器系统权限与音频上下文唤醒
 components.html("""
 <div style="display:flex; align-items:center; justify-content:space-between; background:#f0fdf4; border:1px solid #bbf7d0; padding:10px 14px; border-radius:8px; font-family:sans-serif; margin-bottom:12px;">
     <span style="font-size:14px; color:#166534; font-weight:600;">🔔 开启后台完成声音与振动强提醒：</span>
@@ -397,7 +383,7 @@ if uploaded_files:
     st.success("已选择 " + str(len(uploaded_files)) + " 张图片")
     
     if not task["running"]:
-        if st.button("🚀 开始后台深度批量分析", type="primary"):
+        if st.button("🚀 开始后台批量分析", type="primary"):
             task["running"] = True
             task["finished"] = False
             task["notified"] = False
@@ -424,7 +410,7 @@ elif task["finished"]:
         task["notified"] = True
 
     if task["results"]:
-        st.success("🎉 深度提取完成！共准确获取到 " + str(len(task['results'])) + " 条全板块旅游团信息！")
+        st.success("🎉 提取完成！共准确获取到 " + str(len(task['results'])) + " 条全板块旅游团信息！")
     if task["errors"]:
         for e in task["errors"]:
             st.warning("⚠️ " + str(e))
