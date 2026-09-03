@@ -122,7 +122,7 @@ def parse_text_robust(raw_text, default_agency="豪吉旅游"):
             if len(parts) >= 7:
                 price_val = int(re.sub(r'[^\d]', '', parts[6]))
                 items.append({
-                    "agency": parts[0] if parts[0] in ["豪吉旅游", "琦琦旅游"] else default_agency,
+                    "agency": default_agency,
                     "destination": parts[1] or "精选目的地",
                     "tour_code": parts[2] or "-",
                     "title": parts[3] or "",
@@ -131,31 +131,29 @@ def parse_text_robust(raw_text, default_agency="豪吉旅游"):
                     "price": price_val
                 })
             elif len(parts) >= 6:
+                # 兼容简易格式
                 price_val = int(re.sub(r'[^\d]', '', parts[5]))
-                raw_dest = parts[3].split("+")[0].split(" ")[0].strip()
-                airline = parts[4].upper()
                 items.append({
-                    "agency": "琦琦旅游",
-                    "destination": raw_dest if raw_dest else "精选目的地",
-                    "tour_code": f"QIQI-{parts[0]}",
-                    "title": f"{parts[2]} {parts[3]}",
-                    "departure_location": "🇸🇬 新加坡起飞 (SIN)" if "TR" in airline else "🇲🇾 马来西亚起飞 (KUL)",
-                    "departure_dates": parts[1],
+                    "agency": default_agency,
+                    "destination": parts[1] or "精选目的地",
+                    "tour_code": parts[2] if len(parts) > 2 else "-",
+                    "title": parts[3] if len(parts) > 3 else "",
+                    "departure_location": "🇲🇾 马来西亚起飞 (KUL)",
+                    "departure_dates": parts[4] if len(parts) > 4 else parts[1],
                     "price": price_val
                 })
         except Exception:
             continue
     return items
 
-def call_gemini_vision(img_bytes, hint_text=""):
+def call_gemini_vision(img_bytes, hint_text="", default_agency="豪吉旅游"):
     if not GEMINI_API_KEY:
         return []
     base64_data = base64.b64encode(img_bytes).decode('utf-8')
     prompt = f"""
-    你是旅游海报解析专家。请全量提取图中的所有旅游团期。
-    {hint_text}
-    要求：并列日期或多档价格必须拆为独立行！纯文本逐行输出，竖线 | 分隔，严禁代码块标记：
-    豪吉旅游|目的地纯地名|团号(SP开头)|行程路线全称|起飞地|出发日期|纯数字价格
+    请全量提取图中的所有旅游团期。{hint_text}
+    格式要求：每一行纯文本输出，竖线 | 分隔，不要带代码块标记：
+    目的地纯地名|团号(SP开头)|行程路线全称|起飞地|出发日期|纯数字价格
     """
     payload = {
         "contents": [{"parts": [{"text": prompt}, {"inline_data": {"mime_type": "image/jpeg", "data": base64_data}}]}],
@@ -166,7 +164,7 @@ def call_gemini_vision(img_bytes, hint_text=""):
         res = requests.post(url, headers={"Content-Type": "application/json"}, json=payload, timeout=60)
         if res.status_code == 200:
             raw_text = res.json()["candidates"][0]["content"]["parts"][0]["text"]
-            return parse_text_robust(raw_text)
+            return parse_text_robust(raw_text, default_agency=default_agency)
     except Exception:
         pass
     return []
@@ -185,18 +183,17 @@ if uploaded_file is not None:
 
             filename_upper = uploaded_file.name.upper()
             if "QIQI" in filename_upper or h < w * 1.35:
-                raw_items = call_gemini_vision(img_bytes, "提取琦琦旅游表格 1到23项")
+                raw_items = call_gemini_vision(img_bytes, "提取琦琦旅游表格", default_agency="琦琦旅游")
             else:
-                # 豪吉海报上下切片，保证高清晰度捕捉每个小方格
                 box_top = (0, 0, w, int(h * 0.58))
                 buf_top = BytesIO()
                 img.crop(box_top).save(buf_top, format="JPEG", quality=90)
-                r1 = call_gemini_vision(buf_top.getvalue(), "提取上半区：重庆(含SP002332两档与SP002374多日期)、西藏、青岛、桂林、台湾、韩国")
+                r1 = call_gemini_vision(buf_top.getvalue(), "提取上半区：重庆、西藏、青岛、桂林、台湾、韩国", default_agency="豪吉旅游")
 
                 box_bottom = (0, int(h * 0.44), w, h)
                 buf_bottom = BytesIO()
                 img.crop(box_bottom).save(buf_bottom, format="JPEG", quality=90)
-                r2 = call_gemini_vision(buf_bottom.getvalue(), "提取下半区：贵州、哈尔滨、北疆、九寨沟")
+                r2 = call_gemini_vision(buf_bottom.getvalue(), "提取下半区：贵州、哈尔滨、北疆、九寨沟", default_agency="豪吉旅游")
 
                 raw_items = r1 + r2
             
@@ -253,6 +250,4 @@ if st.session_state.tour_data:
         st.session_state.tour_data = []
         st.rerun()
         
-    st.markdown("---")
-    df = pd.DataFrame(st.session_state.tour_data)
-    st.dataframe(df, use_container_width=True)
+    st.markdown("
