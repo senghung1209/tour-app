@@ -118,22 +118,17 @@ def parse_bulletproof(raw_text, default_agency="豪吉旅游"):
         line = line.strip().replace("```", "").replace("`", "")
         if not line or len(line) < 4:
             continue
-        
-        # 尝试正则提取团号 (SPxxxx 或 QIQI-xx)
         code_match = re.search(r'(SP\d+|QIQI-\d+)', line, re.IGNORECASE)
         tour_code = code_match.group(1).upper() if code_match else "-"
         
-        # 尝试提取价格 (如 RM 2999 或数字 2999)
         price_match = re.search(r'(?:RM)?\s*(\d{3,5})', line, re.IGNORECASE)
         price_val = int(price_match.group(1)) if price_match else 2999
         if price_val < 500:
             price_val = 2999
 
-        # 尝试提取日期 (如 31/12/26 或 13/09/2026)
         date_match = re.search(r'\b\d{1,2}[/.-]\d{1,2}(?:[/.-]\d{2,4})?\b', line)
         date_str = date_match.group(0) if date_match else "31/12/2026"
 
-        # 目的地与路线
         dest = "精选目的地"
         for k in ["重庆", "西藏", "青岛", "桂林", "台湾", "韩国", "贵州", "哈尔滨", "北疆", "九寨沟", "江南", "张家界", "云南", "广州", "北京", "南疆", "厦门", "青甘"]:
             if k in line:
@@ -157,10 +152,7 @@ def call_gemini_vision(img_bytes, hint_text="", default_agency="豪吉旅游"):
     if not GEMINI_API_KEY:
         return []
     base64_data = base64.b64encode(img_bytes).decode('utf-8')
-    prompt = f"""
-    请识别并提取图中的所有旅游团期信息。{hint_text}
-    请按行输出每一项，包含团号（如SPxxxx）、出发日期、价格、目的地和路线名称。
-    """
+    prompt = f"请识别并提取图中的所有旅游团期信息。{hint_text} 请按行输出每一项，包含团号、出发日期、价格、目的地和路线名称。"
     payload = {
         "contents": [{"parts": [{"text": prompt}, {"inline_data": {"mime_type": "image/jpeg", "data": base64_data}}]}],
         "generationConfig": {"temperature": 0.0, "maxOutputTokens": 8192}
@@ -255,6 +247,4 @@ if uploaded_file is not None:
                 r1 = call_gemini_vision(buf_top.getvalue(), "提取上半区：重庆、西藏、青岛、桂林、台湾、韩国", default_agency="豪吉旅游")
 
                 box_bottom = (0, int(h * 0.44), w, h)
-                buf_bottom = BytesIO()
-                img.crop(box_bottom).save(buf_bottom, format="JPEG", quality=90)
-                r2 = call_gemini_vision(buf_bottom.getvalue(), "提取下半区：贵州、
+                
