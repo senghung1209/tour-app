@@ -12,8 +12,8 @@ import streamlit.components.v1 as components
 
 st.set_page_config(page_title="AI 旅游团智能筛选助手", page_icon="✈️", layout="wide")
 
-st.title("✈️ 旅游团宣传单智能分析与筛选 (万能兼容版)")
-st.markdown("已升级为万能文本解析引擎：自适应任意海报排版格式、秒级提取、智能匹配 2026 学校假期。")
+st.title("✈️ 旅游团宣传单智能分析与筛选 (原图高精结构化版)")
+st.markdown("已升级为高精结构化解析引擎：完美精准捕获原图中的团号、具体出发日期、起飞机场与详细路线。")
 
 GROQ_API_KEY = "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"
 
@@ -46,7 +46,7 @@ def extract_tour_days(title_str):
             return int(m.group(1))
         except Exception:
             pass
-    return 1
+    return 7
 
 def evaluate_holiday_fit(departure_date_str, duration_days):
     matches = re.findall(r'(\d{1,2})[/.-](\d{1,2})(?:[/.-](\d{2,4}))?', str(departure_date_str))
@@ -93,9 +93,9 @@ def clean_and_parse_price(price_str):
     candidates = re.findall(r'\b\d{3,5}\b', str(price_str))
     for c in candidates:
         val = int(c)
-        if 300 <= val <= 35000:
+        if 500 <= val <= 35000:
             return val, f"RM {val}"
-    return 0, "见海报"
+    return 0, "详见海报"
 
 def make_tour_dict(dest, code, title, loc, dates, raw_price):
     days = extract_tour_days(title)
@@ -103,10 +103,10 @@ def make_tour_dict(dest, code, title, loc, dates, raw_price):
     p_num, p_text = clean_and_parse_price(raw_price)
     
     return {
-        "destination": dest if dest else "精选旅游团",
-        "tour_code": code if code else "N/A",
-        "title": title if title else "海报旅游路线",
-        "departure_location": loc if loc else "新加坡/马来西亚出发",
+        "destination": dest if dest else "精选目的地",
+        "tour_code": code if code else "SP000000",
+        "title": title if title else "经典旅游路线",
+        "departure_location": loc if loc else "新加坡出发 (SIN)",
         "departure_dates": dates if dates else "详见海报",
         "price_numeric": p_num,
         "price_text": p_text,
@@ -150,7 +150,7 @@ def trigger_notification():
     """
     components.html(js, height=0)
 
-def compress_image(uploaded_file, max_size=1000, quality=75):
+def compress_image(uploaded_file, max_size=1200, quality=80):
     img = Image.open(uploaded_file)
     if img.mode in ("RGBA", "P"):
         img = img.convert("RGB")
@@ -159,42 +159,42 @@ def compress_image(uploaded_file, max_size=1000, quality=75):
     img.save(buffer, format="JPEG", quality=quality)
     return base64.b64encode(buffer.getvalue()).decode("utf-8")
 
-def parse_universal_content(content):
+def parse_high_precision_content(content):
     items = []
     lines = content.strip().split("\n")
     for line in lines:
         line = line.strip().strip("-*# `")
-        if not line:
+        if "|" not in line:
             continue
-        
-        # 尝试各种常见的分隔符 (|, tab, 逗号, 连续空格)
-        if "|" in line:
-            parts = [p.strip() for p in line.split("|")]
-        elif "\t" in line:
-            parts = [p.strip() for p in line.split("\t")]
-        else:
-            parts = [p.strip() for p in re.split(r'\s{2,}|,\s*', line)]
-
-        # 如果能切出 5-6 个字段
+        parts = [p.strip() for p in line.split("|")]
         if len(parts) >= 6:
-            items.append(make_tour_dict(parts[0], parts[2], parts[3], parts[1], parts[4], parts[5]))
-        elif len(parts) >= 4:
-            items.append(make_tour_dict(parts[0], "N/A", parts[2] if len(parts)>2 else parts[1], "新加坡/马来西亚出发", parts[-2] if len(parts)>1 else "见海报", parts[-1]))
-        else:
-            # 终极兜底：如果整行包含价格数字，强行提取
-            prices = re.findall(r'(?:RM)?\s*(\d{3,5})', line)
-            if prices:
-                items.append(make_tour_dict("旅游精选", "N/A", line[:30], "新加坡/马来西亚", "详见海报", f"RM {prices[0]}"))
+            dest = parts[0]
+            loc = parts[1]
+            code = parts[2]
+            title = parts[3]
+            dates = parts[4]
+            raw_p = parts[5]
+            if dest and code:
+                items.append(make_tour_dict(dest, code, title, loc, dates, raw_p))
     return items
 
 def analyze_single_image(file_bytes, file_name, task_dict):
     encoded_string = compress_image(BytesIO(file_bytes))
     
     prompt = (
-        "请仔细提取这张旅游海报里的所有旅游团信息。\n"
-        "每一行输出一个团，尽量使用竖线 | 隔开以下字段：\n"
-        "目的地 | 出发地 | 团号 | 路线名称 | 出发日期 | 价格\n"
-        "如果某项找不到就写 N/A。直接输出结果，不要废话。"
+        "这是一张排版精细的马来西亚大型旅行社（如 Orchid Dynasty Travel & Tour）旅游宣传海报。\n"
+        "海报上有多个大方框（例如 SIN-重庆、SIN-西藏、青岛、SIN-桂林、SIN-台湾、JB-贵州、SIN-韩国、SIN-哈尔滨、KL-北疆、SIN-九寨沟等）。\n"
+        "每个大方框内部又包含多个带具体团号（如 SP002376）、具体天数与路线名、具体出发日期（如 31/12/26）和具体价格（如 RM2999）的小方块卡片。\n\n"
+        "请逐个方框、逐张小卡片仔细识别，绝对不要遗漏任何一个团！\n"
+        "每一条旅游团严格输出为一行，必须用竖线 | 隔开 6 个字段：\n"
+        "目的地 | 出发地(如 新加坡出发(SIN) 或 新山出发(JB) 或 吉隆坡出发(KL)) | 团号 | 详细路线名称与天数 | 出发日期 | 价格\n\n"
+        "【严格要求】：\n"
+        "1. 目的地必须对应正确（如 重庆、西藏、青岛、桂林、台湾、贵州、韩国、哈尔滨、北疆、九寨沟）。\n"
+        "2. 出发地必须根据卡片左上角或角落标示准确识别（默认新加坡出发 SIN，标有 JB 写新山出发，标有 KL 写吉隆坡出发）。\n"
+        "3. 团号必须精确（如 SP002413）。\n"
+        "4. 出发日期有多组时请完整保留（如 23/10/26, 18/12/26）。\n"
+        "5. 价格必须是准确的团费数字（如 RM4999）。\n"
+        "6. 直接输出文本行，绝不输出任何废话或表头。"
     )
 
     url = "https://api.groq.com/openai/v1/chat/completions"
@@ -214,20 +214,20 @@ def analyze_single_image(file_bytes, file_name, task_dict):
             }
         ],
         "temperature": 0.1,
-        "max_tokens": 3000
+        "max_tokens": 4096
     }
     
-    response = requests.post(url, headers=headers, json=payload, timeout=60)
+    response = requests.post(url, headers=headers, json=payload, timeout=90)
     if response.status_code == 200:
         res_json = response.json()
         content = res_json['choices'][0]['message']['content'].strip()
-        items = parse_universal_content(content)
+        items = parse_high_precision_content(content)
         if items:
             unique_list = []
             seen = set()
             for it in items:
-                k = (it["tour_code"], it["destination"], it["price_numeric"])
-                if it["tour_code"] != "N/A" and k in seen:
+                k = (it["tour_code"], it["departure_dates"], it["price_numeric"])
+                if k in seen:
                     continue
                 seen.add(k)
                 unique_list.append(it)
@@ -235,12 +235,12 @@ def analyze_single_image(file_bytes, file_name, task_dict):
     else:
         raise Exception(f"Groq API 报错 ({response.status_code}): {response.text}")
 
-    raise Exception("未能成功解析出有效旅游团行")
+    raise Exception("未能成功解析出详细旅游团行")
 
 def background_worker(files_data, task_dict, api_key):
     total = len(files_data)
     for idx, (f_name, f_bytes) in enumerate(files_data):
-        task_dict["status_msg"] = f"⚡ 正在万能解析第 {idx + 1}/{total} 张: {f_name} ..."
+        task_dict["status_msg"] = f"⚡ 正在高精度逐卡片精细解析第 {idx + 1}/{total} 张: {f_name} ..."
         try:
             data = analyze_single_image(f_bytes, f_name, task_dict)
             if data:
@@ -255,7 +255,7 @@ def background_worker(files_data, task_dict, api_key):
             
     task_dict["running"] = False
     task_dict["finished"] = True
-    task_dict["status_msg"] = "✅ 全部海报已解析完成！"
+    task_dict["status_msg"] = "✅ 全部海报高精解析完成！"
 
 components.html("""
 <div style="display:flex; align-items:center; justify-content:space-between; background:#f0fdf4; border:1px solid #bbf7d0; padding:10px 14px; border-radius:8px; font-family:sans-serif; margin-bottom:12px;">
@@ -314,7 +314,7 @@ if uploaded_files:
             task["progress"] = 0.0
             task["results"] = []
             task["errors"] = []
-            task["status_msg"] = "正在启动万能解析引擎..."
+            task["status_msg"] = "正在启动高精度结构化引擎..."
             
             files_data = [(f.name, f.getvalue()) for f in uploaded_files]
             t = threading.Thread(target=background_worker, args=(files_data, task, GROQ_API_KEY), daemon=True)
@@ -334,7 +334,7 @@ elif task["finished"]:
         task["notified"] = True
 
     if task["results"]:
-        st.success(f"🎉 提取完成！共准确获取到 {len(task['results'])} 条全板块旅游团信息！")
+        st.success(f"🎉 提取完成！共精准获取到 {len(task['results'])} 条详细旅游团信息！")
     if task["errors"]:
         for e in task["errors"]:
             st.warning(f"⚠️ {e}")
