@@ -1,8 +1,9 @@
 import streamlit as st
 import pandas as pd
-import time
 import datetime
 import re
+import os
+import urllib.request
 import base64
 import requests
 from io import BytesIO
@@ -11,41 +12,68 @@ import streamlit.components.v1 as components
 
 st.set_page_config(page_title="跨社旅游团比价筛选中心", page_icon="✈️", layout="wide")
 
+# 1. 顶部主区域：通知与声音激活面板
 st.title("✈️ 跨旅行社海报聚合与横向对比中心")
-st.caption("🚀 已内置智能切片扫描、预估倒计时与任务完成系统级通知。")
 
-# 浏览器桌面通知与蜂鸣提醒脚本
+with st.container(border=True):
+    col_bell_1, col_bell_2 = st.columns([3, 1])
+    with col_bell_1:
+        st.markdown("🔔 **后台通知与声音提醒服务**")
+        st.caption("首次使用请点击右侧按钮，开启手机/电脑通知权限并解锁后台提示音（解析完毕会自动发出提示音）。")
+    with col_bell_2:
+        if st.button("🔔 立即开启通知与声音", type="secondary", use_container_width=True):
+            components.html("""
+            <script>
+            (function() {
+                try {
+                    window.audioCtx = window.audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+                    if (window.audioCtx.state === 'suspended') {
+                        window.audioCtx.resume();
+                    }
+                    const osc = window.audioCtx.createOscillator();
+                    const gain = window.audioCtx.createGain();
+                    osc.type = "sine";
+                    osc.frequency.setValueAtTime(440, window.audioCtx.currentTime);
+                    gain.gain.setValueAtTime(0.1, window.audioCtx.currentTime);
+                    osc.connect(gain);
+                    gain.connect(window.audioCtx.destination);
+                    osc.start();
+                    osc.stop(window.audioCtx.currentTime + 0.1);
+                } catch(e) {}
+
+                if ("Notification" in window) {
+                    Notification.requestPermission().then(function(perm) {
+                        alert("提示音已解锁！系统通知权限状态: " + perm);
+                    });
+                } else {
+                    alert("提示音已解锁！当前浏览器不支持桌面弹窗通知。");
+                }
+            })();
+            </script>
+            """, height=0)
+
 def trigger_notification_js(title, message):
     js_code = f"""
     <script>
     (function() {{
-        // 播放提示音 (Web Audio API)
         try {{
             const ctx = new (window.AudioContext || window.webkitAudioContext)();
+            const now = ctx.currentTime;
             const osc = ctx.createOscillator();
             const gain = ctx.createGain();
             osc.type = "sine";
-            osc.frequency.setValueAtTime(587.33, ctx.currentTime); // D5
-            osc.frequency.setValueAtTime(880, ctx.currentTime + 0.15); // A5
-            gain.gain.setValueAtTime(0.2, ctx.currentTime);
-            gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.5);
+            osc.frequency.setValueAtTime(587.33, now);
+            osc.frequency.setValueAtTime(880, now + 0.15);
+            gain.gain.setValueAtTime(0.3, now);
+            gain.gain.exponentialRampToValueAtTime(0.01, now + 0.6);
             osc.connect(gain);
             gain.connect(ctx.destination);
-            osc.start();
-            osc.stop(ctx.currentTime + 0.5);
+            osc.start(now);
+            osc.stop(now + 0.6);
         }} catch(e) {{}}
 
-        // 浏览器系统通知
-        if ("Notification" in window) {{
-            if (Notification.permission === "granted") {{
-                new Notification("{title}", {{ body: "{message}", icon: "✈️" }});
-            }} else if (Notification.permission !== "denied") {{
-                Notification.requestPermission().then(permission => {{
-                    if (permission === "granted") {{
-                        new Notification("{title}", {{ body: "{message}", icon: "✈️" }});
-                    }}
-                }});
-            }}
+        if ("Notification" in window && Notification.permission === "granted") {{
+            new Notification("{title}", {{ body: "{message}", icon: "✈️" }});
         }}
     }})();
     </script>
@@ -159,18 +187,18 @@ def call_gemini_vision_chunk(img_chunk, chunk_name):
         raise ValueError("未检测到 GEMINI_API_KEY，请在 Streamlit 后台 Secrets 中配置")
 
     buf = BytesIO()
-    img_chunk.save(buf, format="JPEG", quality=88)
+    img_chunk.save(buf, format="JPEG", quality=90)
     base64_data = base64.b64encode(buf.getvalue()).decode('utf-8')
 
     prompt = f"""
-    你是一个专业旅行社海报视觉提取专家。当前正在识别海报的【{chunk_name}】区域。
-    请地毯式遍历当前切片图像中的每一个格子，绝不能漏掉任何一个团期！
+    你是一个极其严谨细致的旅游海报文字提取专家。当前正在识别海报的【{chunk_name}】。
+    请地毯式遍历当前图像包含的每一个色块小方块（例如韩国、北疆、贵州、台湾、桂林、重庆、西藏等），任何一个团期都不允许漏掉！
 
     规则：
-    1. 每一个单独的出发日期 + 价格，都必须作为单独的一行输出！如果一个格子写着多个日期对应不同价格，必须完全拆开成多行。
-    2. 旅行社：若海报含 SP 编号或豪吉标志，统一填“豪吉旅游”；若是表格型海报填其真实名称（如“琦琦旅游”）。
-    3. 起飞地：含 SIN/新加坡/酷航 填“新加坡起飞 (SIN)”；含 JB/新山 填“新山出发 (JB)”；其他默认填“马来西亚起飞 (KUL)”。
-    4. 纯文本逐行输出，竖线 | 分隔，严禁代码块标记与任何解释：
+    1. 彻底拆解多日期：同一个方块内如果写有多个出发日（例如 12/10/26, 25/5/27 对应 RM6999），必须按每个单独的出发日拆分成独立的一行！
+    2. 旅行社：若海报包含 SP 编号或豪吉旅游标志，统一填写“豪吉旅游”；长表格海报按其实际标头（如“琦琦旅游”）填写。
+    3. 起飞地点：含 SIN/新加坡/酷航 填“新加坡起飞 (SIN)”；含 JB/新山 填“新山出发 (JB)”；含 KL 或其他默认填“马来西亚起飞 (KUL)”。
+    4. 直接逐行输出纯文本，以竖线 | 分隔各字段，不要带任何 markdown 或额外说明：
     旅行社|目的地|团号|行程路线全称|起飞地|出发日期|纯数字价格
     """
 
@@ -199,9 +227,7 @@ def call_gemini_vision_chunk(img_chunk, chunk_name):
         "x-goog-api-key": GEMINI_API_KEY
     }
 
-    models_to_try = [PRIMARY_MODEL, BACKUP_MODEL]
-
-    for model_name in models_to_try:
+    for model_name in [PRIMARY_MODEL, BACKUP_MODEL]:
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={GEMINI_API_KEY}"
         for attempt in range(2):
             try:
@@ -211,69 +237,97 @@ def call_gemini_vision_chunk(img_chunk, chunk_name):
                     raw_text = res_json["candidates"][0]["content"]["parts"][0]["text"]
                     return parse_compact_lines(raw_text)
                 if res.status_code == 503:
-                    time.sleep(2)
                     continue
                 else:
                     break
             except requests.exceptions.Timeout:
                 break
-
     return []
 
-def process_single_image_adaptive(image_bytes, update_status_func):
+def process_single_image_adaptive(image_bytes, progress_callback):
     img = Image.open(BytesIO(image_bytes))
     if img.mode != 'RGB':
         img = img.convert('RGB')
     w, h = img.size
 
+    # 四段大重叠切片扫描，消除接缝漏检盲区
     if h > w * 1.2:
-        update_status_func("📏 检测到超长多格海报，执行 3 段超分切片...", 0)
-        chunk_h = h // 3
-        overlap = int(h * 0.04)
+        overlap = int(h * 0.12)
+        h_part = h // 4
 
-        box1 = (0, 0, w, min(h, chunk_h + overlap))
-        box2 = (0, max(0, chunk_h - overlap), w, min(h, chunk_h * 2 + overlap))
-        box3 = (0, max(0, chunk_h * 2 - overlap), w, h)
+        slices = [
+            (0, min(h, h_part + overlap), "第 1/4 区域 (重庆 / 西藏 / 青岛)"),
+            (max(0, h_part - overlap), min(h, h_part * 2 + overlap), "第 2/4 区域 (桂林 / 台湾 / 韩国)"),
+            (max(0, h_part * 2 - overlap), min(h, h_part * 3 + overlap), "第 3/4 区域 (韩国 / 贵州 / 哈尔滨)"),
+            (max(0, h_part * 3 - overlap), h, "第 4/4 区域 (贵州 / 北疆 / 九寨沟)")
+        ]
 
-        update_status_func("🔍 [1/3] 正在深度提取海报上层 (重庆 / 西藏 / 青岛等)...", 1)
-        r1 = call_gemini_vision_chunk(img.crop(box1), "上部区域")
-
-        update_status_func("🔍 [2/3] 正在深度提取海报中层 (桂林 / 台湾 / 韩国等)...", 2)
-        r2 = call_gemini_vision_chunk(img.crop(box2), "中部区域")
-
-        update_status_func("🔍 [3/3] 正在深度提取海报下层 (贵州 / 哈尔滨 / 北疆 / 九寨沟等)...", 3)
-        r3 = call_gemini_vision_chunk(img.crop(box3), "下部区域")
-
-        return r1 + r2 + r3
+        all_items = []
+        for i, (top, bottom, label) in enumerate(slices):
+            progress_callback(i / 4.0, f"🔍 正在地毯式扫描 {label} ...")
+            crop_img = img.crop((0, top, w, bottom))
+            items = call_gemini_vision_chunk(crop_img, label)
+            all_items.extend(items)
+        progress_callback(1.0, "✨ 海报全幅切片扫描完成！")
+        return all_items
     else:
-        update_status_func("🔍 正在全幅扫描海报表格...", 1)
-        return call_gemini_vision_chunk(img, "全图")
+        progress_callback(0.5, "🔍 正在全幅解析表格...")
+        items = call_gemini_vision_chunk(img, "全幅海报")
+        progress_callback(1.0, "✨ 解析完成！")
+        return items
+
+# 获取/下载中文字体，彻底解决图片中文乱码成方块
+@st.cache_resource
+def get_chinese_font(font_size=14):
+    font_paths = [
+        "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
+        "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+        "wqy-microhei.ttc"
+    ]
+    for p in font_paths:
+        if os.path.exists(p):
+            try:
+                return ImageFont.truetype(p, font_size)
+            except Exception:
+                pass
+
+    local_font = "wqy-microhei.ttc"
+    if not os.path.exists(local_font):
+        try:
+            url = "https://github.com/anthonyfok/fonts-wqy-microhei/raw/master/wqy-microhei.ttc"
+            urllib.request.urlretrieve(url, local_font)
+            return ImageFont.truetype(local_font, font_size)
+        except Exception:
+            pass
+    return ImageFont.load_default()
 
 def generate_comparison_image(df):
-    w, rh, hh = 850, 40, 70
+    w, rh, hh = 920, 38, 70
     h = hh + len(df) * rh + 30
     img = Image.new("RGB", (w, max(h, 200)), color=(248, 250, 252))
     draw = ImageDraw.Draw(img)
-    font = ImageFont.load_default()
+    font = get_chinese_font(13)
+    title_font = get_chinese_font(20)
 
     draw.rectangle([0, 0, w, hh], fill=(15, 23, 42))
-    draw.text((25, 25), f"旅游团比价汇总清单 (共 {len(df)} 项出发日期)", fill=(255, 255, 255), font=font)
+    draw.text((25, 22), f"旅游团比价汇总清单 (共 {len(df)} 项有效出发日期)", fill=(255, 255, 255), font=title_font)
 
     y = hh + 10
     draw.rectangle([15, y, w - 15, y + 28], fill=(226, 232, 240))
-    cols = [("旅行社", 25), ("目的地", 160), ("团号", 240), ("出发日期", 330), ("价格", 440), ("起飞地", 530), ("行程名称", 670)]
+    cols = [("旅行社", 25), ("目的地", 160), ("团号", 250), ("出发日期", 350), ("价格", 460), ("起飞地", 550), ("行程名称", 700)]
     for name, x in cols:
-        draw.text((x, y + 7), name, fill=(30, 41, 59), font=font)
+        draw.text((x, y + 6), name, fill=(30, 41, 59), font=font)
 
     y += 35
     for _, r in df.iterrows():
-        draw.text((25, y), str(r['agency'])[:10], fill=(71, 85, 105), font=font)
+        draw.text((25, y), str(r['agency'])[:9], fill=(71, 85, 105), font=font)
         draw.text((160, y), str(r['destination'])[:6], fill=(15, 23, 42), font=font)
-        draw.text((240, y), str(r['tour_code'])[:10], fill=(71, 85, 105), font=font)
-        draw.text((330, y), str(r['departure_dates'])[:12], fill=(30, 41, 59), font=font)
-        draw.text((440, y), str(r['price_text']), fill=(220, 38, 38), font=font)
-        draw.text((530, y), str(r['departure_location'])[:12], fill=(2, 132, 199), font=font)
-        draw.text((670, y), str(r['title'])[:16], fill=(71, 85, 105), font=font)
+        draw.text((250, y), str(r['tour_code'])[:10], fill=(71, 85, 105), font=font)
+        draw.text((350, y), str(r['departure_dates'])[:12], fill=(30, 41, 59), font=font)
+        draw.text((460, y), str(r['price_text']), fill=(220, 38, 38), font=font)
+        draw.text((550, y), str(r['departure_location'])[:12], fill=(2, 132, 199), font=font)
+        draw.text((700, y), str(r['title'])[:16], fill=(71, 85, 105), font=font)
         y += rh
 
     buf = BytesIO()
@@ -283,44 +337,26 @@ def generate_comparison_image(df):
 if "tour_data" not in st.session_state:
     st.session_state.tour_data = []
 
-# 请求浏览器系统级通知权限的按钮
-with st.sidebar:
-    st.markdown("### 🔔 后台通知设置")
-    if st.button("启用手机/浏览器通知权限"):
-        components.html("""
-        <script>
-        if ("Notification" in window) {
-            Notification.requestPermission().then(p => {
-                alert("通知权限状态: " + p);
-            });
-        } else {
-            alert("当前浏览器不支持系统通知");
-        }
-        </script>
-        """, height=0)
-
-uploaded_files = st.file_uploader("📷 上传旅行社海报图片 (支持分批多次追加)", type=["jpg", "jpeg", "png"], accept_multiple_files=True)
+uploaded_files = st.file_uploader("📷 上传旅行社海报图片 (支持长表/拼贴海报，分批多次追加)", type=["jpg", "jpeg", "png"], accept_multiple_files=True)
 
 if uploaded_files:
     st.info(f"已选择 {len(uploaded_files)} 张海报图片")
-    if st.button("🚀 极速高清全量提取并追加到总库", type="primary", use_container_width=True):
+    if st.button("🚀 启动全量无死角扫描并追加到总库", type="primary", use_container_width=True):
         newly_extracted = []
         progress_bar = st.progress(0.0)
-        status_box = st.empty()
+        status_text = st.empty()
         has_error = False
 
-        # 动态估算倒计时：每张海报切 3 段，每段预估 6 秒
-        est_total_seconds = len(uploaded_files) * 20
-        start_time = time.time()
+        total_files = len(uploaded_files)
 
-        def update_status(step_msg, step_idx):
-            elapsed = time.time() - start_time
-            remaining = max(0, int(est_total_seconds - elapsed))
-            status_box.markdown(f"⏱️ **预估剩余倒计时：** `{remaining}` 秒 | {step_msg}")
+        for f_idx, f in enumerate(uploaded_files):
+            def on_slice_progress(slice_ratio, msg):
+                overall = (f_idx + slice_ratio) / total_files
+                progress_bar.progress(min(overall, 1.0))
+                status_text.markdown(f"**[{f_idx+1}/{total_files}]** {msg}")
 
-        for idx, f in enumerate(uploaded_files):
             try:
-                raw_items = process_single_image_adaptive(f.getvalue(), update_status)
+                raw_items = process_single_image_adaptive(f.getvalue(), on_slice_progress)
                 for item in raw_items:
                     rows = split_and_explode_dates(
                         item.get("agency", "精选旅行社"),
@@ -334,9 +370,7 @@ if uploaded_files:
                     newly_extracted.extend(rows)
             except Exception as e:
                 has_error = True
-                status_box.error(f"处理 {f.name} 时提示: {e}")
-
-            progress_bar.progress((idx + 1) / len(uploaded_files))
+                status_text.error(f"处理 {f.name} 异常: {e}")
 
         if not has_error and newly_extracted:
             combined = st.session_state.tour_data + newly_extracted
@@ -349,13 +383,8 @@ if uploaded_files:
                     unique_combined.append(item)
 
             st.session_state.tour_data = unique_combined
-            
-            # 触发完成提示音与系统通知
-            trigger_notification_js(
-                "🎉 海报解析全部完成！",
-                f"成功提取 {len(newly_extracted)} 条团期，当前总库共有 {len(st.session_state.tour_data)} 项出发日期。"
-            )
-            st.success(f"🎉 提取完成！本次提取出 {len(newly_extracted)} 条独立团期，当前总库共计 {len(st.session_state.tour_data)} 项出发日期。")
+            trigger_notification_js("🎉 扫描成功完毕！", f"本次成功识别 {len(newly_extracted)} 条团期，总库已有 {len(st.session_state.tour_data)} 条。")
+            st.success(f"🎉 扫描完成！本次共提取出 **{len(newly_extracted)}** 条具体团期（已自动智能去重）。")
             st.rerun()
 
 if st.session_state.tour_data:
