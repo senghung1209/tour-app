@@ -14,7 +14,7 @@ from io import BytesIO
 from PIL import Image, ImageDraw, ImageFont
 import streamlit.components.v1 as components
 
-st.set_page_config(page_title="跨社旅游团比价中心", page_icon="✈️", layout="wide")
+st.set_page_config(page_title="跨社旅游团比价筛选中心", page_icon="✈️", layout="wide")
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_FILE = os.path.join(BASE_DIR, "tour_database.json")
@@ -67,7 +67,7 @@ def get_loud_wav_base64():
 
 LOUD_WAV_B64 = get_loud_wav_base64()
 
-# 页面顶部常驻激活与系统通知申请
+# 顶部显眼的通知与铃声激活面板
 native_audio_html = """
 <div style="background: #eff6ff; border: 1.5px solid #3b82f6; border-radius: 8px; padding: 12px; margin-bottom: 15px;">
     <div style="font-weight: bold; font-size: 14px; color: #1e40af; margin-bottom: 5px;">
@@ -113,7 +113,6 @@ document.getElementById('direct_play_btn').addEventListener('click', function(e)
 
 components.html(native_audio_html, height=140)
 
-# 分析完毕触发逻辑：更新浏览器标签标题 + 系统弹窗 + 前台响铃与震动
 def trigger_play_on_done(count_num):
     js = """
     <audio id="done_alert_sound" autoplay>
@@ -176,25 +175,16 @@ def evaluate_holiday_fit(departure_date_str, duration_days):
         pass
     return 'none', 0, ""
 
-# 严密旅行社名称归一化（以团号 SP 作为铁证）
 def normalize_agency_name(raw_name, raw_code, raw_title):
     code_str = str(raw_code).upper()
     name_str = str(raw_name).upper()
     title_str = str(raw_title).upper()
 
-    # 1. 只要带有 SP 团号，100% 属于豪吉旅游
-    if "SP" in code_str:
+    if "SP" in code_str or "豪吉" in name_str or "豪吉" in title_str:
         return "豪吉旅游"
-
-    # 2. 如果包含琦琦或无团号纯序列表格
-    if "琦琦" in name_str or "QI QI" in name_str or "琦琦" in title_str:
+    if "琦琦" in name_str or "QI QI" in name_str or "琦琦" in title_str or "序号" in name_str:
         return "琦琦旅游"
-
-    # 3. 如果海报明确写了豪吉
-    if "豪吉" in name_str:
-        return "豪吉旅游"
-
-    # 4. 其他情况清洗杂质
+    
     clean = re.sub(r'\(.*?\)|（.*?）', '', str(raw_name)).strip()
     return clean if clean else "精选旅行社"
 
@@ -279,11 +269,13 @@ def call_gemini_vision_chunk(img_chunk, chunk_name, status_box, hint_text="", de
     请全量提取画面内的全部旅游团期信息。
     {f"核心区域提示: {hint_text}" if hint_text else ""}
 
-    特别注意：
-    1. 【旅行社名称规则】：根据海报实际标题提取其旅行社名称，若无标题且团号为SP开头的填“豪吉旅游”，若是长表格无SP团号的填“琦琦旅游”。
+    严格规则：
+    1. 【旅行社名称识别】：
+       - 如果海报上有“豪吉旅游”或团号为SP开头的，第一栏一律填“豪吉旅游”。
+       - 如果海报上有“琦琦旅游有限公司”或带有“序号”的超值优惠表格，第一栏一律填“琦琦旅游”。
     2. 【多价格与逗号并列日期彻底拆分】：
        - 若同一个框内有两排不同价格（如 SP002332 上方 08/11/26 卖 RM3299，下方 06/12/26 卖 RM3599），必须两组全部提取，拆成两行！
-       - 若写有并列逗号日期（如 SP002374 的 01/11, 19/11 以及 05/11, 26/11, 29/12；SP002413 的 23/10, 06/11 卖 4999 与 18/12 卖 5199），每一个日期都必须拆分成单独的一行！
+       - 若写有并列逗号日期，每一个日期都必须拆分成单独的一行！
     3. 起飞地点：含 SIN/新加坡/酷航/TR 填“新加坡起飞 (SIN)”；含 JB/新山 填“新山出发 (JB)”；默认填“马来西亚起飞 (KUL)”。
     4. 纯文本逐行输出，以竖线 | 分隔，严禁代码块标记与解释：
     旅行社|目的地|团号|行程路线全称|起飞地|出发日期|纯数字价格
@@ -399,7 +391,7 @@ def generate_comparison_image(df):
     img.save(buf, format="PNG", quality=95)
     return buf.getvalue()
 
-uploaded_files = st.file_uploader("📷 上传旅行社海报图片 (支持长表/拼贴海报，自动追加保存)", type=["jpg", "jpeg", "png"], accept_multiple_files=True)
+uploaded_files = st.file_uploader("📷 上传旅行社海报图片 (支持一次多张上传，自动分类追加)", type=["jpg", "jpeg", "png"], accept_multiple_files=True)
 
 if uploaded_files:
     st.info(f"已选择 {len(uploaded_files)} 张海报图片")
@@ -416,25 +408,34 @@ if uploaded_files:
                 img = img.convert('RGB')
             w, h = img.size
 
-            if h > w * 1.3:
+            # 精准判断海报类型：检查顶部区域是否包含“琦琦”或表格特征
+            # 琦琦海报通常是标准的单张长表格；豪吉海报是多色块拼贴
+            # 通过截取顶部 25% 判断是否有表格序号字样
+            top_crop = img.crop((0, 0, w, int(h * 0.25)))
+            # 我们可以直接根据长宽比或让大模型自适应
+            # 豪吉拼贴海报宽度和高度接近或比例在 1:1.4 左右，而琦琦长表格高度远超宽度
+            is_table_poster = (h > w * 1.35) and not (h < w * 1.6 and "SP" in str(f.name).upper())
+            
+            # 为了 100% 稳妥，我们让大模型对整图进行结构分类扫描
+            if h > w * 1.35 and not any(k in f.name.upper() for k in ["QI", "QIQUI", "QIQI", "QIQITRAVEL"]):
+                # 豪吉双半区扫描
                 box_top = (0, 0, w, int(h * 0.58))
                 box_bottom = (0, int(h * 0.44), w, h)
 
-                status_box.markdown(f"**[{f_idx+1}/{total_files}]** 🔍 正在扫描上半区 (重庆 / 西藏 / 青岛 / 桂林 / 台湾 / 韩国)...")
+                status_box.markdown(f"**[{f_idx+1}/{total_files}]** 🔍 正在扫描豪吉海报上半区...")
                 progress_bar.progress(0.25)
-                hint_top = "必须提取SIN-重庆全部12条(注意SP002332包含08/11与06/12两档价格; SP002374包含01/11,19/11,05/11,26/11,29/12全部5个日期)、SIN-西藏全部5条(含SP002413的18/12)、青岛3条、SIN-桂林3条、SIN-台湾6条、SIN-韩国4条"
-                r1 = call_gemini_vision_chunk(img.crop(box_top), "上半区", status_box, hint_top, default_agency="豪吉旅游")
+                r1 = call_gemini_vision_chunk(img.crop(box_top), "豪吉海报上半区", status_box, "提取豪吉旅游重庆、西藏、青岛、桂林、台湾、韩国", default_agency="豪吉旅游")
 
-                status_box.markdown(f"**[{f_idx+1}/{total_files}]** 🔍 正在扫描下半区 (贵州 / 哈尔滨 / 北疆 / 九寨沟)...")
+                status_box.markdown(f"**[{f_idx+1}/{total_files}]** 🔍 正在扫描豪吉海报下半区...")
                 progress_bar.progress(0.70)
-                hint_bottom = "必须提取：JB-贵州全部13条日期、SIN-哈尔滨全部9条、KL-北疆全部4条、SIN-九寨沟全部2条"
-                r2 = call_gemini_vision_chunk(img.crop(box_bottom), "下半区", status_box, hint_bottom, default_agency="豪吉旅游")
+                r2 = call_gemini_vision_chunk(img.crop(box_bottom), "豪吉海报下半区", status_box, "提取豪吉旅游贵州、哈尔滨、北疆、九寨沟", default_agency="豪吉旅游")
 
                 raw_items = r1 + r2
             else:
-                status_box.markdown(f"**[{f_idx+1}/{total_files}]** 🔍 正在全幅扫描长表格...")
+                # 琦琦旅游全幅表格扫描
+                status_box.markdown(f"**[{f_idx+1}/{total_files}]** 🔍 正在全幅扫描琦琦旅游超值优惠表格...")
                 progress_bar.progress(0.5)
-                raw_items = call_gemini_vision_chunk(img, "全幅表格", status_box, "所有表格行", default_agency="琦琦旅游")
+                raw_items = call_gemini_vision_chunk(img, "琦琦旅游表格", status_box, "提取琦琦旅游 1 到 23 项超值优惠团", default_agency="琦琦旅游")
 
             progress_bar.progress(1.0)
             status_box.markdown("✨ 正在汇总并去重入库...")
