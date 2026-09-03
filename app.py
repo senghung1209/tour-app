@@ -8,7 +8,7 @@ import base64
 import time
 import math
 import struct
-import requests
+import urllib.request
 from io import BytesIO
 from PIL import Image, ImageDraw, ImageFont
 import streamlit.components.v1 as components
@@ -245,25 +245,20 @@ def call_gemini_vision_clean(img_bytes, poster_type, hint=""):
         "generationConfig": {"temperature": 0.0, "maxOutputTokens": 8192}
     }
 
-    url = "[https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent](https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent)"
-    headers = {
-        "Content-Type": "application/json",
-        "x-goog-api-key": CLEAN_KEY,
-        "Authorization": f"Bearer {CLEAN_KEY}"
-    }
+    url = f"[https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=](https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=){CLEAN_KEY}"
+    data_json = json.dumps(payload).encode('utf-8')
+    req = urllib.request.Request(
+        url,
+        data=data_json,
+        headers={"Content-Type": "application/json"},
+        method="POST"
+    )
 
     try:
-        res = requests.post(url, headers=headers, json=payload, timeout=60)
-        if res.status_code == 200:
-            raw_text = res.json()["candidates"][0]["content"]["parts"][0]["text"]
+        with urllib.request.urlopen(req, timeout=60) as response:
+            res_data = json.loads(response.read().decode('utf-8'))
+            raw_text = res_data["candidates"][0]["content"]["parts"][0]["text"]
             return parse_lines_robust(raw_text, poster_type)
-        else:
-            url_fallback = f"[https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=](https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=){CLEAN_KEY}"
-            res_fb = requests.post(url_fallback, headers={"Content-Type": "application/json"}, json=payload, timeout=60)
-            if res_fb.status_code == 200:
-                raw_text = res_fb.json()["candidates"][0]["content"]["parts"][0]["text"]
-                return parse_lines_robust(raw_text, poster_type)
-            st.error(f"API 返回错误 (HTTP {res.status_code}): {res.text}")
     except Exception as err:
         st.error(f"请求失败: {err}")
     return []
@@ -327,11 +322,9 @@ def generate_comparison_image(df):
     img.save(buf, format="PNG", quality=95)
     return buf.getvalue()
 
-# 单张海报上传
 uploaded_file = st.file_uploader("📷 上传单张海报图片", type=["jpg", "jpeg", "png"])
 
 if uploaded_file is not None:
-    # 明确让用户单张选择旅行社归属
     poster_type_choice = st.radio("请确认当前上传的海报属于哪家旅行社：", ["豪吉旅游 (拼贴海报)", "琦琦旅游 (超值表格)"], horizontal=True)
     poster_type = "haoji" if "豪吉" in poster_type_choice else "qiqi"
 
