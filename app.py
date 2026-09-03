@@ -13,7 +13,7 @@ import streamlit.components.v1 as components
 st.set_page_config(page_title="AI 旅游团智能筛选助手", page_icon="✈️", layout="wide")
 
 st.title("✈️ 旅游团宣传单智能分析与筛选 (Groq 极速高精版)")
-st.markdown("已切换至 Groq 高速视觉多模态引擎：完美绕过 Google 401 权限墙、秒级解析海报、智能匹配 2026 学校假期。")
+st.markdown("已接入 Groq 高速视觉多模态引擎：完美绕过 Google 权限墙、秒级解析海报、智能匹配 2026 学校假期。")
 
 GROQ_API_KEY = "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"
 
@@ -201,7 +201,7 @@ def analyze_single_image(file_bytes, file_name, task_dict):
         "Content-Type": "application/json"
     }
     payload = {
-        "model": "meta-llama/llama-3.2-11b-vision-preview",
+        "model": "meta-llama/llama-3.2-11b-vision-instruct",  # 已更正为 Groq 官方标准视觉模型名
         "messages": [
             {
                 "role": "user",
