@@ -111,7 +111,6 @@ def evaluate_holiday_fit(departure_date_str, duration_days):
         pass
     return 'none', 0, ""
 
-# 强健的竖线文本解析器：确保无论字段多寡，都能安全对齐
 def parse_text_lines(raw_text, default_agency="豪吉旅游"):
     items = []
     for line in raw_text.strip().splitlines():
@@ -121,8 +120,47 @@ def parse_text_lines(raw_text, default_agency="豪吉旅游"):
         parts = [p.strip() for p in line.split("|") if p.strip()]
         if len(parts) >= 5:
             try:
-                # 寻找价格（包含纯数字或RM的项）
                 price_val = 2999
                 for p in parts:
                     clean_p = re.sub(r'[^\d]', '', p)
-                    if clean_p and len(clean_p) >=
+                    if clean_p and len(clean_p) >= 3:
+                        price_val = int(clean_p)
+                        break
+                if price_val < 500:
+                    price_val = 2999
+
+                tour_code = "-"
+                for p in parts:
+                    if "SP" in p.upper() or "QIQI" in p.upper() or (len(p) == 8 and p.isalnum()):
+                        tour_code = p
+                        break
+
+                dest = parts[1] if len(parts) > 1 else "精选目的地"
+                title = parts[3] if len(parts) > 3 else (parts[2] if len(parts) > 2 else "旅游团期")
+                date_str = parts[5] if len(parts) > 5 else (parts[4] if len(parts) > 4 else "31/12/2026")
+                
+                loc = "🇸🇬 新加坡起飞 (SIN)" if any(c in line.upper() for c in ["SIN", "新加坡", "TR"]) else "🇲🇾 马来西亚起飞 (KUL)"
+
+                items.append({
+                    "agency": default_agency,
+                    "destination": dest,
+                    "tour_code": tour_code,
+                    "title": title,
+                    "departure_location": loc,
+                    "departure_dates": date_str,
+                    "price": price_val
+                })
+            except Exception:
+                continue
+    return items
+
+def call_gemini_vision_text(img_bytes, hint_text="", default_agency="豪吉旅游"):
+    if not GEMINI_API_KEY:
+        return []
+    base64_data = base64.b64encode(img_bytes).decode('utf-8')
+    prompt = f"请全量提取海报图中的所有团期。{hint_text} 每一行纯文本输出，必须用竖线 | 严格分隔，不要带代码块标记：旅行社名称|目的地纯地名|团号|行程路线全称|起飞地|出发日期|纯数字价格"
+    payload = {
+        "contents": [{"parts": [{"text": prompt}, {"inline_data": {"mime_type": "image/jpeg", "data": base64_data}}]}],
+        "generationConfig": {"temperature": 0.0, "maxOutputTokens": 8192}
+    }
+    
