@@ -14,45 +14,44 @@ import streamlit.components.v1 as components
 st.set_page_config(page_title="AI 旅游团智能筛选助手", page_icon="✈️", layout="wide")
 
 st.title("✈️ 旅游团宣传单智能分析与筛选")
-st.markdown("支持后台不中断运行、实时在线同步大马学校假期、完成发声与通知提醒！")
+st.markdown("支持后台不中断运行、2026官方学校假期精确实装（支持最多超出2天提醒）！")
 
 GROQ_API_KEY = "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"
-HOLIDAY_JSON_URL = "https://raw.githubusercontent.com/senghung1209/tour-app/main/holidays.json"
 
-# 本地兜底假期数据（确保网络断开时绝不报错）
-FALLBACK_HOLIDAYS = [
-    (datetime.date(2026, 5, 23), datetime.date(2026, 6, 7), "2026年中第一学期假期"),
-    (datetime.date(2026, 9, 12), datetime.date(2026, 9, 21), "2026第二学期中假期"),
-    (datetime.date(2026, 12, 18), datetime.date(2027, 1, 4), "2026年末大假期 (Year-End)"),
-    (datetime.date(2027, 1, 23), datetime.date(2027, 2, 16), "2027农历新年及学年假期"),
-    (datetime.date(2027, 5, 22), datetime.date(2027, 6, 6), "2027年中第一学期假期"),
+# 严格匹配官方 2026 学年日历
+OFFICIAL_2026_HOLIDAYS = [
+    (datetime.date(2026, 3, 20), datetime.date(2026, 3, 29), "2026 第一学期假期 (3月)"),
+    (datetime.date(2026, 5, 22), datetime.date(2026, 6, 7), "2026 年中假期 (5/6月)"),
+    (datetime.date(2026, 8, 28), datetime.date(2026, 9, 6), "2026 第二学期假期 (8/9月)"),
+    (datetime.date(2026, 12, 4), datetime.date(2027, 1, 3), "2026 学年末大假期 (12月)")
 ]
 
-@st.cache_data(ttl=3600)
-def fetch_online_holidays():
-    """从 GitHub 实时获取最新的马来西亚学校假期，自动缓存 1 小时"""
-    try:
-        res = requests.get(HOLIDAY_JSON_URL, timeout=5)
-        if res.status_code == 200:
-            data = res.json()
-            ranges = []
-            for item in data:
-                s_parts = [int(p) for p in item["start"].split("-")]
-                e_parts = [int(p) for p in item["end"].split("-")]
-                s_dt = datetime.date(s_parts[0], s_parts[1], s_parts[2])
-                e_dt = datetime.date(e_parts[0], e_parts[1], e_parts[2])
-                ranges.append((s_dt, e_dt, item.get("name", "学校假期")))
-            if ranges:
-                return ranges
-    except Exception:
-        pass
-    return FALLBACK_HOLIDAYS
+def extract_tour_days(title_str):
+    """从路线或标题提取行程天数（如 8D6N, 8天6晚 -> 8）"""
+    m = re.search(r'(\d+)\s*(?:天|D|d)', str(title_str))
+    if m:
+        try:
+            return int(m.group(1))
+        except Exception:
+            pass
+    return 1
 
-def check_school_holiday(date_str, holidays_list):
-    """根据最新假期数据判断日期是否在学校假期内"""
-    matches = re.findall(r'(\d{1,2})[/.-](\d{1,2})(?:[/.-](\d{2,4}))?', str(date_str))
-    for m in matches:
-        d, mth, y = m
+def evaluate_holiday_fit(departure_date_str, duration_days):
+    """
+    精确比对 2026 官方假期：
+    - status: 'exact' (完全在假期内), 'slight_over' (超出<=2天), 'none' (不符合)
+    - over_days: 超出天数
+    - name: 假期名称
+    """
+    matches = re.findall(r'(\d{1,2})[/.-](\d{1,2})(?:[/.-](\d{2,4}))?', str(departure_date_str))
+    if not matches:
+        return 'none', 0, ""
+
+    best_status = 'none'
+    min_over = 999
+    matched_name = ""
+
+    for d, mth, y in matches:
         d = int(d)
         mth = int(mth)
         if not y:
@@ -62,16 +61,34 @@ def check_school_holiday(date_str, holidays_list):
             if y < 100:
                 y += 2000
         try:
-            target = datetime.date(y, mth, d)
-            for s, e, name in holidays_list:
-                if s <= target <= e:
-                    return True, name
+            dep_date = datetime.date(y, mth, d)
+            ret_date = dep_date + datetime.timedelta(days=max(duration_days - 1, 0))
+            
+            for h_start, h_end, h_name in OFFICIAL_2026_HOLIDAYS:
+                # 情况1：完全在假期内
+                if dep_date >= h_start and ret_date <= h_end:
+                    return 'exact', 0, h_name
+                
+                # 情况2：有重叠但稍有超出
+                if not (ret_date < h_start or dep_date > h_end):
+                    early_days = max((h_start - dep_date).days, 0)
+                    late_days = max((ret_date - h_end).days, 0)
+                    total_over = early_days + late_days
+                    if total_over <= 2 and total_over < min_over:
+                        min_over = total_over
+                        best_status = 'slight_over'
+                        matched_name = h_name
         except Exception:
             continue
-    return False, ""
 
-def make_tour_dict(dest, code, title, loc, dates, price_num, price_txt, holidays_list):
-    in_holiday, hol_name = check_school_holiday(dates, holidays_list)
+    if best_status == 'slight_over':
+        return 'slight_over', min_over, matched_name
+    return 'none', 0, ""
+
+def make_tour_dict(dest, code, title, loc, dates, price_num, price_txt):
+    days = extract_tour_days(title)
+    status, over_days, hol_name = evaluate_holiday_fit(dates, days)
+    
     d = dict()
     d["destination"] = dest
     d["tour_code"] = code
@@ -80,7 +97,8 @@ def make_tour_dict(dest, code, title, loc, dates, price_num, price_txt, holidays
     d["departure_dates"] = dates
     d["price_numeric"] = price_num
     d["price_text"] = price_txt
-    d["is_school_holiday"] = in_holiday
+    d["holiday_status"] = status
+    d["over_days"] = over_days
     d["holiday_name"] = hol_name
     return d
 
@@ -136,7 +154,7 @@ def compress_image(uploaded_file, max_size=650, quality=55):
     img.save(buffer, format="JPEG", quality=quality)
     return base64.b64encode(buffer.getvalue()).decode("utf-8")
 
-def extract_partial_items(content, holidays_list):
+def extract_partial_items(content):
     items = []
     blocks = re.findall(r'\{[^{}]*\}', content)
     for b in blocks:
@@ -169,15 +187,14 @@ def extract_partial_items(content, holidays_list):
                     loc if loc else "详见海报",
                     dates,
                     p_val,
-                    p_text,
-                    holidays_list
+                    p_text
                 )
                 items.append(item)
         except Exception:
             continue
     return items
 
-def analyze_single_image(file_bytes, file_name, task_dict, holidays_list):
+def analyze_single_image(file_bytes, file_name, task_dict):
     encoded_string = compress_image(BytesIO(file_bytes))
     prompt = "分析图片提取所有旅游团项目，返回纯JSON数组，包含字段：destination, departure_location, tour_code, title, departure_dates, price_numeric, price_text。严禁输出任何多余说明。"
 
@@ -255,15 +272,14 @@ def analyze_single_image(file_bytes, file_name, task_dict, holidays_list):
                                 loc_str,
                                 date_str,
                                 p_val,
-                                final_price_str,
-                                holidays_list
+                                final_price_str
                             )
                             std_list.append(entry)
                         return std_list
                 except Exception:
                     pass
             
-            rescued_items = extract_partial_items(content, holidays_list)
+            rescued_items = extract_partial_items(content)
             if rescued_items:
                 return rescued_items
                 
@@ -283,12 +299,12 @@ def analyze_single_image(file_bytes, file_name, task_dict, holidays_list):
             
     raise Exception(last_error if last_error else "多次尝试仍未能获取有效数据")
 
-def background_worker(files_data, task_dict, holidays_list):
+def background_worker(files_data, task_dict):
     total = len(files_data)
     for idx, (f_name, f_bytes) in enumerate(files_data):
         task_dict["status_msg"] = "⚡ 后台正在解析第 " + str(idx + 1) + "/" + str(total) + " 张: " + f_name + " ..."
         try:
-            data = analyze_single_image(f_bytes, f_name, task_dict, holidays_list)
+            data = analyze_single_image(f_bytes, f_name, task_dict)
             if data:
                 task_dict["results"].extend(data)
             else:
@@ -313,10 +329,17 @@ def create_html_report(df):
         l = str(row.get('departure_location', '详见海报'))
         dt = str(row.get('departure_dates', '见海报'))
         t = str(row.get('title', '无'))
+        
+        status = row.get('holiday_status')
+        over = row.get('over_days', 0)
+        hname = row.get('holiday_name', '')
+        
         hol_badge = ""
-        if row.get('is_school_holiday'):
-            hol_badge = " &nbsp;|&nbsp; <span style='color:#16a34a; font-weight:bold;'>🎒 包含学校假期</span>"
-            
+        if status == 'exact':
+            hol_badge = " &nbsp;|&nbsp; <span style='color:#16a34a; font-weight:bold;'>🎒 完美在校假内 (" + hname + ")</span>"
+        elif status == 'slight_over':
+            hol_badge = " &nbsp;|&nbsp; <span style='color:#ea580c; font-weight:bold;'>⚠️ 超出假期 " + str(over) + " 天（需请假）</span>"
+
         item = (
             "<div class='card'>"
             "<div class='card-header'>"
@@ -342,7 +365,7 @@ def create_html_report(df):
         "<meta charset='UTF-8'>\n"
         "<meta name='viewport' content='width=device-width, initial-scale=1.0'>\n"
         "<title>旅游团筛选清单</title>\n"
-        "<script src='[https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js](https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js)'></script>\n"
+        "<script src='[https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js](https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js)"></script>\n"
         "<style>\n"
         "body { font-family: -apple-system, sans-serif; background: #f1f5f9; margin: 0; padding: 15px; color: #0f172a; }\n"
         ".toolbar { max-width: 650px; margin: 0 auto 15px auto; display: flex; gap: 10px; }\n"
@@ -364,7 +387,7 @@ def create_html_report(df):
         "<body>\n"
         "<div class='toolbar'>\n"
         "<button class='btn btn-img' onclick='saveImg()'>🖼️ 保存为手机长图</button>\n"
-        "<button class='btn btn-pdf' onclick='window.print'>📄 另存为 PDF 文件</button>\n"
+        "<button class='btn btn-pdf' onclick='window.print()'>📄 另存为 PDF 文件</button>\n"
         "</div>\n"
         "<div id='capture-area'>\n"
         "<div class='title'>✈️ 旅游团筛选清单</div>\n"
@@ -385,9 +408,6 @@ def create_html_report(df):
         "</html>"
     )
     return html
-
-# 实时获取当前生效的学校假期
-current_holidays = fetch_online_holidays()
 
 uploaded_files = st.file_uploader(
     "批量上传宣传图 (支持 JPG/PNG，可多选)", 
@@ -411,7 +431,7 @@ if uploaded_files:
             task["status_msg"] = "正在启动独立工作线程..."
             
             files_data = [(f.name, f.getvalue()) for f in uploaded_files]
-            t = threading.Thread(target=background_worker, args=(files_data, task, current_holidays), daemon=True)
+            t = threading.Thread(target=background_worker, args=(files_data, task), daemon=True)
             t.start()
             st.rerun()
 
@@ -454,8 +474,14 @@ if task["results"]:
     loc_list = ["全部", "🇲🇾 全马来西亚出发 (包含吉隆坡/新山/槟城)"] + raw_locs
     selected_loc = st.sidebar.selectbox("选择起飞地点", loc_list)
     
-    holiday_options = ["全部日期", "🎒 仅看学校假期内出发 (School Holidays)", "💼 仅看平时非假期出发"]
-    selected_hol = st.sidebar.selectbox("🗓️ 学校假期筛选 (马来西亚)", holiday_options)
+    # 严格匹配你的假期要求
+    holiday_options = [
+        "全部日期",
+        "🎒 包含学校假期 (含最多超出2天)",
+        "✨ 严格在学校假期内 (0超出)",
+        "💼 仅平时非假期出发"
+    ]
+    selected_hol = st.sidebar.selectbox("🗓️ 2026 学校假期筛选", holiday_options)
     
     min_val = int(df['price_numeric'].min()) if not df.empty else 0
     max_val = int(df['price_numeric'].max()) if not df.empty else 10000
@@ -475,10 +501,13 @@ if task["results"]:
     elif selected_loc != "全部":
         filtered_df = filtered_df[filtered_df['departure_location'] == selected_loc]
         
-    if selected_hol == "🎒 仅看学校假期内出发 (School Holidays)":
-        filtered_df = filtered_df[filtered_df['is_school_holiday'] == True]
-    elif selected_hol == "💼 仅看平时非假期出发":
-        filtered_df = filtered_df[filtered_df['is_school_holiday'] == False]
+    # 执行假期筛选
+    if selected_hol == "🎒 包含学校假期 (含最多超出2天)":
+        filtered_df = filtered_df[filtered_df['holiday_status'].isin(['exact', 'slight_over'])]
+    elif selected_hol == "✨ 严格在学校假期内 (0超出)":
+        filtered_df = filtered_df[filtered_df['holiday_status'] == 'exact']
+    elif selected_hol == "💼 仅平时非假期出发":
+        filtered_df = filtered_df[filtered_df['holiday_status'] == 'none']
         
     filtered_df = filtered_df[
         (filtered_df['price_numeric'] >= price_range[0]) & 
@@ -522,7 +551,12 @@ if task["results"]:
             with c2:
                 st.markdown("🛫 **出发地：** `" + str(row.get('departure_location', '详见海报')) + "`")
                 st.write("📅 **出发日期：** " + str(row.get('departure_dates', '见海报')))
-                if row.get('is_school_holiday'):
-                    st.success(f"🎒 {row.get('holiday_name', '学校假期')}")
+                
+                # 假期状态精准提示
+                h_status = row.get('holiday_status')
+                if h_status == 'exact':
+                    st.success("🎒 完美在校假内 (" + str(row.get('holiday_name')) + ")")
+                elif h_status == 'slight_over':
+                    st.warning("⚠️ 包含校假，但超出 " + str(row.get('over_days')) + " 天（需请假）")
             with c3:
                 st.markdown("### 💰 **" + str(row.get('price_text', '无')) + "**")
