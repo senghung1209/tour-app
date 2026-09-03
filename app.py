@@ -186,4 +186,53 @@ if uploaded_file is not None:
                 d_token = item.get("departure_dates", "")
                 status, over_days, hol_name = evaluate_holiday_fit(d_token, days)
                 newly_extracted.append({
-                    "agency
+                    "agency": item.get("agency"),
+                    "destination": item.get("destination"),
+                    "tour_code": item.get("tour_code"),
+                    "title": item.get("title"),
+                    "departure_location": item.get("departure_location"),
+                    "departure_dates": d_token,
+                    "price_numeric": item.get("price"),
+                    "price_text": f"RM {item.get('price')}",
+                    "holiday_status": status,
+                    "over_days": over_days,
+                    "holiday_name": hol_name
+                })
+
+            if newly_extracted:
+                combined = st.session_state.tour_data + newly_extracted
+                seen = set()
+                unique_combined = []
+                for item in combined:
+                    marker = (item["agency"], item["tour_code"], item["departure_dates"], item["price_numeric"])
+                    if marker not in seen:
+                        seen.add(marker)
+                        unique_combined.append(item)
+
+                st.session_state.tour_data = unique_combined
+                save_persisted_data(unique_combined)
+                
+                success_js = f"""
+                <audio id="done_alert_sound" autoplay><source src="data:audio/wav;base64,{LOUD_WAV_B64}" type="audio/wav"></audio>
+                <script>
+                if ("vibrate" in navigator) {{ navigator.vibrate([250, 100, 250]); }}
+                var aud = document.getElementById('done_alert_sound');
+                if (aud) {{ aud.play().catch(function(){{}}); }}
+                </script>
+                """
+                components.html(success_js, height=0)
+                st.success(f"🎉 成功提取并入库！当前总库共有 **{len(st.session_state.tour_data)}** 项团期。")
+                time.sleep(1)
+                st.rerun()
+            else:
+                st.warning("⚠️ 未能从图中解析出有效团期，请检查图片或重新上传。")
+
+if st.session_state.tour_data:
+    if st.button("🗑️ 清空总库数据"):
+        save_persisted_data([])
+        st.session_state.tour_data = []
+        st.rerun()
+        
+    st.markdown("---")
+    df = pd.DataFrame(st.session_state.tour_data)
+    st.dataframe(df, use_container_width=True)
