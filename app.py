@@ -1,6 +1,5 @@
 import streamlit as st
 import pandas as pd
-import time
 import datetime
 import re
 import json
@@ -12,6 +11,7 @@ from PIL import Image, ImageDraw, ImageFont
 st.set_page_config(page_title="跨社旅游团比价筛选中心", page_icon="✈️", layout="wide")
 
 st.title("✈️ 跨旅行社海报聚合与横向对比中心")
+st.caption("🚀 已锁定 Google 官方 gemini-3.5-flash 极速视觉引擎，支持长表 23 行全量提取与分批累加。")
 
 OFFICIAL_HOLIDAYS = [
     (datetime.date(2026, 3, 20), datetime.date(2026, 3, 29), "2026 第一学期假期 (3月)"),
@@ -23,14 +23,7 @@ OFFICIAL_HOLIDAYS = [
 
 RAW_KEY = st.secrets.get("GEMINI_API_KEY", "")
 GEMINI_API_KEY = str(RAW_KEY).strip() if RAW_KEY else ""
-
-# 依据你的账户列表筛选出的 4 个最稳定视觉模型
-CANDIDATE_MODELS = [
-    "gemini-3.5-flash",
-    "gemini-3.1-flash-lite",
-    "gemini-flash-latest",
-    "gemini-2.5-flash-lite"
-]
+LOCKED_MODEL = "gemini-3.5-flash"
 
 def extract_tour_days(title_str):
     m = re.search(r'(\d+)\s*(?:天|D|d)', str(title_str))
@@ -95,7 +88,7 @@ def split_and_explode_dates(raw_agency, raw_dest, raw_code, raw_title, raw_loc, 
         })
     return exploded
 
-def call_gemini_vision_robust(image_bytes, status_placeholder):
+def call_gemini_vision_direct(image_bytes):
     if not GEMINI_API_KEY:
         raise ValueError("未检测到 GEMINI_API_KEY，请在 Streamlit 后台 Secrets 中配置")
 
@@ -145,29 +138,18 @@ def call_gemini_vision_robust(image_bytes, status_placeholder):
         "x-goog-api-key": GEMINI_API_KEY
     }
 
-    error_logs = []
-
-    for m_name in CANDIDATE_MODELS:
-        status_placeholder.text(f"🚀 正在连接官方模型: [{m_name}] (深度推理中，请稍候)...")
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{m_name}:generateContent?key={GEMINI_API_KEY}"
-        
-        try:
-            res = requests.post(url, headers=headers, json=payload, timeout=45)
-            if res.status_code == 200:
-                res_json = res.json()
-                raw_text = res_json["candidates"][0]["content"]["parts"][0]["text"]
-                clean_json = re.search(r'\[.*\]', raw_text, re.DOTALL)
-                parsed = json.loads(clean_json.group(0)) if clean_json else json.loads(raw_text)
-                return parsed, m_name
-            else:
-                msg = f"{m_name} 响应 HTTP {res.status_code}: {res.text[:80]}"
-                error_logs.append(msg)
-        except requests.exceptions.Timeout:
-            error_logs.append(f"{m_name} 请求超时 (超过 45 秒)")
-        except Exception as e:
-            error_logs.append(f"{m_name} 异常: {str(e)[:80]}")
-
-    raise RuntimeError("所有模型连接失败，具体诊断信息：\n" + "\n".join(error_logs))
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{LOCKED_MODEL}:generateContent?key={GEMINI_API_KEY}"
+    res = requests.post(url, headers=headers, json=payload, timeout=45)
+    
+    if res.status_code == 200:
+        res_json = res.json()
+        raw_text = res_json["candidates"][0]["content"]["parts"][0]["text"]
+        clean_json = re.search(r'\[.*\]', raw_text, re.DOTALL)
+        if clean_json:
+            return json.loads(clean_json.group(0))
+        return json.loads(raw_text)
+    else:
+        raise RuntimeError(f"API 响应错误 (HTTP {res.status_code}): {res.text[:120]}")
 
 def generate_comparison_image(df):
     w, rh, hh = 850, 40, 70
@@ -203,20 +185,20 @@ def generate_comparison_image(df):
 if "tour_data" not in st.session_state:
     st.session_state.tour_data = []
 
-uploaded_files = st.file_uploader("📷 上传旅行社海报图片 (支持分批多次上传)", type=["jpg", "jpeg", "png"], accept_multiple_files=True)
+uploaded_files = st.file_uploader("📷 上传旅行社海报图片 (支持分批多次上传，自动追加)", type=["jpg", "jpeg", "png"], accept_multiple_files=True)
 
 if uploaded_files:
     st.info(f"已选择 {len(uploaded_files)} 张海报图片")
-    if st.button("🚀 启动 Google 官方视觉解析", type="primary", use_container_width=True):
+    if st.button("🚀 极速解析并追加到总库", type="primary", use_container_width=True):
         newly_extracted = []
         progress_bar = st.progress(0.0)
         status_text = st.empty()
-        success_model_name = ""
         has_error = False
 
         for idx, f in enumerate(uploaded_files):
+            status_text.text(f"⚡ 正在由 gemini-3.5-flash 全量解析: {f.name} ...")
             try:
-                raw_items, success_model_name = call_gemini_vision_robust(f.getvalue(), status_text)
+                raw_items = call_gemini_vision_direct(f.getvalue())
                 for item in raw_items:
                     rows = split_and_explode_dates(
                         item.get("agency", "精选旅行社"),
@@ -230,11 +212,12 @@ if uploaded_files:
                     newly_extracted.extend(rows)
             except Exception as e:
                 has_error = True
-                status_text.error(f"处理 {f.name} 时提示:\n{e}")
+                status_text.error(f"处理 {f.name} 时提示: {e}")
 
             progress_bar.progress((idx + 1) / len(uploaded_files))
 
         if not has_error and newly_extracted:
+            # 增量追加并智能去重
             combined = st.session_state.tour_data + newly_extracted
             seen = set()
             unique_combined = []
@@ -245,12 +228,11 @@ if uploaded_files:
                     unique_combined.append(item)
 
             st.session_state.tour_data = unique_combined
-            st.success(f"🎉 成功跑通！实际使用的模型是：**`{success_model_name}`**")
-            time.sleep(1)
+            st.success(f"🎉 解析完成！成功提取并追加数据，当前总库共计 {len(st.session_state.tour_data)} 项出发日期。")
             st.rerun()
 
 if st.session_state.tour_data:
-    if st.button("🗑️ 全部清空重置", use_container_width=True):
+    if st.button("🗑️ 清空总库全部数据", use_container_width=True):
         st.session_state.tour_data = []
         st.rerun()
 
@@ -258,7 +240,7 @@ if st.session_state.tour_data:
     df = pd.DataFrame(st.session_state.tour_data)
     df['price_numeric'] = pd.to_numeric(df['price_numeric'], errors='coerce').fillna(0).astype(int)
 
-    with st.expander(f"🛠️ 快速数据校对面板 (当前总库共有 {len(df)} 项)", expanded=False):
+    with st.expander(f"🛠️ 快速数据校对面板 (当前总库共有 {len(df)} 项，可直接修改/增删行)", expanded=False):
         edited_df = st.data_editor(df, num_rows="dynamic", use_container_width=True)
         if not edited_df.equals(df):
             st.session_state.tour_data = edited_df.to_dict('records')
