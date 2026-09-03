@@ -9,8 +9,8 @@ import streamlit.components.v1 as components
 
 st.set_page_config(page_title="跨社旅游团聚合与智能筛选中心", page_icon="✈️", layout="wide")
 
-st.title("✈️ 跨旅行社海报聚合与横向对比筛选中心 (全量数据与长图导出版)")
-st.markdown("已收录海报全部真实线路与价格，并支持一键生成并下载高颜值可视化比价长图（PNG）。")
+st.title("✈️ 跨旅行社海报聚合与横向对比筛选中心 (高精长图导出版)")
+st.markdown("已修复图像渲染字体的兼容性，支持全量旅游团解析与一键下载精美比价长图（PNG）。")
 
 OFFICIAL_HOLIDAYS = [
     (datetime.date(2026, 3, 20), datetime.date(2026, 3, 29), "2026 第一学期假期 (3月)"),
@@ -107,7 +107,6 @@ def make_tour_dict(agency, dest, code, title, loc, dates, raw_price_num):
 def get_orchid_dynasty_tours():
     agency = "豪吉旅游 (Orchid Dynasty)"
     return [
-        # 重庆
         make_tour_dict(agency, "重庆", "SP002376", "7天6夜 重庆8D风景线 武隆黔江", "SIN出发", "31/12/26", 2999),
         make_tour_dict(agency, "重庆", "SP002334", "7天6夜 8D重庆与阿凡达张家界", "SIN出发", "30/11/26", 3499),
         make_tour_dict(agency, "重庆", "SP002115", "7天6夜 重庆风采 山水之都 文化之旅", "SIN出发", "29/12/26", 3499),
@@ -118,34 +117,28 @@ def get_orchid_dynasty_tours():
         make_tour_dict(agency, "重庆", "SP002389", "7天6夜 重庆重逢 庆重庆 畅游8D重庆", "SIN出发", "05/11/26", 3299),
         make_tour_dict(agency, "重庆", "SP002515", "8天6夜 漫游成都 畅游8D重庆", "SIN出发", "28/12/26", 3999),
         
-        # 西藏
         make_tour_dict(agency, "西藏", "SP002413", "8天6夜 重庆 听了风的话 去了趟西藏", "SIN出发", "06/11/26", 4999),
         make_tour_dict(agency, "西藏", "SP002413", "8天6夜 重庆 听了风的话 去了趟西藏", "SIN出发", "18/12/26", 5199),
         make_tour_dict(agency, "西藏", "SP002468", "8天6夜 西藏 蓝冰洞", "SIN出发", "25/12/26", 5499),
 
-        # 青岛
         make_tour_dict(agency, "青岛", "SP002597", "7天6夜 醉美青岛 威海蓬莱 仙境烟台", "SIN出发", "11/12/26", 3999),
         make_tour_dict(agency, "青岛", "SP002707", "7天6夜 青岛 沿着黄河遇见海", "SIN出发", "22/11/26", 4899),
         make_tour_dict(agency, "青岛", "SP002488", "7天6夜 青岛 秋日气韵", "SIN出发", "22/11/26", 3899),
 
-        # 桂林
         make_tour_dict(agency, "桂林", "SP002584", "7天6夜 桂林水墨丹青 广州都会风情", "SIN出发", "17/11/26", 3299),
         make_tour_dict(agency, "桂林", "SP002584", "7天6夜 桂林水墨丹青 广州都会风情", "SIN出发", "15/12/26", 3999),
         make_tour_dict(agency, "桂林", "SP002584", "7天6夜 桂林水墨丹青 广州都会风情", "SIN出发", "29/12/26", 3699),
 
-        # 韩国
         make_tour_dict(agency, "韩国", "SP002575", "7天6夜 献美韩国", "SIN出发", "27/10/26", 4899),
         make_tour_dict(agency, "韩国", "SP002575", "7天6夜 献美韩国", "SIN出发", "03/11/26", 5699),
         make_tour_dict(agency, "韩国", "SP002602", "7天6夜 韩国 首尔", "SIN出发", "28/11/26", 5599),
         make_tour_dict(agency, "韩国", "SP002602", "7天6夜 韩国 首尔", "SIN出发", "14/12/26", 5999),
 
-        # 台湾
         make_tour_dict(agency, "台湾", "SP002636", "8天6夜 台北 台湾阿里山 清境农场", "SIN出发", "13/12/26", 4099),
         make_tour_dict(agency, "台湾", "SP001773", "8天6夜 台北 茶香漫溯 畅游台湾", "SIN出发", "14/10/26", 3599),
         make_tour_dict(agency, "台湾", "SP002637", "8天6夜 畅玩梦里的台湾 阿里山云海秘境", "SIN出发", "06/11/26", 2999),
         make_tour_dict(agency, "台湾", "SP002637", "8天6夜 畅玩梦里的台湾 阿里山云海秘境", "SIN出发", "10/3/27", 3199),
 
-        # 贵州
         make_tour_dict(agency, "贵州", "SP002809", "7天7夜 一路畅游多彩贵州", "JB出发", "19/11/26", 2999),
         make_tour_dict(agency, "贵州", "SP002729", "7天7夜 贵阳 一路畅游多彩贵州", "JB出发", "26/10/26", 2799),
         make_tour_dict(agency, "贵州", "SP002729", "7天7夜 贵阳 一路畅游多彩贵州", "JB出发", "30/10/26", 2699),
@@ -156,15 +149,12 @@ def get_orchid_dynasty_tours():
         make_tour_dict(agency, "贵州", "SP002779", "7天7夜 风光极致 醉美贵州城", "JB出发", "20/11/26", 3699),
         make_tour_dict(agency, "贵州", "SP002779", "7天7夜 风光极致 醉美贵州城", "JB出发", "04/12/26", 3999),
 
-        # 北疆
         make_tour_dict(agency, "北疆", "SP002088", "11天9夜 济南 济南与乌鲁木齐齐那下", "KL出发", "12/10/26", 6999),
         make_tour_dict(agency, "北疆", "SP002088", "11天9夜 济南 济南与乌鲁木齐齐那下", "KL出发", "13/6/27", 7699),
 
-        # 九寨沟
         make_tour_dict(agency, "九寨沟", "SP002723", "7天6夜 成都重庆 九寨沟 三重体验", "SIN出发", "31/12/26", 3999),
         make_tour_dict(agency, "九寨沟", "SP002363", "8天6夜 人间仙境 九寨沟 重庆双城", "SIN出发", "25/10/26", 4299),
 
-        # 哈尔滨
         make_tour_dict(agency, "哈尔滨", "SP002558", "8天7夜 沈阳 冰雪童话 最美冰城", "SIN出发", "30/10/26", 4099),
         make_tour_dict(agency, "哈尔滨", "SP002423", "8天7夜 沈阳 雪落哈尔滨", "SIN出发", "04/12/26", 5699),
         make_tour_dict(agency, "哈尔滨", "SP002558", "8天7夜 沈阳 冰雪童话 最美冰城", "SIN出发", "27/11/26", 4199),
@@ -203,7 +193,6 @@ def get_qiqi_travel_tours():
     ]
 
 def generate_comparison_image(df):
-    # 动态生成高颜值比价长图 (PNG)
     img_width = 800
     row_height = 45
     header_height = 80
@@ -212,19 +201,24 @@ def generate_comparison_image(df):
     img = Image.new("RGB", (img_width, max(total_height, 200)), color=(248, 250, 252))
     draw = ImageDraw.Draw(img)
     
-    # 尝试加载中文字体，若无则用默认
     try:
         font_title = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 22)
+    except Exception:
+        font_title = ImageFont.load_default()
+
+    try:
         font_header = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 14)
+    except Exception:
+        font_header = ImageFont.load_default()
+
+    try:
         font_row = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 13)
     except Exception:
-        font_title = font_header = font_row = Image.load_default()
+        font_row = ImageFont.load_default()
         
-    # 绘制标题栏
     draw.rectangle([0, 0, img_width, header_height], fill=(15, 23, 42))
     draw.text((25, 25), "✈️ 跨社旅游团比价汇总清单", fill=(255, 255, 255), font=font_title)
     
-    # 列表头
     y = header_height + 10
     draw.rectangle([20, y, img_width - 20, y + 35], fill=(226, 232, 240))
     cols = [("旅行社", 30), ("目的地", 180), ("团号", 260), ("出发", 350), ("价格(RM)", 480), ("路线名称", 570)]
