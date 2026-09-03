@@ -12,14 +12,14 @@ import streamlit.components.v1 as components
 
 st.set_page_config(page_title="AI 旅游团智能筛选助手", page_icon="✈️", layout="wide")
 
-st.title("✈️ 旅游团宣传单智能分析与筛选 (多路备用引擎版)")
-st.markdown("已接入多路备用通道与智能文本切片引擎：彻底规避单一账号频控限制，实现秒级高精提取。")
+st.title("✈️ 旅游团宣传单智能分析与筛选 (独立账号高精省流版)")
+st.markdown("已接入独立账号高额度 Key，并优化图像压缩与 Token 消耗，确保海报分析秒级通畅。")
 
-# 已配置多个高额度备用 Groq API Key
+# 优先使用新账号的 Key，其他作为备用
 GROQ_KEYS = [
+    "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",
     "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",
-    "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",
-    "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"
+    "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"
 ]
 
 OFFICIAL_HOLIDAYS = [
@@ -167,9 +167,10 @@ def force_convert_and_compress(file_bytes):
     else:
         img = img.convert("RGB")
         
-    img.thumbnail((1000, 1000), Image.Resampling.LANCZOS)
+    # 优化：将最大尺寸限制在 900 像素，既保证文字清晰度，又大幅节省 Token 消耗
+    img.thumbnail((900, 900), Image.Resampling.LANCZOS)
     buffer = BytesIO()
-    img.save(buffer, format="JPEG", quality=80)
+    img.save(buffer, format="JPEG", quality=75)
     return base64.b64encode(buffer.getvalue()).decode("utf-8")
 
 def parse_flexible_content(content):
@@ -209,8 +210,7 @@ def analyze_single_image(file_bytes, file_name, task_dict):
 
     url = "https://api.groq.com/openai/v1/chat/completions"
     
-    # 轮流测试 Key，如果遇到 429 额度超限自动无缝切换到下一个可用 Key
-    for idx, key in enumerate(GROQ_KEYS):
+    for key in GROQ_KEYS:
         headers = {
             "Authorization": f"Bearer {key.strip()}",
             "Content-Type": "application/json"
@@ -247,17 +247,16 @@ def analyze_single_image(file_bytes, file_name, task_dict):
                         unique_list.append(it)
                     return unique_list
             elif response.status_code == 429:
-                # 切换下一个 Key
                 continue
         except Exception:
             continue
 
-    raise Exception("所有 API Key 的额度均已耗尽 (429 Rate Limit)，请稍后再试")
+    raise Exception("当前备用池中的 API Key 均触发频控限制，请稍等片刻再试")
 
 def background_worker(files_data, task_dict, api_key):
     total = len(files_data)
     for idx, (f_name, f_bytes) in enumerate(files_data):
-        task_dict["status_msg"] = f"⚡ 多通道自动轮换解析第 {idx + 1}/{total} 张: {f_name} ..."
+        task_dict["status_msg"] = f"⚡ 省流高效解析第 {idx + 1}/{total} 张: {f_name} ..."
         try:
             data = analyze_single_image(f_bytes, f_name, task_dict)
             if data:
@@ -331,7 +330,7 @@ if uploaded_files:
             task["progress"] = 0.0
             task["results"] = []
             task["errors"] = []
-            task["status_msg"] = "正在启动多路备用引擎..."
+            task["status_msg"] = "正在启动独立账号引擎..."
             
             files_data = [(f.name, f.getvalue()) for f in uploaded_files]
             t = threading.Thread(target=background_worker, args=(files_data, task, GROQ_KEYS[0]), daemon=True)
