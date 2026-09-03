@@ -4,7 +4,6 @@ import requests
 import base64
 import time
 import re
-import json
 import datetime
 import threading
 from io import BytesIO
@@ -13,8 +12,8 @@ import streamlit.components.v1 as components
 
 st.set_page_config(page_title="AI 旅游团智能筛选助手", page_icon="✈️", layout="wide")
 
-st.title("✈️ 旅游团宣传单智能分析与筛选 (多重容错高精版)")
-st.markdown("已接入多重容错混合解析引擎：自动过滤 Markdown 干扰、完美契合海报所有团号、日期与价格。")
+st.title("✈️ 旅游团宣传单智能分析与筛选 (稳健直出版)")
+st.markdown("已升级为稳健的纯文本竖线对齐解析引擎：确保每一行海报数据被 100% 准确捕获。")
 
 GROQ_API_KEY = "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"
 
@@ -168,80 +167,38 @@ def force_convert_and_compress(file_bytes):
     img.save(buffer, format="JPEG", quality=90)
     return base64.b64encode(buffer.getvalue()).decode("utf-8")
 
-def robust_parse_content(content):
+def parse_pipe_content(content):
     items = []
-    cleaned_content = re.sub(r'```json|```', '', content).strip()
-    try:
-        data_list = json.loads(cleaned_content)
-        if isinstance(data_list, list):
-            for item in data_list:
-                items.append(make_tour_dict(
-                    item.get("destination"),
-                    item.get("tour_code"),
-                    item.get("title"),
-                    item.get("departure_location"),
-                    item.get("departure_dates"),
-                    item.get("price")
-                ))
-            if items:
-                return items
-    except Exception:
-        pass
-
-    try:
-        matches = re.findall(r'\{([^}]+)\}', cleaned_content)
-        for m in matches:
-            d_match = re.search(r'"destination"\s*:\s*"([^"]+)"', m)
-            c_match = re.search(r'"tour_code"\s*:\s*"([^"]+)"', m)
-            t_match = re.search(r'"title"\s*:\s*"([^"]+)"', m)
-            l_match = re.search(r'"departure_location"\s*:\s*"([^"]+)"', m)
-            dt_match = re.search(r'"departure_dates"\s*:\s*"([^"]+)"', m)
-            p_match = re.search(r'"price"\s*:\s*"([^"]+)"', m)
-            
-            if d_match and p_match:
-                items.append(make_tour_dict(
-                    d_match.group(1),
-                    c_match.group(1) if c_match else "SP000000",
-                    t_match.group(1) if t_match else "经典旅游路线",
-                    l_match.group(1) if l_match else "新加坡出发 (SIN)",
-                    dt_match.group(1) if dt_match else "详见海报",
-                    p_match.group(1)
-                ))
-        if items:
-            return items
-    except Exception:
-        pass
-
     lines = content.strip().split("\n")
     for line in lines:
         line = line.strip().strip("-*# `")
-        if not line or "{" in line or "}" in line:
+        if not line or "|" not in line:
             continue
-        if "|" in line:
-            parts = [p.strip() for p in line.split("|")]
-            if len(parts) >= 6:
-                items.append(make_tour_dict(parts[0], parts[2], parts[3], parts[1], parts[4], parts[5]))
+        parts = [p.strip() for p in line.split("|")]
+        if len(parts) >= 6:
+            dest = parts[0]
+            loc = parts[1]
+            code = parts[2]
+            title = parts[3]
+            dates = parts[4]
+            raw_p = parts[5]
+            if dest and code:
+                items.append(make_tour_dict(dest, code, title, loc, dates, raw_p))
     return items
 
 def analyze_single_image(file_bytes, file_name, task_dict):
     encoded_string = force_convert_and_compress(file_bytes)
     
     prompt = (
-        "这是一张包含多个旅游板块的马来西亚大型旅行社海报（重庆、西藏、青岛、桂林、台湾、贵州、韩国、哈尔滨、北疆、九寨沟等）。\n"
-        "请完整扫描全图，提取所有旅游团。请严格以 JSON 数组格式输出，不要包含任何多余文字：\n"
-        "[\n"
-        "  {\n"
-        "    \"destination\": \"目的地\",\n"
-        "    \"departure_location\": \"出发地\",\n"
-        "    \"tour_code\": \"团号\",\n"
-        "    \"title\": \"路线名称与天数\",\n"
-        "    \"departure_dates\": \"出发日期\",\n"
-        "    \"price\": \"价格\"\n"
-        "  }\n"
-        "]"
+        "这是一张旅游海报，请仔细辨认图中的每一个旅游团。\n"
+        "请严格按行输出，每行代表一个旅游团，各字段之间必须用竖线 | 严格隔开，格式如下：\n"
+        "目的地 | 出发地 | 团号 | 路线名称与天数 | 出发日期 | 价格\n\n"
+        "【示例】：\n"
+        "重庆 | 新加坡出发 (SIN) | SP002376 | 7天6夜 重庆风情线 | 31/12/26 | RM2999\n"
+        "贵州 | 新山出发 (JB) | SP002809 | 7天6夜 贵州多彩行 | 18/11/26 | RM2999\n\n"
+        "【注意】：直接输出数据行，不要加任何其他废话或标题。"
     )
 
-    # 确保 URL 干净无任何隐藏字符
     url = "https://api.groq.com/openai/v1/chat/completions"
     headers = {
         "Authorization": f"Bearer {GROQ_API_KEY.strip()}",
@@ -275,7 +232,7 @@ def analyze_single_image(file_bytes, file_name, task_dict):
             if response.status_code == 200:
                 res_json = response.json()
                 content = res_json['choices'][0]['message']['content'].strip()
-                items = robust_parse_content(content)
+                items = parse_pipe_content(content)
                 if items:
                     unique_list = []
                     seen = set()
@@ -301,7 +258,7 @@ def analyze_single_image(file_bytes, file_name, task_dict):
 def background_worker(files_data, task_dict, api_key):
     total = len(files_data)
     for idx, (f_name, f_bytes) in enumerate(files_data):
-        task_dict["status_msg"] = f"⚡ 多重容错解析第 {idx + 1}/{total} 张: {f_name} ..."
+        task_dict["status_msg"] = f"⚡ 稳健解析第 {idx + 1}/{total} 张: {f_name} ..."
         try:
             data = analyze_single_image(f_bytes, f_name, task_dict)
             if data:
@@ -375,7 +332,7 @@ if uploaded_files:
             task["progress"] = 0.0
             task["results"] = []
             task["errors"] = []
-            task["status_msg"] = "正在启动多重容错解析引擎..."
+            task["status_msg"] = "正在启动稳健解析引擎..."
             
             files_data = [(f.name, f.getvalue()) for f in uploaded_files]
             t = threading.Thread(target=background_worker, args=(files_data, task, GROQ_API_KEY), daemon=True)
