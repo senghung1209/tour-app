@@ -11,8 +11,8 @@ from PIL import Image, ImageDraw, ImageFont
 
 st.set_page_config(page_title="跨社旅游团比价筛选中心", page_icon="✈️", layout="wide")
 
-st.title("✈️ 跨旅行社海报聚合与横向对比中心 (OpenRouter 智能双通道版)")
-st.markdown("已开启**图片轻量化压缩**与**免费视觉双模型自动容灾**，有效避免 Token 快速耗尽或频限报错。")
+st.title("✈️ 跨旅行社海报聚合与横向对比中心 (OpenRouter 动态免费版)")
+st.markdown("通过 OpenRouter 官方免费路由驱动，自动调度可用免费视觉模型解析海报。")
 
 OFFICIAL_HOLIDAYS = [
     (datetime.date(2026, 3, 20), datetime.date(2026, 3, 29), "2026 第一学期假期 (3月)"),
@@ -25,26 +25,19 @@ OFFICIAL_HOLIDAYS = [
 OPENROUTER_API_KEY = st.secrets.get("OPENROUTER_API_KEY", "")
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 
-# 轮换的免费视觉多模态模型列表
-FREE_VISION_MODELS = [
-    "google/gemini-2.0-flash-exp:free",
-    "meta-llama/llama-3.2-11b-vision-instruct:free"
-]
-
 def compress_image_for_api(image_bytes):
-    """自适应压缩海报，控制在1280px以内，极大减少Token消耗并提速"""
     img = Image.open(BytesIO(image_bytes))
     if img.mode != 'RGB':
         img = img.convert('RGB')
     
     w, h = img.size
-    max_dim = 1280
+    max_dim = 1200
     if max(w, h) > max_dim:
         scale = max_dim / float(max(w, h))
         img = img.resize((int(w * scale), int(h * scale)), Image.Resampling.LANCZOS)
         
     buf = BytesIO()
-    img.save(buf, format="JPEG", quality=82)
+    img.save(buf, format="JPEG", quality=80)
     return buf.getvalue()
 
 def extract_tour_days(title_str):
@@ -103,7 +96,7 @@ def split_and_explode_dates(raw_agency, raw_dest, raw_code, raw_title, raw_loc, 
         })
     return exploded
 
-def call_openrouter_vision_robust(image_bytes):
+def call_openrouter_free_router(image_bytes):
     if not OPENROUTER_API_KEY:
         raise ValueError("未检测到 OPENROUTER_API_KEY，请在 Streamlit 后台 Secrets 中配置")
 
@@ -123,9 +116,9 @@ def call_openrouter_vision_robust(image_bytes):
     2. 只输出纯 JSON 数组，严禁包含任何 Markdown 格式或额外文字说明：
     [
       {
-        "agency": "旅行社名称(如 豪吉旅游/琦琦旅游)",
-        "destination": "目的地(如 重庆/云南/台湾)",
-        "tour_code": "团号(如 SP002376/QQ001)",
+        "agency": "旅行社名称",
+        "destination": "目的地",
+        "tour_code": "团号",
         "title": "完整路线标题",
         "departure_location": "起飞机场(如 SIN/KUL/JB出发)",
         "departure_dates": "全部出发日期(如 26/10, 28/10)",
@@ -134,41 +127,31 @@ def call_openrouter_vision_robust(image_bytes):
     ]
     """
 
-    err_messages = []
-    # 在可用的免费模型之间自动尝试容灾
-    for model_name in FREE_VISION_MODELS:
-        payload = {
-            "model": model_name,
-            "messages": [
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": prompt},
-                        {
-                            "type": "image_url",
-                            "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}
-                        }
-                    ]
-                }
-            ]
-        }
+    payload = {
+        "model": "openrouter/free",
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": prompt},
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}
+                    }
+                ]
+            }
+        ]
+    }
 
-        try:
-            res = requests.post(OPENROUTER_URL, headers=headers, json=payload, timeout=60)
-            if res.status_code == 200:
-                content = res.json()["choices"][0]["message"]["content"]
-                clean_json = re.search(r'\[.*\]', content, re.DOTALL)
-                if clean_json:
-                    return json.loads(clean_json.group(0))
-                return json.loads(content)
-            else:
-                err_messages.append(f"{model_name} HTTP {res.status_code}: {res.text[:120]}")
-                time.sleep(2)
-        except Exception as e:
-            err_messages.append(f"{model_name} 请求异常: {str(e)}")
-            time.sleep(2)
-
-    raise RuntimeError("所有免费通道均繁忙，详情: " + " | ".join(err_messages))
+    res = requests.post(OPENROUTER_URL, headers=headers, json=payload, timeout=60)
+    if res.status_code == 200:
+        content = res.json()["choices"][0]["message"]["content"]
+        clean_json = re.search(r'\[.*\]', content, re.DOTALL)
+        if clean_json:
+            return json.loads(clean_json.group(0))
+        return json.loads(content)
+    else:
+        raise RuntimeError(f"HTTP {res.status_code}: {res.text}")
 
 def generate_comparison_image(df):
     w, rh, hh = 850, 40, 70
@@ -222,9 +205,9 @@ if uploaded_files:
         has_error = False
 
         for idx, f in enumerate(uploaded_files):
-            status_text.text(f"🔍 正在智能压缩与多模态解析: {f.name} ...")
+            status_text.text(f"🔍 正在由 OpenRouter 免费通道解析海报: {f.name} ...")
             try:
-                raw_items = call_openrouter_vision_robust(f.getvalue())
+                raw_items = call_openrouter_free_router(f.getvalue())
                 for item in raw_items:
                     rows = split_and_explode_dates(
                         item.get("agency", "精选旅行社"),
