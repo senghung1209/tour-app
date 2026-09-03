@@ -12,8 +12,8 @@ import streamlit.components.v1 as components
 
 st.set_page_config(page_title="AI 旅游团智能筛选助手", page_icon="✈️", layout="wide")
 
-st.title("✈️ 旅游团宣传单智能分析与筛选 (多模态高精稳健版)")
-st.markdown("已接入高精 OpenAI 兼容视觉解析引擎：确保海报全网点、团号、日期与价格 100% 准确抓取。")
+st.title("✈️ 旅游团宣传单智能分析与筛选 (Qwen 视觉高精稳健版)")
+st.markdown("已接入 Groq 官方最新的 Qwen 视觉多模态引擎：确保海报全网点、团号、日期与价格 100% 准确抓取。")
 
 GROQ_API_KEY = "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"
 
@@ -208,9 +208,9 @@ def analyze_single_image(file_bytes, file_name, task_dict):
         "Content-Type": "application/json"
     }
 
-    # 使用 Groq 官方标准的视觉模型名称（移除了不支持的组织前缀）
+    # 已更新为 Groq 官方当前稳定可用的 Qwen 视觉模型
     payload = {
-        "model": "llama-3.2-11b-vision-preview",
+        "model": "qwen/qwen3.6-27b",
         "messages": [
             {
                 "role": "user",
@@ -247,7 +247,7 @@ def analyze_single_image(file_bytes, file_name, task_dict):
 def background_worker(files_data, task_dict, api_key):
     total = len(files_data)
     for idx, (f_name, f_bytes) in enumerate(files_data):
-        task_dict["status_msg"] = f"⚡ 智能视觉解析第 {idx + 1}/{total} 张: {f_name} ..."
+        task_dict["status_msg"] = f"⚡ Qwen 视觉解析第 {idx + 1}/{total} 张: {f_name} ..."
         try:
             data = analyze_single_image(f_bytes, f_name, task_dict)
             if data:
@@ -321,7 +321,7 @@ if uploaded_files:
             task["progress"] = 0.0
             task["results"] = []
             task["errors"] = []
-            task["status_msg"] = "正在启动多模态视觉引擎..."
+            task["status_msg"] = "正在启动 Qwen 视觉引擎..."
             
             files_data = [(f.name, f.getvalue()) for f in uploaded_files]
             t = threading.Thread(target=background_worker, args=(files_data, task, GROQ_API_KEY), daemon=True)
