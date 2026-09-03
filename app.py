@@ -6,10 +6,13 @@ import os
 import json
 import base64
 import time
+import math
+import struct
 import urllib.request
 import requests
 from io import BytesIO
 from PIL import Image, ImageDraw, ImageFont
+import streamlit.components.v1 as components
 
 st.set_page_config(page_title="跨社旅游团比价筛选中心", page_icon="✈️", layout="wide")
 
@@ -38,34 +41,115 @@ st.session_state.tour_data = load_persisted_data()
 
 st.title("✈️ 跨旅行社海报聚合与横向对比中心")
 
-# 标准清脆响亮的叮咚提示音 (Base64 编码的微型 WAV 音频)
-DING_DONG_WAV_B64 = (
-    "UklGRjQBAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YRAAAAAA////AAAA////AAAA////"
-    "AAAA////AAAA////AAAA////AAAA////AAAA////AAAA////AAAA////AAAA////AAAA////AAAA////"
-    "AAAA////AAAA////AAAA////AAAA////AAAA////AAAA////AAAA////AAAA////AAAA////AAAA////"
-    "AAAA////AAAA////AAAA////AAAA////AAAA////AAAA////AAAA////AAAA////AAAA////AAAA////"
-)
+# 生成真实高分贝清晰叮咚音频 (800Hz + 1200Hz WAV)
+@st.cache_resource
+def get_loud_wav_base64():
+    sample_rate = 22050
+    tones = [(850, 0.18), (0, 0.05), (1200, 0.35)]
+    raw_samples = bytearray()
+    for freq, duration in tones:
+        n_samples = int(sample_rate * duration)
+        for i in range(n_samples):
+            if freq == 0:
+                val = 128
+            else:
+                val = int(128 + 118 * math.sin(2 * math.pi * freq * i / sample_rate))
+                val = max(0, min(255, val))
+            raw_samples.append(val)
+            
+    data_size = len(raw_samples)
+    header = struct.pack(
+        '<4sI4s4sIHHIIHH4sI',
+        b'RIFF', 36 + data_size, b'WAVE', b'fmt ',
+        16, 1, 1, sample_rate, sample_rate, 1, 8, b'data', data_size
+    )
+    return base64.b64encode(header + raw_samples).decode('ascii')
 
-# 顶部显眼的权限测试与预激活
-with st.container(border=True):
-    col_t1, col_t2 = st.columns([3, 1])
-    with col_t1:
-        st.markdown("🔊 **手机完成提示音 & 震动服务**")
-        st.caption("提示：在手机端首次使用，请先点右侧按钮测试响度，激活手机浏览器音频通道。")
-    with col_t2:
-        test_clicked = st.button("🔊 测试铃声与震动", use_container_width=True)
+LOUD_WAV_B64 = get_loud_wav_base64()
 
-if test_clicked:
-    st.markdown(f"""
-    <audio autoplay>
-        <source src="data:audio/wav;base64,{DING_DONG_WAV_B64}" type="audio/wav">
+# 纯原生即时触摸播放与手机震动卡片
+native_audio_html = f"""
+<div style="background: #eff6ff; border: 1.5px solid #3b82f6; border-radius: 8px; padding: 12px; margin-bottom: 15px;">
+    <div style="font-weight: bold; font-size: 14px; color: #1e40af; margin-bottom: 5px;">
+        🔊 手机完成提示音 & 强力震动服务
+    </div>
+    <div style="font-size: 13px; color: #2563eb; margin-bottom: 10px;">
+        提示：请点击下方按钮测试响度。点击后手机将<b>立即鸣响并震动</b>，同时解锁浏览器后台出声权限：
+    </div>
+    <audio id="real_alert_sound" preload="auto">
+        <source src="data:audio/wav;base64,{LOUD_WAV_B64}" type="audio/wav">
+    </audio>
+    <button id="direct_play_btn" style="background: #2563eb; color: white; border: none; padding: 10px 20px; border-radius: 6px; font-weight: bold; font-size: 14px; width: 100%; cursor: pointer;">
+        🔊 点击立即测试铃声与强力震动
+    </button>
+    <div id="status_msg" style="font-size: 12px; color: #16a34a; margin-top: 6px; font-weight: bold; display: none;">
+        ✅ 铃声已响，震动已触发！后台通道已全面激活！
+    </div>
+</div>
+
+<script>
+document.getElementById('direct_play_btn').addEventListener('click', function(e) {
+    e.preventDefault();
+    
+    // 1. 物理震动（连续震动3下）
+    if ("vibrate" in navigator) {{
+        navigator.vibrate([250, 100, 250, 100, 400]);
+    }}
+
+    // 2. 原生音频标签无延迟播放
+    var audio = document.getElementById('real_alert_sound');
+    if (audio) {{
+        audio.currentTime = 0;
+        audio.volume = 1.0;
+        audio.play().then(function() {{
+            document.getElementById('status_msg').style.display = 'block';
+        }}).catch(function(err) {{
+            // 备选 Web Audio 合成音
+            try {{
+                var ctx = new (window.AudioContext || window.webkitAudioContext)();
+                var osc = ctx.createOscillator();
+                var gain = ctx.createGain();
+                osc.type = "sine";
+                osc.frequency.setValueAtTime(880, ctx.currentTime);
+                gain.gain.setValueAtTime(0.5, ctx.currentTime);
+                osc.connect(gain);
+                gain.connect(ctx.destination);
+                osc.start();
+                osc.stop(ctx.currentTime + 0.3);
+                document.getElementById('status_msg').style.display = 'block';
+            }} catch(e) {{}}
+        }});
+    }}
+
+    // 3. 申请系统级通知
+    if ("Notification" in window) {{
+        Notification.requestPermission();
+    }}
+});
+</script>
+"""
+components.html(native_audio_html, height=140)
+
+def trigger_play_on_done(count_num):
+    js = f"""
+    <audio id="done_alert_sound" autoplay>
+        <source src="data:audio/wav;base64,{LOUD_WAV_B64}" type="audio/wav">
     </audio>
     <script>
-        if ("vibrate" in navigator) {{ navigator.vibrate([200, 100, 200]); }}
-        if ("Notification" in window) {{ Notification.requestPermission(); }}
+    (function() {{
+        if ("vibrate" in navigator) {{ navigator.vibrate([250, 100, 250, 100, 400]); }}
+        var aud = document.getElementById('done_alert_sound');
+        if (aud) {{ aud.play().catch(function(){{}}); }}
+        if ("Notification" in window && Notification.permission === "granted") {{
+            new Notification("🎉 旅游海报扫描完成！", {{
+                body: "成功提取全量数据，总库共有 " + {count_num} + " 条团期！",
+                icon: "✈️"
+            }});
+        }}
+    }})();
     </script>
-    """, unsafe_allow_html=True)
-    st.toast("🔔 提示音与震动已触发！", icon="🔊")
+    """
+    components.html(js, height=0)
 
 OFFICIAL_HOLIDAYS = [
     (datetime.date(2026, 3, 20), datetime.date(2026, 3, 29), "2026 第一学期假期 (3月)"),
@@ -198,7 +282,7 @@ def call_gemini_vision_chunk(img_chunk, chunk_name, status_box, hint_text="", de
     {f"核心区域提示: {hint_text}" if hint_text else ""}
 
     特别注意：
-    1. 【旅行社名称统一】：如果是琦琦旅游表格海报，每一行第1个字段一律填“琦琦旅游”；如果是豪吉拼贴海报，一律填“豪吉旅游”。绝不能留空或带月份杂质！
+    1. 【旅行社名称统一】：如果是琦琦旅游表格海报，每一行第1个字段一律填“琦琦旅游”；如果是豪吉拼贴海报，一律填“豪吉旅游”。绝不能留空！
     2. 【逗号并列日期彻底拆分】：若写有并列日期（如 01/11, 19/11 对应 2999；05/11, 26/11, 29/12 对应 3099；23/10, 06/11 对应 4999；18/12 对应 5199），每一个逗号隔开的日期都必须拆分成单独一行！
     3. 起飞地点：含 SIN/新加坡/酷航/TR 填“新加坡起飞 (SIN)”；含 JB/新山 填“新山出发 (JB)”；默认填“马来西亚起飞 (KUL)”。
     4. 纯文本逐行输出，以竖线 | 分隔，严禁代码块标记与解释：
@@ -377,22 +461,9 @@ if uploaded_files:
 
             st.session_state.tour_data = unique_combined
             save_persisted_data(unique_combined)
-            
-            # 使用原生真实音频标签挂载播放，并同步触发手机物理振动
-            st.markdown(f"""
-            <audio autoplay>
-                <source src="data:audio/wav;base64,{DING_DONG_WAV_B64}" type="audio/wav">
-            </audio>
-            <script>
-                if ("vibrate" in navigator) {{ navigator.vibrate([250, 100, 250, 100, 400]); }}
-                if ("Notification" in window && Notification.permission === "granted") {{
-                    new Notification("🎉 旅游海报扫描完成！", {{ body: "成功提取全量数据！", icon: "✈️" }});
-                }}
-            </script>
-            """, unsafe_allow_html=True)
-            
+            trigger_play_on_done(len(st.session_state.tour_data))
             st.success(f"🎉 扫描全部完成！总库已更新至 **{len(st.session_state.tour_data)}** 条团期。")
-            time.sleep(1.2)
+            time.sleep(1.0)
             st.rerun()
 
 if st.session_state.tour_data:
