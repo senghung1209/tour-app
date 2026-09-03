@@ -14,7 +14,7 @@ from io import BytesIO
 from PIL import Image, ImageDraw, ImageFont
 import streamlit.components.v1 as components
 
-st.set_page_config(page_title="跨社旅游团比价筛选中心", page_icon="✈️", layout="wide")
+st.set_page_config(page_title="跨社旅游团比价中心", page_icon="✈️", layout="wide")
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_FILE = os.path.join(BASE_DIR, "tour_database.json")
@@ -67,62 +67,45 @@ def get_loud_wav_base64():
 
 LOUD_WAV_B64 = get_loud_wav_base64()
 
-# 纯原生即时触摸播放与手机震动卡片（非 f-string 避免语法解析冲突）
+# 页面顶部常驻激活与系统通知申请
 native_audio_html = """
 <div style="background: #eff6ff; border: 1.5px solid #3b82f6; border-radius: 8px; padding: 12px; margin-bottom: 15px;">
     <div style="font-weight: bold; font-size: 14px; color: #1e40af; margin-bottom: 5px;">
-        🔊 手机完成提示音 & 强力震动服务
+        🔊 手机状态栏通知与完成提示音设置
     </div>
     <div style="font-size: 13px; color: #2563eb; margin-bottom: 10px;">
-        提示：请点击下方按钮测试响度。点击后手机将<b>立即鸣响并震动</b>，同时解锁浏览器后台出声权限：
+        请先点击下方按钮授权系统通知权限。分析完毕后，<b>手机通知栏会弹窗提醒</b>，切回网页时也会立即补响铃声：
     </div>
     <audio id="real_alert_sound" preload="auto">
         <source src="data:audio/wav;base64,AUDIO_PLACEHOLDER" type="audio/wav">
     </audio>
     <button id="direct_play_btn" style="background: #2563eb; color: white; border: none; padding: 10px 20px; border-radius: 6px; font-weight: bold; font-size: 14px; width: 100%; cursor: pointer;">
-        🔊 点击立即测试铃声与强力震动
+        👉 点击开启系统通知与测试铃声
     </button>
     <div id="status_msg" style="font-size: 12px; color: #16a34a; margin-top: 6px; font-weight: bold; display: none;">
-        ✅ 铃声已响，震动已触发！后台通道已全面激活！
+        ✅ 系统通知已授权！切去刷抖音/FB时，分析完毕手机顶部会弹出通知！
     </div>
 </div>
 
 <script>
 document.getElementById('direct_play_btn').addEventListener('click', function(e) {
     e.preventDefault();
-    
-    // 1. 物理震动
     if ("vibrate" in navigator) {
-        navigator.vibrate([250, 100, 250, 100, 400]);
+        navigator.vibrate([200, 100, 200]);
     }
-
-    // 2. 原生音频标签无延迟播放
     var audio = document.getElementById('real_alert_sound');
     if (audio) {
         audio.currentTime = 0;
         audio.volume = 1.0;
-        audio.play().then(function() {
-            document.getElementById('status_msg').style.display = 'block';
-        }).catch(function(err) {
-            try {
-                var ctx = new (window.AudioContext || window.webkitAudioContext)();
-                var osc = ctx.createOscillator();
-                var gain = ctx.createGain();
-                osc.type = "sine";
-                osc.frequency.setValueAtTime(880, ctx.currentTime);
-                gain.gain.setValueAtTime(0.5, ctx.currentTime);
-                osc.connect(gain);
-                gain.connect(ctx.destination);
-                osc.start();
-                osc.stop(ctx.currentTime + 0.3);
-                document.getElementById('status_msg').style.display = 'block';
-            } catch(e) {}
-        });
+        audio.play().catch(function() {});
     }
-
-    // 3. 申请系统级通知
     if ("Notification" in window) {
-        Notification.requestPermission();
+        Notification.requestPermission().then(function(perm) {
+            if (perm === 'granted') {
+                document.getElementById('status_msg').style.display = 'block';
+                new Notification("通知权限已开通！", { body: "海报解析完成后会在此处提醒你。", icon: "✈️" });
+            }
+        });
     }
 });
 </script>
@@ -130,6 +113,7 @@ document.getElementById('direct_play_btn').addEventListener('click', function(e)
 
 components.html(native_audio_html, height=140)
 
+# 分析完毕触发逻辑：更新浏览器标签标题 + 系统弹窗 + 前台响铃与震动
 def trigger_play_on_done(count_num):
     js = """
     <audio id="done_alert_sound" autoplay>
@@ -137,12 +121,13 @@ def trigger_play_on_done(count_num):
     </audio>
     <script>
     (function() {
+        document.title = "🔔【分析完成! 共COUNT_PLACEHOLDER项】跨社比价";
         if ("vibrate" in navigator) { navigator.vibrate([250, 100, 250, 100, 400]); }
         var aud = document.getElementById('done_alert_sound');
         if (aud) { aud.play().catch(function(){}); }
         if ("Notification" in window && Notification.permission === "granted") {
             new Notification("🎉 旅游海报扫描完成！", {
-                body: "成功提取全量数据，总库共有 COUNT_PLACEHOLDER 条团期！",
+                body: "已成功提取全量数据，总库共有 COUNT_PLACEHOLDER 条团期！点击查看",
                 icon: "✈️"
             });
         }
@@ -191,12 +176,25 @@ def evaluate_holiday_fit(departure_date_str, duration_days):
         pass
     return 'none', 0, ""
 
-def normalize_agency_name(raw_name, title_str=""):
-    s = f"{raw_name} {title_str}".upper()
-    if "琦琦" in s or "QI QI" in s:
-        return "琦琦旅游"
-    if "豪吉" in s or "SP" in s:
+# 严密旅行社名称归一化（以团号 SP 作为铁证）
+def normalize_agency_name(raw_name, raw_code, raw_title):
+    code_str = str(raw_code).upper()
+    name_str = str(raw_name).upper()
+    title_str = str(raw_title).upper()
+
+    # 1. 只要带有 SP 团号，100% 属于豪吉旅游
+    if "SP" in code_str:
         return "豪吉旅游"
+
+    # 2. 如果包含琦琦或无团号纯序列表格
+    if "琦琦" in name_str or "QI QI" in name_str or "琦琦" in title_str:
+        return "琦琦旅游"
+
+    # 3. 如果海报明确写了豪吉
+    if "豪吉" in name_str:
+        return "豪吉旅游"
+
+    # 4. 其他情况清洗杂质
     clean = re.sub(r'\(.*?\)|（.*?）', '', str(raw_name)).strip()
     return clean if clean else "精选旅行社"
 
@@ -215,7 +213,7 @@ def split_and_explode_dates(raw_agency, raw_dest, raw_code, raw_title, raw_loc, 
     except Exception:
         clean_price = 0
 
-    norm_agency = normalize_agency_name(raw_agency, raw_title)
+    norm_agency = normalize_agency_name(raw_agency, raw_code, raw_title)
     norm_loc = normalize_departure_location(raw_loc, raw_title)
     clean_dest = re.sub(r'^(?:SIN|JB|KL)\s*[-–—]\s*', '', str(raw_dest or "精选路线")).strip()
 
@@ -282,7 +280,7 @@ def call_gemini_vision_chunk(img_chunk, chunk_name, status_box, hint_text="", de
     {f"核心区域提示: {hint_text}" if hint_text else ""}
 
     特别注意：
-    1. 【旅行社名称统一】：如果是琦琦旅游表格海报，每一行第1个字段一律填“琦琦旅游”；如果是豪吉拼贴海报，一律填“豪吉旅游”。绝不能留空！
+    1. 【旅行社名称规则】：根据海报实际标题提取其旅行社名称，若无标题且团号为SP开头的填“豪吉旅游”，若是长表格无SP团号的填“琦琦旅游”。
     2. 【多价格与逗号并列日期彻底拆分】：
        - 若同一个框内有两排不同价格（如 SP002332 上方 08/11/26 卖 RM3299，下方 06/12/26 卖 RM3599），必须两组全部提取，拆成两行！
        - 若写有并列逗号日期（如 SP002374 的 01/11, 19/11 以及 05/11, 26/11, 29/12；SP002413 的 23/10, 06/11 卖 4999 与 18/12 卖 5199），每一个日期都必须拆分成单独的一行！
