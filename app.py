@@ -101,7 +101,6 @@ OFFICIAL_HOLIDAYS = [
 ]
 
 RAW_KEY = st.secrets.get("GEMINI_API_KEY", "")
-# 强力剥离所有空格、引号、中括号等非法字符
 CLEAN_KEY = re.sub(r'[\r\n\t\s\'\"\[\]]', '', str(RAW_KEY))
 
 def extract_tour_days(title_str):
@@ -246,25 +245,30 @@ def call_gemini_vision_clean(img_bytes, poster_type, hint=""):
         "generationConfig": {"temperature": 0.0, "maxOutputTokens": 8192}
     }
 
-    # 绝对干净、硬编码拼接的 URL，防止任何中括号污染
-    url = f"[https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=](https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=){CLEAN_KEY}"
-    url = url.replace('[', '').replace(']', '').strip()
+    # 根据密钥类型自动切换鉴权方式（完美支持标准 API Key 与 AQ 访问令牌）
+    if CLEAN_KEY.startswith("AIza"):
+        url = f"[https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=](https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=){CLEAN_KEY}"
+        headers = {"Content-Type": "application/json"}
+    else:
+        url = "[https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent](https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent)"
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {CLEAN_KEY}"
+        }
 
     data_json = json.dumps(payload).encode('utf-8')
-    req = urllib.request.Request(
-        url,
-        data=data_json,
-        headers={"Content-Type": "application/json"},
-        method="POST"
-    )
+    req = urllib.request.Request(url, data=data_json, headers=headers, method="POST")
 
     try:
         with urllib.request.urlopen(req, timeout=60) as response:
             res_data = json.loads(response.read().decode('utf-8'))
             raw_text = res_data["candidates"][0]["content"]["parts"][0]["text"]
             return parse_lines_robust(raw_text, poster_type)
+    except urllib.error.HTTPError as e:
+        err_detail = e.read().decode('utf-8') if e.fp else str(e)
+        st.error(f"API 请求失败 (HTTP {e.code}): {err_detail}")
     except Exception as err:
-        st.error(f"请求失败: {err}")
+        st.error(f"请求异常: {err}")
     return []
 
 @st.cache_resource
