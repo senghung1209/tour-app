@@ -14,7 +14,6 @@ import streamlit.components.v1 as components
 
 st.set_page_config(page_title="跨社旅游团比价筛选中心", page_icon="✈️", layout="wide")
 
-# 采用绝对路径锁定持久化存储文件，确保刷新/重启均不丢数据
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_FILE = os.path.join(BASE_DIR, "tour_database.json")
 
@@ -36,36 +35,33 @@ def save_persisted_data(data):
     except Exception as e:
         st.error(f"本地保存失败: {e}")
 
-# 无论何时加载或刷新，均以磁盘持久化数据为准
 st.session_state.tour_data = load_persisted_data()
 
 st.title("✈️ 跨旅行社海报聚合与横向对比中心")
 
-# 强音量提示音与通知权限
+# 铃声与震动双保险激活区
 auth_html = """
 <div style="background: #eff6ff; border: 1.5px solid #3b82f6; border-radius: 8px; padding: 12px; margin-bottom: 15px;">
     <div style="font-weight: bold; font-size: 14px; color: #1e40af; margin-bottom: 5px;">
-        🔊 强提醒音频设置
+        🔊 强提醒音频与震动激活
     </div>
     <div style="font-size: 13px; color: #2563eb; margin-bottom: 8px;">
-        请点击下方按钮测试响度并开启浏览器提醒（解析完成自动触发）：
+        请点击下方按钮测试响度（扫描完成自动响铃 + 手机震动）：
     </div>
     <button id="auth_btn" style="background: #2563eb; color: white; border: none; padding: 9px 18px; border-radius: 6px; font-weight: bold; font-size: 13px; cursor: pointer;">
-        🔊 点击测试并激活高音提醒
+        🔊 点击测试铃声与震动
     </button>
 </div>
 <script>
-function playLoudAlert() {
+function playLoudNotification() {
     try {
-        const AudioCtx = window.AudioContext || window.webkitAudioContext;
-        const ctx = new AudioCtx();
+        if ("vibrate" in navigator) { navigator.vibrate([200, 100, 200]); }
+        const ctx = new (window.AudioContext || window.webkitAudioContext)();
         if (ctx.state === 'suspended') { ctx.resume(); }
 
         const tones = [
-            { f: 880, start: 0, dur: 0.25 },
-            { f: 1174.66, start: 0.3, dur: 0.3 },
-            { f: 880, start: 0.65, dur: 0.25 },
-            { f: 1174.66, start: 0.95, dur: 0.45 }
+            { f: 784, start: 0, dur: 0.15 },
+            { f: 1046.5, start: 0.18, dur: 0.35 }
         ];
 
         tones.forEach(t => {
@@ -73,7 +69,7 @@ function playLoudAlert() {
             const gain = ctx.createGain();
             osc.type = "sine";
             osc.frequency.setValueAtTime(t.f, ctx.currentTime + t.start);
-            gain.gain.setValueAtTime(0.35, ctx.currentTime + t.start);
+            gain.gain.setValueAtTime(0.4, ctx.currentTime + t.start);
             gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + t.start + t.dur);
             osc.connect(gain);
             gain.connect(ctx.destination);
@@ -84,10 +80,8 @@ function playLoudAlert() {
 }
 
 document.getElementById('auth_btn').addEventListener('click', function() {
-    playLoudAlert();
-    if ("Notification" in window) {
-        Notification.requestPermission();
-    }
+    playLoudNotification();
+    if ("Notification" in window) { Notification.requestPermission(); }
 });
 </script>
 """
@@ -98,20 +92,18 @@ def trigger_loud_alert_js(count_num):
     <script>
     (function() {{
         try {{
-            const AudioCtx = window.AudioContext || window.webkitAudioContext;
-            const ctx = new AudioCtx();
+            if ("vibrate" in navigator) {{ navigator.vibrate([250, 100, 250, 100, 400]); }}
+            const ctx = new (window.AudioContext || window.webkitAudioContext)();
             const tones = [
-                {{ f: 880, start: 0, dur: 0.25 }},
-                {{ f: 1174.66, start: 0.3, dur: 0.3 }},
-                {{ f: 880, start: 0.65, dur: 0.25 }},
-                {{ f: 1174.66, start: 0.95, dur: 0.5 }}
+                {{ f: 784, start: 0, dur: 0.18 }},
+                {{ f: 1046.5, start: 0.22, dur: 0.45 }}
             ];
             tones.forEach(t => {{
                 const osc = ctx.createOscillator();
                 const gain = ctx.createGain();
                 osc.type = "sine";
                 osc.frequency.setValueAtTime(t.f, ctx.currentTime + t.start);
-                gain.gain.setValueAtTime(0.4, ctx.currentTime + t.start);
+                gain.gain.setValueAtTime(0.5, ctx.currentTime + t.start);
                 gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + t.start + t.dur);
                 osc.connect(gain);
                 gain.connect(ctx.destination);
@@ -122,7 +114,7 @@ def trigger_loud_alert_js(count_num):
 
         if ("Notification" in window && Notification.permission === "granted") {{
             new Notification("🎉 旅游海报扫描完成！", {{
-                body: "已成功提取全量数据，共计 " + {count_num} + " 条出发团期！",
+                body: "成功提取全量数据，总库共有 " + {count_num} + " 条团期！",
                 icon: "✈️"
             }});
         }}
@@ -247,9 +239,9 @@ def call_gemini_vision_chunk(img_chunk, chunk_name, status_box, hint_text=""):
     请全量提取画面内的全部旅游团期信息。
     {f"核心区域提示: {hint_text}" if hint_text else ""}
 
-    严格规则：
-    1. 【每个日期拆单独一行】：一个框内若有多个出发日（例如 26/10, 28/10 对应 2699；或者 12/10/26, 25/5/27 对应 6999），每一个出发日必须单独一行！
-    2. 旅行社：若海报含 SP 编号或豪吉标志，填“豪吉旅游”；若是表格型海报写其真实标头。
+    特别注意：
+    1. 【并列日期拆单行】：海报中经常用逗号并列多个日期（例如 01/11, 19/11 对应 2999；05/11, 26/11, 29/12 对应 3099；23/10, 06/11 对应 4999；18/12 对应 5199），**每一个逗号隔开的日期都必须单独拆成一行输出！绝不能只提取第一个日期！**
+    2. 旅行社：若海报含 SP 编号或豪吉标志，填“豪吉旅游”；若是表格型海报写其实际标头。
     3. 起飞地点：含 SIN/新加坡/酷航 填“新加坡起飞 (SIN)”；含 JB/新山 填“新山出发 (JB)”；默认填“马来西亚起飞 (KUL)”。
     4. 纯文本逐行输出，以竖线 | 分隔，严禁代码块标记与解释：
     旅行社|目的地|团号|行程路线全称|起飞地|出发日期|纯数字价格
@@ -286,7 +278,7 @@ def call_gemini_vision_chunk(img_chunk, chunk_name, status_box, hint_text=""):
                     status_box.warning(f"⚠️ [{model_name}] 算力排队(503)，2秒后重试...")
                     time.sleep(2)
                     continue
-            except Exception as e:
+            except Exception:
                 time.sleep(2)
     return []
 
@@ -366,7 +358,7 @@ def generate_comparison_image(df):
     img.save(buf, format="PNG", quality=95)
     return buf.getvalue()
 
-uploaded_files = st.file_uploader("📷 上传旅行社海报图片 (支持任意版式，分批追加保存)", type=["jpg", "jpeg", "png"], accept_multiple_files=True)
+uploaded_files = st.file_uploader("📷 上传旅行社海报图片 (支持任意版式，自动追加保存)", type=["jpg", "jpeg", "png"], accept_multiple_files=True)
 
 if uploaded_files:
     st.info(f"已选择 {len(uploaded_files)} 张海报图片")
@@ -389,15 +381,14 @@ if uploaded_files:
 
                 status_box.markdown(f"**[{f_idx+1}/{total_files}]** 🔍 正在扫描上半区 (重庆 / 西藏 / 青岛 / 桂林 / 台湾 / 韩国)...")
                 progress_bar.progress(0.25)
-                hint_top = "必须提取：SIN-重庆(含SP002374等所有日期)、SIN-西藏、青岛、SIN-桂林、SIN-台湾、SIN-韩国"
+                hint_top = "必须提取：SIN-重庆(注意SP002374的19/11和26/11等全部并列日期)、SIN-西藏(注意SP002413的18/12)、青岛、SIN-桂林、SIN-台湾、SIN-韩国"
                 r1 = call_gemini_vision_chunk(img.crop(box_top), "上半区", status_box, hint_top)
 
                 status_box.markdown(f"**[{f_idx+1}/{total_files}]** 🔍 正在扫描下半区 (贵州 / 哈尔滨 / 北疆 / 九寨沟)...")
                 progress_bar.progress(0.70)
-                hint_bottom = "必须提取：JB-贵州(SP002809, SP002729, SP002777, SP002779所有日期)、SIN-哈尔滨(全部9条日期)、KL-北疆(全部4条日期)、SIN-九寨沟"
+                hint_bottom = "必须提取：JB-贵州全部日期、SIN-哈尔滨全部9条、KL-北疆全部4条、SIN-九寨沟"
                 r2 = call_gemini_vision_chunk(img.crop(box_bottom), "下半区", status_box, hint_bottom)
 
-                status_box.info(f"📊 提取状态反馈：上半区抓取到 {len(r1)} 项，下半区抓取到 {len(r2)} 项")
                 raw_items = r1 + r2
             else:
                 status_box.markdown(f"**[{f_idx+1}/{total_files}]** 🔍 正在扫描全幅表格海报...")
@@ -431,11 +422,10 @@ if uploaded_files:
 
             st.session_state.tour_data = unique_combined
             save_persisted_data(unique_combined)
-            trigger_loud_alert_js(len(newly_extracted))
-            st.success(f"🎉 扫描全部完成！本次成功提取出 **{len(newly_extracted)}** 条团期，已安全写入总库。")
+            trigger_loud_alert_js(len(st.session_state.tour_data))
+            st.success(f"🎉 扫描全部完成！总库已更新至 **{len(st.session_state.tour_data)}** 条团期。")
             st.rerun()
 
-# 页面底端数据视图渲染
 if st.session_state.tour_data:
     if st.button("🗑️ 清空总库全部数据 (永久重置)", use_container_width=True):
         save_persisted_data([])
