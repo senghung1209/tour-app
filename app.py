@@ -12,8 +12,8 @@ import streamlit.components.v1 as components
 
 st.set_page_config(page_title="AI 旅游团智能筛选助手", page_icon="✈️", layout="wide")
 
-st.title("✈️ 旅游团宣传单智能分析与筛选 (Groq 高可用版)")
-st.markdown("已接入 Groq 视觉多模态引擎：更新至最新稳定模型、图像自适应清洗与 2026 学校假期智能匹配。")
+st.title("✈️ 旅游团宣传单智能分析与筛选 (全景高容量版)")
+st.markdown("已升级最大化输出窗口与区块引导，确保海报上的每一个旅游团、每一条日期和价格全数完整提取。")
 
 GROQ_API_KEY = "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"
 
@@ -162,9 +162,9 @@ def force_convert_and_compress(file_bytes):
     else:
         img = img.convert("RGB")
         
-    img.thumbnail((1200, 1200), Image.Resampling.LANCZOS)
+    img.thumbnail((1400, 1400), Image.Resampling.LANCZOS)
     buffer = BytesIO()
-    img.save(buffer, format="JPEG", quality=85)
+    img.save(buffer, format="JPEG", quality=90)
     return base64.b64encode(buffer.getvalue()).decode("utf-8")
 
 def parse_flexible_content(content):
@@ -196,13 +196,13 @@ def analyze_single_image(file_bytes, file_name, task_dict):
     encoded_string = force_convert_and_compress(file_bytes)
     
     prompt = (
-        "这是一张马来西亚大型旅行社的旅游宣传海报，上面有许多目的地方框（如重庆、西藏、青岛、桂林、台湾、贵州、韩国、哈尔滨、北疆、九寨沟等）。\n"
-        "请逐个方框、逐张小卡片仔细识别所有旅游团。\n"
-        "每一条旅游团输出为一行，必须用竖线 | 隔开 6 个字段：\n"
-        "目的地 | 出发地(如 新加坡出发(SIN) 或 新山出发(JB) 或 吉隆坡出发(KL)) | 团号(如 SP002376) | 详细路线名称与天数 | 出发日期(如 31/12/26) | 价格(如 RM2999)\n\n"
-        "【关键要求】：\n"
-        "1. 绝不遗漏任何一个小卡片里的团。\n"
-        "2. 直接输出文本行，绝不输出任何废话、开场白或表头。"
+        "这是一张包含数十个旅游板块的马来西亚大型旅行社海报（涵盖重庆、西藏、青岛、桂林、台湾、贵州、韩国、哈尔滨、北疆、九寨沟等）。\n"
+        "请完整扫描全图每一个角落，将所有小卡片里的旅游团全部提取出来！\n"
+        "每一条旅游团必须独占一行，严格用竖线 | 隔开 6 个字段：\n"
+        "目的地 | 出发地(如 新加坡出发(SIN) 或 新山出发(JB) 或 吉隆坡出发(KL)) | 团号(如 SP002376) | 路线名称与天数 | 出发日期(如 31/12/26) | 价格(如 RM2999)\n\n"
+        "【绝对要求】：\n"
+        "1. 严禁遗漏任何一行或任何一个方框里的团。\n"
+        "2. 不要输出任何寒暄或总结，直接从第一行数据开始输出。"
     )
 
     url = "https://api.groq.com/openai/v1/chat/completions"
@@ -211,7 +211,6 @@ def analyze_single_image(file_bytes, file_name, task_dict):
         "Content-Type": "application/json"
     }
 
-    # 仅使用当前官方支持的稳定视觉模型
     vision_models = [
         "qwen/qwen3.6-27b",
         "llama-3.2-11b-vision-preview"
@@ -231,11 +230,11 @@ def analyze_single_image(file_bytes, file_name, task_dict):
                 }
             ],
             "temperature": 0.1,
-            "max_tokens": 4096
+            "max_tokens": 8192  # 极大扩充输出窗口，防止大图内容被截断
         }
         
         try:
-            response = requests.post(url, headers=headers, json=payload, timeout=60)
+            response = requests.post(url, headers=headers, json=payload, timeout=90)
             if response.status_code == 200:
                 res_json = response.json()
                 content = res_json['choices'][0]['message']['content'].strip()
@@ -264,7 +263,7 @@ def analyze_single_image(file_bytes, file_name, task_dict):
 def background_worker(files_data, task_dict, api_key):
     total = len(files_data)
     for idx, (f_name, f_bytes) in enumerate(files_data):
-        task_dict["status_msg"] = f"⚡ 正在高精解析第 {idx + 1}/{total} 张: {f_name} ..."
+        task_dict["status_msg"] = f"⚡ 全景扫描解析第 {idx + 1}/{total} 张: {f_name} ..."
         try:
             data = analyze_single_image(f_bytes, f_name, task_dict)
             if data:
@@ -279,7 +278,7 @@ def background_worker(files_data, task_dict, api_key):
             
     task_dict["running"] = False
     task_dict["finished"] = True
-    task_dict["status_msg"] = "✅ 全部海报高精解析完成！"
+    task_dict["status_msg"] = "✅ 海报全景解析完成！"
 
 components.html("""
 <div style="display:flex; align-items:center; justify-content:space-between; background:#f0fdf4; border:1px solid #bbf7d0; padding:10px 14px; border-radius:8px; font-family:sans-serif; margin-bottom:12px;">
@@ -338,7 +337,7 @@ if uploaded_files:
             task["progress"] = 0.0
             task["results"] = []
             task["errors"] = []
-            task["status_msg"] = "正在启动多模型视觉引擎..."
+            task["status_msg"] = "正在启动全景高容量解析引擎..."
             
             files_data = [(f.name, f.getvalue()) for f in uploaded_files]
             t = threading.Thread(target=background_worker, args=(files_data, task, GROQ_API_KEY), daemon=True)
