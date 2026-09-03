@@ -1,17 +1,18 @@
 import streamlit as st
 import pandas as pd
-import numpy as np
-import cv2
 import time
 import datetime
 import re
+import json
+import base64
+import requests
 from io import BytesIO
 from PIL import Image, ImageDraw, ImageFont
 
 st.set_page_config(page_title="跨社旅游团比价筛选中心", page_icon="✈️", layout="wide")
 
-st.title("✈️ 跨旅行社海报聚合与横向对比筛选中心 (纯本地永久免费版)")
-st.markdown("已启用本地高清图像增强 + 离线 OCR 字符提取引擎，**零 API 依赖、永久免费、不限次数**。")
+st.title("✈️ 跨旅行社海报聚合与横向对比中心 (Qwen2.5-VL 视觉版)")
+st.markdown("通过 Hugging Face Serverless Vision API 驱动，支持识别任意全新排版海报并自动展开独立出发日。")
 
 OFFICIAL_HOLIDAYS = [
     (datetime.date(2026, 3, 20), datetime.date(2026, 3, 29), "2026 第一学期假期 (3月)"),
@@ -21,41 +22,9 @@ OFFICIAL_HOLIDAYS = [
     (datetime.date(2027, 1, 23), datetime.date(2027, 2, 16), "2027 农历新年与跨年假期")
 ]
 
-# 单例缓存 OCR Reader，避免重复加载模型消耗内存
-@st.cache_resource
-def load_ocr_reader():
-    import easyocr
-    return easyocr.Reader(['ch_sim', 'en'], gpu=False)
-
-def preprocess_image_for_ocr(img_bytes):
-    """
-    OpenCV 图像高清预处理流水线：
-    1. 解码与双三次插值放大
-    2. 自适应直方图均衡化 (CLAHE) 拉伸微小文字反差
-    3. 锐化卷积滤波，硬化数字轮廓
-    """
-    file_bytes = np.asarray(bytearray(img_bytes), dtype=np.uint8)
-    img = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
-    if img is None:
-        return None
-
-    h, w = img.shape[:2]
-    # 对较小图片进行无损放大，提升密集日期识别率
-    if max(h, w) < 2000:
-        scale = 2000.0 / max(h, w)
-        img = cv2.resize(img, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_CUBIC)
-
-    # 转换色彩空间并提取 L 通道执行 CLAHE 对比度拉伸
-    lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)
-    l, a, b = cv2.split(lab)
-    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-    cl = clahe.apply(l)
-    enhanced = cv2.cvtColor(cv2.merge((cl, a, b)), cv2.COLOR_LAB2BGR)
-
-    # 锐化算子
-    kernel = np.array([[0, -1, 0], [-1, 5, -1], [0, -1, 0]], dtype=np.float32)
-    sharpened = cv2.filter2D(enhanced, -1, kernel)
-    return sharpened
+# 从 Streamlit Secrets 安全获取 Token
+HF_TOKEN = st.secrets.get("HF_TOKEN", "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")
+API_URL = "https://api-inference.huggingface.co/models/Qwen/Qwen2.5-VL-7B-Instruct/v1/chat/completions"
 
 def extract_tour_days(title_str):
     m = re.search(r'(\d+)\s*(?:天|D|d)', str(title_str))
@@ -84,66 +53,92 @@ def evaluate_holiday_fit(departure_date_str, duration_days):
         pass
     return 'none', 0, ""
 
-def parse_ocr_results_to_tours(ocr_items, file_name):
+def split_and_explode_dates(raw_agency, raw_dest, raw_code, raw_title, raw_loc, raw_dates_str, raw_price):
+    days = extract_tour_days(raw_title)
+    try:
+        clean_price = int(re.sub(r'[^\d]', '', str(raw_price)))
+    except Exception:
+        clean_price = 0
+
+    date_tokens = re.findall(r'\b\d{1,2}[/.-]\d{1,2}(?:[/.-]\d{2,4})?\b', str(raw_dates_str))
+    if not date_tokens:
+        date_tokens = [str(raw_dates_str).strip()]
+
+    exploded = []
+    for d_token in date_tokens:
+        status, over_days, hol_name = evaluate_holiday_fit(d_token, days)
+        exploded.append({
+            "agency": raw_agency,
+            "destination": raw_dest,
+            "tour_code": raw_code,
+            "title": raw_title,
+            "departure_location": raw_loc,
+            "departure_dates": d_token,
+            "price_numeric": clean_price,
+            "price_text": f"RM {clean_price}",
+            "holiday_status": status,
+            "over_days": over_days,
+            "holiday_name": hol_name
+        })
+    return exploded
+
+def call_huggingface_vision(image_bytes):
+    base64_image = base64.b64encode(image_bytes).decode('utf-8')
+    headers = {
+        "Authorization": f"Bearer {HF_TOKEN}",
+        "Content-Type": "application/json"
+    }
+
+    prompt = """
+    你是一个专业旅游海报解析引擎。请分析此海报并提取所有旅游行程选项。
+    遇到一个行程下有多个出发日期（例如 '14/10, 18/10'），请在 departure_dates 字段中将它们全部保留并用逗号隔开。
+    只返回合法纯 JSON 格式列表，不要包含任何 markdown 标记、解释或代码块外皮：
+    [
+      {
+        "agency": "旅行社名称",
+        "destination": "目的地",
+        "tour_code": "团号代码",
+        "title": "路线标题",
+        "departure_location": "起飞地点(如 SIN/KUL/JB)",
+        "departure_dates": "全部出发日期(如 26/10, 28/10)",
+        "price": 2999
+      }
+    ]
     """
-    语义与几何聚类引擎：
-    通过价格锚点 (RM xxx) 和团号/日期模式将散乱字符组装成独立团期
-    """
-    agency_guess = "未知旅行社"
-    full_text = " ".join([item[1] for item in ocr_items])
-    if "琦琦" in full_text or "QI QI" in full_text.upper():
-        agency_guess = "琦琦旅游 (QI QI TRAVEL)"
-    elif "豪吉" in full_text or "ORCHID" in full_text.upper():
-        agency_guess = "豪吉旅游 (Orchid Dynasty)"
 
-    # 寻找所有的日期模式与价格模式
-    date_pattern = r'\b(\d{1,2}[/.-]\d{1,2}(?:[/.-]\d{2,4})?)\b'
-    price_pattern = r'(?:RM|RMB|rm)?\s*([2-9]\d{3})'
+    payload = {
+        "model": "Qwen/Qwen2.5-VL-7B-Instruct",
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": prompt},
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}
+                    }
+                ]
+            }
+        ],
+        "max_tokens": 4096,
+        "temperature": 0.1
+    }
 
-    parsed_rows = []
-    # 遍历 OCR 文本行
-    for box, text, conf in ocr_items:
-        clean_text = text.replace(" ", "").replace("o", "0").replace("O", "0")
-        dates_found = re.findall(date_pattern, clean_text)
-        
-        if dates_found:
-            # 在全图中寻找几何距离最近的价格
-            cx = (box[0][0] + box[2][0]) / 2
-            cy = (box[0][1] + box[2][1]) / 2
+    # 包含重试机制，应对 Serverless 模型可能的冷启动加载
+    for attempt in range(3):
+        res = requests.post(API_URL, headers=headers, json=payload, timeout=60)
+        if res.status_code == 200:
+            content = res.json()["choices"][0]["message"]["content"]
+            clean_json = re.search(r'\[.*\]', content, re.DOTALL)
+            if clean_json:
+                return json.loads(clean_json.group(0))
+            return json.loads(content)
+        elif res.status_code == 503:
+            time.sleep(10)
+        else:
+            time.sleep(2)
             
-            matched_price = 3999
-            min_dist = float('inf')
-            
-            for p_box, p_text, _ in ocr_items:
-                p_match = re.search(price_pattern, p_text)
-                if p_match:
-                    p_val = int(p_match.group(1))
-                    if 1500 <= p_val <= 12000:
-                        pcx = (p_box[0][0] + p_box[2][0]) / 2
-                        pcy = (p_box[0][1] + p_box[2][1]) / 2
-                        dist = ((cx - pcx)**2 + (cy - pcy)**2)**0.5
-                        if dist < min_dist:
-                            min_dist = dist
-                            matched_price = p_val
-                            
-            # 对一行内包含多个日期的卡片进行原子化展开
-            for d in dates_found:
-                status, over, h_name = evaluate_holiday_fit(d, 7)
-                parsed_rows.append({
-                    "agency": agency_guess,
-                    "destination": "精选线路",
-                    "tour_code": "SP" + str(np.random.randint(1000, 9999)),
-                    "departure_location": "SIN/KUL出发",
-                    "departure_dates": d,
-                    "price_numeric": matched_price,
-                    "price_text": f"RM {matched_price}",
-                    "holiday_status": status,
-                    "over_days": over,
-                    "holiday_name": h_name,
-                    "title": f"7天6夜 畅游行程 ({d}出发)"
-                })
-
-    return parsed_rows
+    raise RuntimeError(f"API 请求异常 (状态码 {res.status_code}): {res.text}")
 
 def generate_comparison_image(df):
     w, rh, hh = 850, 40, 70
@@ -153,7 +148,7 @@ def generate_comparison_image(df):
     font = ImageFont.load_default()
 
     draw.rectangle([0, 0, w, hh], fill=(15, 23, 42))
-    draw.text((25, 25), f"旅游团比价汇总清单 (全量 {len(df)} 项出发日期)", fill=(255, 255, 255), font=font)
+    draw.text((25, 25), f"旅游团比价汇总清单 (共 {len(df)} 项出发日期)", fill=(255, 255, 255), font=font)
 
     y = hh + 10
     draw.rectangle([15, y, w - 15, y + 28], fill=(226, 232, 240))
@@ -175,13 +170,12 @@ def generate_comparison_image(df):
     img.save(buf, format="PNG")
     return buf.getvalue()
 
-# Session State 初始化
 if "tour_data" not in st.session_state:
     st.session_state.tour_data = []
 
 c_up, c_rst = st.columns([4, 1])
 with c_up:
-    uploaded_files = st.file_uploader("📷 上传旅行社海报图片 (支持手机拍照/相册选图)", type=["jpg", "jpeg", "png"], accept_multiple_files=True)
+    uploaded_files = st.file_uploader("📷 上传海报图片 (支持任意新海报，可多选)", type=["jpg", "jpeg", "png"], accept_multiple_files=True)
 with c_rst:
     st.write("")
     st.write("")
@@ -191,28 +185,34 @@ with c_rst:
 
 if uploaded_files:
     st.success(f"已选择 {len(uploaded_files)} 张海报图片")
-    if st.button("🚀 启动本地高清图像增强与文字识别", type="primary"):
-        reader = load_ocr_reader()
-        all_results = []
+    if st.button("🚀 启动视觉 AI 智能解析比价", type="primary"):
+        all_exploded = []
         progress_bar = st.progress(0.0)
         status_text = st.empty()
 
         for idx, f in enumerate(uploaded_files):
-            status_text.text(f"⚡ 正在进行 OpenCV 图像锐化增强与去噪: {f.name} ...")
-            f_bytes = f.getvalue()
-            enhanced_cv_img = preprocess_image_for_ocr(f_bytes)
+            status_text.text(f"🔍 正在由 Qwen2.5-VL 视觉理解海报排版: {f.name} ...")
+            try:
+                raw_items = call_huggingface_vision(f.getvalue())
+                for item in raw_items:
+                    rows = split_and_explode_dates(
+                        item.get("agency", "精选旅行社"),
+                        item.get("destination", "精选路线"),
+                        item.get("tour_code", "-"),
+                        item.get("title", ""),
+                        item.get("departure_location", "SIN/KUL出发"),
+                        item.get("departure_dates", ""),
+                        item.get("price", 0)
+                    )
+                    all_exploded.extend(rows)
+            except Exception as e:
+                st.error(f"处理 {f.name} 时发生错误: {e}")
 
-            status_text.text(f"🔍 正在本地提取文字坐标与日期价格: {f.name} ...")
-            ocr_out = reader.readtext(enhanced_cv_img if enhanced_cv_img is not None else f_bytes)
-            
-            tours = parse_ocr_results_to_tours(ocr_out, f.name)
-            all_results.extend(tours)
             progress_bar.progress((idx + 1) / len(uploaded_files))
 
-        # 去除完全相同日期的冗余项
-        unique_map = {(x["agency"], x["tour_code"], x["departure_dates"]): x for x in all_results}
-        st.session_state.tour_data = list(unique_map.values())
-        status_text.text("✅ 本地全量解析完成！")
+        unique_dict = {(x["agency"], x["tour_code"], x["departure_dates"]): x for x in all_exploded}
+        st.session_state.tour_data = list(unique_dict.values())
+        status_text.text("✅ 全部海报视觉解析与独立日期拆分完成！")
         time.sleep(0.5)
         st.rerun()
 
@@ -222,14 +222,13 @@ if st.session_state.tour_data:
     df['price_numeric'] = pd.to_numeric(df['price_numeric'], errors='coerce').fillna(0).astype(int)
 
     # 快捷校对编辑面板
-    with st.expander("🛠️ 快速数据校对与微调面板 (如发现漏算个别日期，可直接在此点击添加或修改)", expanded=False):
-        st.caption("提示：在表格中双击单元格可修改文字或价格，选中行后按 Delete 可删除，底部可直接点 `+` 增加行。")
+    with st.expander("🛠️ 快速数据校对面板 (双击可修改文字/价格，可自主增删行)", expanded=False):
         edited_df = st.data_editor(df, num_rows="dynamic", use_container_width=True)
         if not edited_df.equals(df):
             st.session_state.tour_data = edited_df.to_dict('records')
             st.rerun()
 
-    # 侧边栏筛选
+    # 侧边栏筛选器
     st.sidebar.header("🎛️ 筛选条件")
     selected_agency = st.sidebar.selectbox("选择旅行社", ["全部"] + sorted([a for a in df['agency'].unique() if a]))
     selected_dest = st.sidebar.selectbox("选择目的地", ["全部"] + sorted([d for d in df['destination'].unique() if d]))
@@ -238,10 +237,8 @@ if st.session_state.tour_data:
     loc_options = ["全部", "🇲🇾 全马/新出发 (KUL/JB/SIN)"] + raw_locs
     selected_loc = st.sidebar.selectbox("选择起飞地点", loc_options)
 
-    holiday_options = ["全部日期", "🎒 包含学校假期 (含超出2天内)", "✨ 严格在学校假期内 (0超出)", "💼 仅平时非假期"]
-    selected_hol = st.sidebar.selectbox("🗓️ 学校假期筛选", holiday_options)
+    selected_hol = st.sidebar.selectbox("🗓️ 学校假期筛选", ["全部日期", "🎒 包含学校假期 (含超出2天内)", "✨ 严格在学校假期内 (0超出)", "💼 仅平时非假期"])
 
-    # 过滤计算
     filtered_df = df.copy()
     if selected_agency != "全部":
         filtered_df = filtered_df[filtered_df['agency'] == selected_agency]
@@ -266,18 +263,17 @@ if st.session_state.tour_data:
     price_range = st.sidebar.slider("💰 团费预算范围 (RM)", min_value=p_min, max_value=p_max, value=(p_min, p_max), step=100)
     filtered_df = filtered_df[(filtered_df['price_numeric'] >= price_range[0]) & (filtered_df['price_numeric'] <= price_range[1])]
 
-    # 导出
     st.markdown("### 📥 导出选项")
     col1, col2 = st.columns(2)
     with col1:
-        st.download_button("📊 下载 CSV 比价清单", data=filtered_df.to_csv(index=False).encode('utf-8-sig'), file_name="本地提取比价清单.csv", mime="text/csv", use_container_width=True)
+        st.download_button("📊 下载 CSV 比价清单", data=filtered_df.to_csv(index=False).encode('utf-8-sig'), file_name="视觉解析比价清单.csv", mime="text/csv", use_container_width=True)
     with col2:
-        st.download_button("🖼️ 下载精美长图 (.png)", data=generate_comparison_image(filtered_df), file_name="本地提取比价长图.png", mime="image/png", use_container_width=True)
+        st.download_button("🖼️ 下载精美长图 (.png)", data=generate_comparison_image(filtered_df), file_name="视觉解析比价长图.png", mime="image/png", use_container_width=True)
 
     st.markdown(f"### 符合条件的出发选项共 **{len(filtered_df)}** 个：")
     st.dataframe(filtered_df[['agency', 'destination', 'tour_code', 'departure_location', 'departure_dates', 'price_text', 'title']], use_container_width=True)
 
-    st.markdown("#### 📋 行程卡片")
+    st.markdown("#### 📋 行程比对卡片")
     for _, row in filtered_df.iterrows():
         with st.container(border=True):
             c1, c2, c3 = st.columns([3, 2, 2])
