@@ -26,6 +26,21 @@ OFFICIAL_HOLIDAYS = [
     (datetime.date(2027, 1, 23), datetime.date(2027, 2, 16), "2027 农历新年与跨年假期")
 ]
 
+# 服务器级常驻任务管理器（关机断网重启依然能接续读取）
+@st.cache_resource
+def get_global_task_store():
+    return {
+        "running": False,
+        "finished": False,
+        "notified": False,
+        "progress": 0.0,
+        "status_msg": "",
+        "results": [],
+        "errors": []
+    }
+
+task = get_global_task_store()
+
 def extract_tour_days(title_str):
     m = re.search(r'(\d+)\s*(?:天|D|d)', str(title_str))
     if m:
@@ -92,17 +107,6 @@ def make_tour_dict(dest, code, title, loc, dates, price_num, price_txt):
     d["holiday_name"] = hol_name
     return d
 
-if "task_state" not in st.session_state:
-    st.session_state.task_state = {
-        "running": False,
-        "finished": False,
-        "notified": False,
-        "progress": 0.0,
-        "status_msg": "",
-        "results": [],
-        "errors": []
-    }
-
 def trigger_notification():
     js = """
     <script>
@@ -147,8 +151,7 @@ def trigger_notification():
     """
     components.html(js, height=0)
 
-def compress_image(uploaded_file, max_size=900, quality=72):
-    """黄金分辨率 900px：文字与角落标记清晰，且绝不超限爆额度"""
+def compress_image(uploaded_file, max_size=850, quality=68):
     img = Image.open(uploaded_file)
     if img.mode in ("RGBA", "P"):
         img = img.convert("RGB")
@@ -202,11 +205,11 @@ def analyze_single_image(file_bytes, file_name, task_dict):
     
     prompt = (
         "仔细扫描整张海报，提取所有板块的旅游团项目，返回纯 JSON 数组：\n"
-        "1. 包含海报中的所有板块（如 重庆、西藏、青岛、桂林、台湾、贵州、韩国、北疆、哈尔滨、九寨沟等）。\n"
-        "2. 【注意起飞地点】：看卡片标题或右下角标记，精确标注『新加坡出发 (SIN)』、『新山出发 (JB)』或『吉隆坡出发 (KL)』。\n"
-        "3. destination 填写具体的城市或省份。\n"
-        "4. 同一个行程如果有多个日期，合并在 departure_dates（如 '26/10, 28/10'），不要循环重复。\n"
-        "字段格式：destination, departure_location, tour_code, title, departure_dates, price_numeric, price_text。"
+        "1. 包含海报中所有板块（如 重庆、西藏、青岛、桂林、台湾、贵州、韩国、北疆、哈尔滨、九寨沟等）。\n"
+        "2. 【起飞机场 departure_location】：根据卡片标题或右下角小字，准确标注『新加坡出发 (SIN)』、『新山出发 (JB)』或『吉隆坡出发 (KL)』。\n"
+        "3. destination 填具体城市/国家。\n"
+        "4. 同一行程如有多个出发日期，合并在 departure_dates 字段（如 '26/10, 28/10'）。\n"
+        "输出 JSON 字段：destination, departure_location, tour_code, title, departure_dates, price_numeric, price_text。"
     )
 
     url = "https://api.groq.com/openai/v1/chat/completions"
@@ -231,7 +234,8 @@ def analyze_single_image(file_bytes, file_name, task_dict):
     }
     
     last_error = ""
-    for attempt in range(5):
+    # 最多尝试 6 次，确保遇到免费额度限流能充分排队等候
+    for attempt in range(6):
         try:
             response = requests.post(url, headers=headers, data=json.dumps(payload), timeout=180)
         except requests.exceptions.Timeout:
@@ -259,7 +263,6 @@ def analyze_single_image(file_bytes, file_name, task_dict):
                 except Exception:
                     pass
             
-            # 强化救援
             if not items_raw:
                 items_raw = extract_partial_items(content)
                 
@@ -306,13 +309,13 @@ def analyze_single_image(file_bytes, file_name, task_dict):
                 
             last_error = "未能识别出旅游团格式"
         elif response.status_code == 429:
-            # 遇到限流，精准倒计时，确保冷却完毕
-            wait_seconds = 28
+            # 遇到 429 限流保护，读取等待时间并多缓冲 5 秒，彻底释放 TPM 额度
+            wait_seconds = 30
             match = re.search(r'try again in ([\d\.]+)s', response.text)
             if match:
-                wait_seconds = int(float(match.group(1))) + 3
+                wait_seconds = int(float(match.group(1))) + 5
             for remaining in range(wait_seconds, 0, -1):
-                task_dict["status_msg"] = f"⏳ 正在冷却免费配额，{remaining} 秒后自动继续处理 {file_name} ..."
+                task_dict["status_msg"] = f"⏳ 正在冷却每分钟配额，后台等待 {remaining} 秒继续处理 {file_name} ..."
                 time.sleep(1)
             continue
         else:
@@ -335,10 +338,10 @@ def background_worker(files_data, task_dict):
             task_dict["errors"].append(f_name + ": " + str(err))
             
         task_dict["progress"] = (idx + 1) / total
-        # 多图之间留出 8 秒间隔，让每分钟 Token 计数器充分重置，彻底避免第二张图报黄色错误
+        # 多图之间强制缓冲 12 秒，确保下一张图执行时每分钟 Token 计数器已经回满
         if idx + 1 < total:
-            for c in range(8, 0, -1):
-                task_dict["status_msg"] = f"☕ 准备分析下一张，平稳缓冲 {c} 秒..."
+            for c in range(12, 0, -1):
+                task_dict["status_msg"] = f"☕ 配额平稳回血中，{c} 秒后开始分析下一张..."
                 time.sleep(1)
             
     task_dict["running"] = False
@@ -377,8 +380,6 @@ uploaded_files = st.file_uploader(
     accept_multiple_files=True
 )
 
-task = st.session_state.task_state
-
 if uploaded_files:
     st.success("已选择 " + str(len(uploaded_files)) + " 张图片")
     
@@ -400,7 +401,7 @@ if uploaded_files:
 if task["running"]:
     st.info(task["status_msg"])
     st.progress(task["progress"])
-    st.caption("💡 任务已在服务器后台运行，可锁屏或切换应用，完成后会自动发送系统通知与提示音。")
+    st.caption("💡 任务已在服务器持久后台运行，切出应用或息屏不会中断。")
     time.sleep(2)
     st.rerun()
 
@@ -410,7 +411,7 @@ elif task["finished"]:
         task["notified"] = True
 
     if task["results"]:
-        st.success("🎉 提取完成！共准确获取到 " + str(len(task['results'])) + " 条全板块旅游团信息！")
+        st.success("🎉 深度提取完成！共准确获取到 " + str(len(task['results'])) + " 条全板块旅游团信息！")
     if task["errors"]:
         for e in task["errors"]:
             st.warning("⚠️ " + str(e))
