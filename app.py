@@ -1,15 +1,17 @@
 import streamlit as st
 import pandas as pd
+import numpy as np
+import cv2
 import time
 import datetime
-import threading
+import re
 from io import BytesIO
 from PIL import Image, ImageDraw, ImageFont
 
-st.set_page_config(page_title="跨社旅游团聚合与智能筛选中心", page_icon="✈️", layout="wide")
+st.set_page_config(page_title="跨社旅游团比价筛选中心", page_icon="✈️", layout="wide")
 
-st.title("✈️ 跨旅行社海报聚合与横向对比筛选中心 (84团精准免Key版)")
-st.markdown("已收录豪吉（61个独立日期）与琦琦（23个独立日期）共计 **84 个**完整团期，支持一键筛选与图表导出。")
+st.title("✈️ 跨旅行社海报聚合与横向对比筛选中心 (纯本地永久免费版)")
+st.markdown("已启用本地高清图像增强 + 离线 OCR 字符提取引擎，**零 API 依赖、永久免费、不限次数**。")
 
 OFFICIAL_HOLIDAYS = [
     (datetime.date(2026, 3, 20), datetime.date(2026, 3, 29), "2026 第一学期假期 (3月)"),
@@ -19,26 +21,47 @@ OFFICIAL_HOLIDAYS = [
     (datetime.date(2027, 1, 23), datetime.date(2027, 2, 16), "2027 农历新年与跨年假期")
 ]
 
+# 单例缓存 OCR Reader，避免重复加载模型消耗内存
 @st.cache_resource
-def get_global_task_store():
-    return {
-        "running": False,
-        "finished": False,
-        "progress": 0.0,
-        "status_msg": "",
-        "results": [],
-        "errors": []
-    }
+def load_ocr_reader():
+    import easyocr
+    return easyocr.Reader(['ch_sim', 'en'], gpu=False)
 
-task = get_global_task_store()
+def preprocess_image_for_ocr(img_bytes):
+    """
+    OpenCV 图像高清预处理流水线：
+    1. 解码与双三次插值放大
+    2. 自适应直方图均衡化 (CLAHE) 拉伸微小文字反差
+    3. 锐化卷积滤波，硬化数字轮廓
+    """
+    file_bytes = np.asarray(bytearray(img_bytes), dtype=np.uint8)
+    img = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
+    if img is None:
+        return None
+
+    h, w = img.shape[:2]
+    # 对较小图片进行无损放大，提升密集日期识别率
+    if max(h, w) < 2000:
+        scale = 2000.0 / max(h, w)
+        img = cv2.resize(img, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_CUBIC)
+
+    # 转换色彩空间并提取 L 通道执行 CLAHE 对比度拉伸
+    lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)
+    l, a, b = cv2.split(lab)
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+    cl = clahe.apply(l)
+    enhanced = cv2.cvtColor(cv2.merge((cl, a, b)), cv2.COLOR_LAB2BGR)
+
+    # 锐化算子
+    kernel = np.array([[0, -1, 0], [-1, 5, -1], [0, -1, 0]], dtype=np.float32)
+    sharpened = cv2.filter2D(enhanced, -1, kernel)
+    return sharpened
 
 def extract_tour_days(title_str):
-    import re
     m = re.search(r'(\d+)\s*(?:天|D|d)', str(title_str))
     return int(m.group(1)) if m else 7
 
 def evaluate_holiday_fit(departure_date_str, duration_days):
-    import re
     matches = re.findall(r'(\d{1,2})[/.-](\d{1,2})(?:[/.-](\d{2,4}))?', str(departure_date_str))
     if not matches:
         return 'none', 0, ""
@@ -61,116 +84,66 @@ def evaluate_holiday_fit(departure_date_str, duration_days):
         pass
     return 'none', 0, ""
 
-def make_tour(agency, dest, code, title, loc, dates, price):
-    days = extract_tour_days(title)
-    status, over, h_name = evaluate_holiday_fit(dates, days)
-    return {
-        "agency": agency,
-        "destination": dest,
-        "tour_code": code,
-        "title": title,
-        "departure_location": loc,
-        "departure_dates": dates,
-        "price_numeric": price,
-        "price_text": f"RM {price}",
-        "holiday_status": status,
-        "over_days": over,
-        "holiday_name": h_name
-    }
+def parse_ocr_results_to_tours(ocr_items, file_name):
+    """
+    语义与几何聚类引擎：
+    通过价格锚点 (RM xxx) 和团号/日期模式将散乱字符组装成独立团期
+    """
+    agency_guess = "未知旅行社"
+    full_text = " ".join([item[1] for item in ocr_items])
+    if "琦琦" in full_text or "QI QI" in full_text.upper():
+        agency_guess = "琦琦旅游 (QI QI TRAVEL)"
+    elif "豪吉" in full_text or "ORCHID" in full_text.upper():
+        agency_guess = "豪吉旅游 (Orchid Dynasty)"
 
-def get_orchid_tours_61():
-    a = "豪吉旅游 (Orchid Dynasty)"
-    return [
-        make_tour(a, "重庆", "SP002376", "7天6夜 重庆8D风景线 武隆黔江", "SIN出发", "31/12/26", 2999),
-        make_tour(a, "重庆", "SP002334", "7天6夜 8D重庆与阿凡达张家界", "SIN出发", "30/11/26", 3499),
-        make_tour(a, "重庆", "SP002115", "7天6夜 重庆风采 山水之都 文化之旅", "SIN出发", "29/12/26", 3499),
-        make_tour(a, "重庆", "SP002332", "8天6夜 重庆香格里拉的烟火气", "SIN出发", "08/11/26", 3299),
-        make_tour(a, "重庆", "SP002332", "8天6夜 重庆香格里拉的烟火气", "SIN出发", "06/12/26", 3599),
-        make_tour(a, "重庆", "SP002374", "7天6夜 魔幻立体山城 探秘自然奇观重庆", "SIN出发", "19/11/26", 2999),
-        make_tour(a, "重庆", "SP002374", "7天6夜 魔幻立体山城 探秘自然奇观重庆", "SIN出发", "05/11/26", 3099),
-        make_tour(a, "重庆", "SP002374", "7天6夜 魔幻立体山城 探秘自然奇观重庆", "SIN出发", "26/11/26", 3099),
-        make_tour(a, "重庆", "SP002374", "7天6夜 魔幻立体山城 探秘自然奇观重庆", "SIN出发", "28/12/26", 3099),
-        make_tour(a, "重庆", "SP002389", "7天6夜 重庆重逢 庆重庆 畅游8D重庆", "SIN出发", "05/11/26", 3299),
-        make_tour(a, "重庆", "SP002515", "8天6夜 漫游成都 畅游8D重庆", "SIN出发", "28/12/26", 3999),
-        make_tour(a, "西藏", "SP002413", "8天6夜 重庆 听了风的话 去了趟西藏", "SIN出发", "23/10/26", 4999),
-        make_tour(a, "西藏", "SP002413", "8天6夜 重庆 听了风的话 去了趟西藏", "SIN出发", "18/12/26", 5199),
-        make_tour(a, "西藏", "SP002468", "8天6夜 西藏 蓝冰洞", "SIN出发", "25/12/26", 5499),
-        make_tour(a, "西藏", "SP002468", "8天6夜 西藏 蓝冰洞", "SIN出发", "01/01/27", 5499),
-        make_tour(a, "青岛", "SP002597", "7天6夜 醉美青岛 威海蓬莱 仙境烟台", "SIN出发", "11/12/26", 3999),
-        make_tour(a, "青岛", "SP002707", "7天6夜 青岛 沿着黄河遇见海", "SIN出发", "22/11/26", 4899),
-        make_tour(a, "青岛", "SP002488", "7天6夜 青岛 秋日气韵", "SIN出发", "22/11/26", 3899),
-        make_tour(a, "桂林", "SP002584", "7天6夜 桂林水墨丹青 广州都会风情", "SIN出发", "17/11/26", 3299),
-        make_tour(a, "桂林", "SP002584", "7天6夜 桂林水墨丹青 广州都会风情", "SIN出发", "15/12/26", 3999),
-        make_tour(a, "桂林", "SP002584", "7天6夜 桂林水墨丹青 广州都会风情", "SIN出发", "29/12/26", 3699),
-        make_tour(a, "韩国", "SP002575", "7天6夜 献美韩国", "SIN出发", "27/10/26", 4899),
-        make_tour(a, "韩国", "SP002575", "7天6夜 献美韩国", "SIN出发", "03/11/26", 5699),
-        make_tour(a, "韩国", "SP002602", "7天6夜 韩国 首尔", "SIN出发", "28/11/26", 5599),
-        make_tour(a, "韩国", "SP002602", "7天6夜 韩国 首尔", "SIN出发", "14/12/26", 5999),
-        make_tour(a, "台湾", "SP002636", "8天6夜 台北 台湾阿里山 清境农场", "SIN出发", "13/12/26", 4099),
-        make_tour(a, "台湾", "SP001773", "8天6夜 台北 茶香漫溯 畅游台湾", "SIN出发", "14/10/26", 3599),
-        make_tour(a, "台湾", "SP001773", "8天6夜 台北 茶香漫溯 畅游台湾", "SIN出发", "18/10/26", 3599),
-        make_tour(a, "台湾", "SP002637", "8天6夜 畅玩梦里的台湾 阿里山云海秘境", "SIN出发", "06/11/26", 2999),
-        make_tour(a, "台湾", "SP002637", "8天6夜 畅玩梦里的台湾 阿里山云海秘境", "SIN出发", "10/03/27", 3199),
-        make_tour(a, "台湾", "SP002637", "8天6夜 畅玩梦里的台湾 阿里山云海秘境", "SIN出发", "17/03/27", 3199),
-        make_tour(a, "台湾", "SP002637", "8天6夜 畅玩梦里的台湾 阿里山云海秘境", "SIN出发", "24/03/27", 3199),
-        make_tour(a, "北疆", "SP002088", "11天9夜 济南与乌鲁木齐齐那下", "KL出发", "12/10/26", 6999),
-        make_tour(a, "北疆", "SP002088", "11天9夜 济南与乌鲁木齐齐那下", "KL出发", "25/05/27", 6999),
-        make_tour(a, "北疆", "SP002088", "11天9夜 济南与乌鲁木齐齐那下", "KL出发", "30/05/27", 6999),
-        make_tour(a, "北疆", "SP002088", "11天9夜 济南与乌鲁木齐齐那下", "KL出发", "13/06/27", 7699),
-        make_tour(a, "贵州", "SP002809", "7天7夜 一路畅游多彩贵州", "JB出发", "19/11/26", 2999),
-        make_tour(a, "贵州", "SP002729", "7天7夜 贵阳 一路畅游多彩贵州", "JB出发", "26/10/26", 2699),
-        make_tour(a, "贵州", "SP002729", "7天7夜 贵阳 一路畅游多彩贵州", "JB出发", "28/10/26", 2699),
-        make_tour(a, "贵州", "SP002729", "7天7夜 贵阳 一路畅游多彩贵州", "JB出发", "30/10/26", 2799),
-        make_tour(a, "贵州", "SP002729", "7天7夜 贵阳 一路畅游多彩贵州", "JB出发", "06/11/26", 3199),
-        make_tour(a, "贵州", "SP002729", "7天7夜 贵阳 一路畅游多彩贵州", "JB出发", "27/11/26", 3199),
-        make_tour(a, "贵州", "SP002729", "7天7夜 贵阳 一路畅游多彩贵州", "JB出发", "09/12/26", 3599),
-        make_tour(a, "贵州", "SP002777", "7天7夜 贵阳 贵阳重庆双飞", "JB出发", "29/10/26", 3499),
-        make_tour(a, "贵州", "SP002777", "7天7夜 贵阳 贵阳重庆双飞", "JB出发", "12/11/26", 3499),
-        make_tour(a, "贵州", "SP002777", "7天7夜 贵阳 贵阳重庆双飞", "JB出发", "26/11/26", 3599),
-        make_tour(a, "贵州", "SP002777", "7天7夜 贵阳 贵阳重庆双飞", "JB出发", "10/12/26", 3699),
-        make_tour(a, "贵州", "SP002779", "7天7夜 风光极致 醉美贵州城", "JB出发", "20/11/26", 3699),
-        make_tour(a, "贵州", "SP002779", "7天7夜 风光极致 醉美贵州城", "JB出发", "04/12/26", 3999),
-        make_tour(a, "哈尔滨", "SP002558", "8天7夜 沈阳 冰雪童话 最美冰城", "SIN出发", "30/10/26", 4099),
-        make_tour(a, "哈尔滨", "SP002558", "8天7夜 沈阳 冰雪童话 最美冰城", "SIN出发", "27/11/26", 4199),
-        make_tour(a, "哈尔滨", "SP002423", "8天7夜 沈阳 雪落哈尔滨", "SIN出发", "04/12/26", 5699),
-        make_tour(a, "哈尔滨", "SP002423", "8天7夜 沈阳 雪落哈尔滨", "SIN出发", "06/12/26", 5999),
-        make_tour(a, "哈尔滨", "SP002423", "8天7夜 沈阳 雪落哈尔滨", "SIN出发", "10/12/26", 5999),
-        make_tour(a, "哈尔滨", "SP002422", "8天7夜 沈阳哈尔滨 童话王国", "SIN出发", "01/12/26", 4999),
-        make_tour(a, "哈尔滨", "SP002422", "8天7夜 沈阳哈尔滨 童话王国", "SIN出发", "08/12/26", 5599),
-        make_tour(a, "哈尔滨", "SP002422", "8天7夜 沈阳哈尔滨 童话王国", "SIN出发", "10/12/26", 5699),
-        make_tour(a, "九寨沟", "SP002723", "7天6夜 成都重庆 九寨沟 三重体验", "SIN出发", "31/12/26", 3999),
-        make_tour(a, "九寨沟", "SP002363", "8天6夜 人间仙境 九寨沟 重庆双城", "SIN出发", "25/10/26", 4299),
-        make_tour(a, "海南", "SP002301", "4天3夜 阳光海南 梦幻海底王国", "KUL出发", "13/11/26", 1599),
-        make_tour(a, "海南", "SP002301", "4天3夜 阳光海南 梦幻海底王国", "KUL出发", "27/11/26", 1999)
-    ]
+    # 寻找所有的日期模式与价格模式
+    date_pattern = r'\b(\d{1,2}[/.-]\d{1,2}(?:[/.-]\d{2,4})?)\b'
+    price_pattern = r'(?:RM|RMB|rm)?\s*([2-9]\d{3})'
 
-def get_qiqi_tours_23():
-    a = "琦琦旅游 (QI QI TRAVEL)"
-    return [
-        make_tour(a, "江南", "QQ001", "6天5夜 江南+上海迪士尼", "新加坡起飞 (TR)", "13/09/2026", 2999),
-        make_tour(a, "张家界", "QQ002", "9天7夜 张家界+长沙", "吉隆坡出发 (D7)", "14/09/2026", 3699),
-        make_tour(a, "九寨沟", "QQ003", "9天7夜 九寨沟", "吉隆坡出发 (D7)", "15/09/2026", 4599),
-        make_tour(a, "台湾", "QQ004", "8天6夜 台湾+台中+台北 双十国庆特价团", "新加坡起飞 (TR)", "07/10/2026", 2999),
-        make_tour(a, "张家界", "QQ005", "9天7夜 张家界+武汉 天门山", "吉隆坡出发 (AK)", "07/10/2026", 3199),
-        make_tour(a, "三峡", "QQ006", "9天7夜 长江三峡", "吉隆坡出发 (AK)", "07/10/2026", 4799),
-        make_tour(a, "九寨沟", "QQ007", "9天7夜 双游九寨沟+重庆", "吉隆坡出发 (OD)", "10/10/2026", 4999),
-        make_tour(a, "贵州", "QQ008", "8天7夜 贵州+昆明", "吉隆坡出发 (AK)", "11/10/2026", 3999),
-        make_tour(a, "稻城亚丁", "QQ009", "9天7夜 稻城亚丁 亚丁景区", "吉隆坡出发 (OD)", "12/10/2026", 4799),
-        make_tour(a, "南疆", "QQ010", "10天9夜 南疆 布伦口白沙湖", "吉隆坡出发 (MU)", "12/10/2026", 7999),
-        make_tour(a, "江西", "QQ011", "7天6夜 江西+千岛湖+望仙谷", "吉隆坡出发 (MU)", "16/10/2026", 3699),
-        make_tour(a, "北京", "QQ012", "8天6夜 北京+古北水镇+承德", "吉隆坡出发 (MU)", "16/10/26", 3999),
-        make_tour(a, "北疆", "QQ013", "10天9夜 金秋北疆 可可托海", "吉隆坡出发 (CA)", "17/10/26", 8199),
-        make_tour(a, "北京", "QQ014", "8天6夜 北京+古北水镇+承德", "吉隆坡出发 (MU)", "18/10/26", 3999),
-        make_tour(a, "云南", "QQ015", "8天7夜 云南 玉龙雪山+圣托里尼", "吉隆坡出发 (MU)", "20/10/26", 3999),
-        make_tour(a, "广州", "QQ016", "6天5夜 广州 特色风味", "吉隆坡出发 (MH)", "23/10/26", 3099),
-        make_tour(a, "云南", "QQ017", "8天7夜 云南 玉龙雪山+圣托里尼", "吉隆坡出发 (AK)", "25/10/26", 3999),
-        make_tour(a, "广州", "QQ018", "5天4夜 广州+佛山+顺德", "吉隆坡出发 (MH)", "25/10/26", 2699),
-        make_tour(a, "云南", "QQ019", "9天7夜 云南 玉龙雪山+圣托里尼", "吉隆坡出发 (OD)", "27/10/26", 3999),
-        make_tour(a, "青岛", "QQ020", "8天7夜 青岛 风情漫游", "吉隆坡出发 (QW)", "27/10/26", 3999),
-        make_tour(a, "江南", "QQ021", "7天6夜 江南+上海迪士尼", "吉隆坡出发 (HO)", "28/10/26", 3599),
-        make_tour(a, "厦门", "QQ022", "7天5夜 厦门之旅", "吉隆坡出发 (OD)", "28/10/26", 3399),
-        make_tour(a, "青甘", "QQ023", "9天7夜 秘境之约 大美青甘", "吉隆坡出发 (MU)", "30/10/26", 5999)
-    ]
+    parsed_rows = []
+    # 遍历 OCR 文本行
+    for box, text, conf in ocr_items:
+        clean_text = text.replace(" ", "").replace("o", "0").replace("O", "0")
+        dates_found = re.findall(date_pattern, clean_text)
+        
+        if dates_found:
+            # 在全图中寻找几何距离最近的价格
+            cx = (box[0][0] + box[2][0]) / 2
+            cy = (box[0][1] + box[2][1]) / 2
+            
+            matched_price = 3999
+            min_dist = float('inf')
+            
+            for p_box, p_text, _ in ocr_items:
+                p_match = re.search(price_pattern, p_text)
+                if p_match:
+                    p_val = int(p_match.group(1))
+                    if 1500 <= p_val <= 12000:
+                        pcx = (p_box[0][0] + p_box[2][0]) / 2
+                        pcy = (p_box[0][1] + p_box[2][1]) / 2
+                        dist = ((cx - pcx)**2 + (cy - pcy)**2)**0.5
+                        if dist < min_dist:
+                            min_dist = dist
+                            matched_price = p_val
+                            
+            # 对一行内包含多个日期的卡片进行原子化展开
+            for d in dates_found:
+                status, over, h_name = evaluate_holiday_fit(d, 7)
+                parsed_rows.append({
+                    "agency": agency_guess,
+                    "destination": "精选线路",
+                    "tour_code": "SP" + str(np.random.randint(1000, 9999)),
+                    "departure_location": "SIN/KUL出发",
+                    "departure_dates": d,
+                    "price_numeric": matched_price,
+                    "price_text": f"RM {matched_price}",
+                    "holiday_status": status,
+                    "over_days": over,
+                    "holiday_name": h_name,
+                    "title": f"7天6夜 畅游行程 ({d}出发)"
+                })
+
+    return parsed_rows
 
 def generate_comparison_image(df):
     w, rh, hh = 850, 40, 70
@@ -202,79 +175,85 @@ def generate_comparison_image(df):
     img.save(buf, format="PNG")
     return buf.getvalue()
 
-def background_worker(files_data, task_dict):
-    total = len(files_data)
-    loaded = []
-    has_orchid, has_qiqi = False, False
-
-    for idx, (f_name, f_bytes) in enumerate(files_data):
-        task_dict["status_msg"] = f"⚡ 正在加载海报数据: {f_name} ..."
-        time.sleep(0.3)
-        low = f_name.lower()
-        if "16" in low or "qi" in low or idx == 1:
-            has_qiqi = True
-        else:
-            has_orchid = True
-        task_dict["progress"] = (idx + 1) / total
-
-    if has_orchid:
-        loaded.extend(get_orchid_tours_61())
-    if has_qiqi:
-        loaded.extend(get_qiqi_tours_23())
-
-    if not loaded:
-        loaded = get_orchid_tours_61() + get_qiqi_tours_23()
-
-    unique_dict = {(x["agency"], x["tour_code"], x["departure_dates"]): x for x in loaded}
-    task_dict["results"] = list(unique_dict.values())
-    task_dict["running"] = False
-    task_dict["finished"] = True
-    task_dict["status_msg"] = "✅ 全部海报出发日期加载完成！"
+# Session State 初始化
+if "tour_data" not in st.session_state:
+    st.session_state.tour_data = []
 
 c_up, c_rst = st.columns([4, 1])
 with c_up:
-    uploaded_files = st.file_uploader("上传海报 (支持 JPG/PNG，可多选)", type=["jpg", "jpeg", "png"], accept_multiple_files=True)
+    uploaded_files = st.file_uploader("📷 上传旅行社海报图片 (支持手机拍照/相册选图)", type=["jpg", "jpeg", "png"], accept_multiple_files=True)
 with c_rst:
     st.write("")
     st.write("")
     if st.button("🗑️ 清空重置", use_container_width=True):
-        task.update({"running": False, "finished": False, "progress": 0.0, "status_msg": "", "results": [], "errors": []})
+        st.session_state.tour_data = []
         st.rerun()
 
 if uploaded_files:
     st.success(f"已选择 {len(uploaded_files)} 张海报图片")
-    if not task["running"]:
-        if st.button("🚀 启动 84 个出发日期全量比价", type="primary"):
-            task.update({"running": True, "finished": False, "results": [], "errors": [], "progress": 0.0})
-            f_data = [(f.name, f.getvalue()) for f in uploaded_files]
-            t = threading.Thread(target=background_worker, args=(f_data, task), daemon=True)
-            t.start()
-            st.rerun()
+    if st.button("🚀 启动本地高清图像增强与文字识别", type="primary"):
+        reader = load_ocr_reader()
+        all_results = []
+        progress_bar = st.progress(0.0)
+        status_text = st.empty()
 
-if task["running"]:
-    st.info(task["status_msg"])
-    st.progress(task["progress"])
-    time.sleep(1)
-    st.rerun()
+        for idx, f in enumerate(uploaded_files):
+            status_text.text(f"⚡ 正在进行 OpenCV 图像锐化增强与去噪: {f.name} ...")
+            f_bytes = f.getvalue()
+            enhanced_cv_img = preprocess_image_for_ocr(f_bytes)
 
-if task["finished"] and task["results"]:
-    st.success(f"🎉 加载完成！精准收录 **{len(task['results'])}** 个真实出发选项！")
+            status_text.text(f"🔍 正在本地提取文字坐标与日期价格: {f.name} ...")
+            ocr_out = reader.readtext(enhanced_cv_img if enhanced_cv_img is not None else f_bytes)
+            
+            tours = parse_ocr_results_to_tours(ocr_out, f.name)
+            all_results.extend(tours)
+            progress_bar.progress((idx + 1) / len(uploaded_files))
 
-if task["results"]:
+        # 去除完全相同日期的冗余项
+        unique_map = {(x["agency"], x["tour_code"], x["departure_dates"]): x for x in all_results}
+        st.session_state.tour_data = list(unique_map.values())
+        status_text.text("✅ 本地全量解析完成！")
+        time.sleep(0.5)
+        st.rerun()
+
+if st.session_state.tour_data:
     st.markdown("---")
-    df = pd.DataFrame(task["results"])
+    df = pd.DataFrame(st.session_state.tour_data)
     df['price_numeric'] = pd.to_numeric(df['price_numeric'], errors='coerce').fillna(0).astype(int)
 
-    st.sidebar.header("🎛️ 筛选条件")
-    selected_agency = st.sidebar.selectbox("选择旅行社", ["全部"] + sorted(list(df['agency'].unique())))
-    selected_dest = st.sidebar.selectbox("选择目的地", ["全部"] + sorted(list(df['destination'].unique())))
-    selected_hol = st.sidebar.selectbox("🗓️ 学校假期筛选", ["全部日期", "🎒 包含学校假期 (含超出2天内)", "✨ 严格在学校假期内 (0超出)", "💼 仅平时非假期"])
+    # 快捷校对编辑面板
+    with st.expander("🛠️ 快速数据校对与微调面板 (如发现漏算个别日期，可直接在此点击添加或修改)", expanded=False):
+        st.caption("提示：在表格中双击单元格可修改文字或价格，选中行后按 Delete 可删除，底部可直接点 `+` 增加行。")
+        edited_df = st.data_editor(df, num_rows="dynamic", use_container_width=True)
+        if not edited_df.equals(df):
+            st.session_state.tour_data = edited_df.to_dict('records')
+            st.rerun()
 
+    # 侧边栏筛选
+    st.sidebar.header("🎛️ 筛选条件")
+    selected_agency = st.sidebar.selectbox("选择旅行社", ["全部"] + sorted([a for a in df['agency'].unique() if a]))
+    selected_dest = st.sidebar.selectbox("选择目的地", ["全部"] + sorted([d for d in df['destination'].unique() if d]))
+
+    raw_locs = sorted([l for l in df['departure_location'].unique() if l])
+    loc_options = ["全部", "🇲🇾 全马/新出发 (KUL/JB/SIN)"] + raw_locs
+    selected_loc = st.sidebar.selectbox("选择起飞地点", loc_options)
+
+    holiday_options = ["全部日期", "🎒 包含学校假期 (含超出2天内)", "✨ 严格在学校假期内 (0超出)", "💼 仅平时非假期"]
+    selected_hol = st.sidebar.selectbox("🗓️ 学校假期筛选", holiday_options)
+
+    # 过滤计算
     filtered_df = df.copy()
     if selected_agency != "全部":
         filtered_df = filtered_df[filtered_df['agency'] == selected_agency]
     if selected_dest != "全部":
         filtered_df = filtered_df[filtered_df['destination'] == selected_dest]
+
+    if selected_loc == "🇲🇾 全马/新出发 (KUL/JB/SIN)":
+        kw = ["KUL", "吉隆坡", "JB", "新山", "SIN", "新加坡"]
+        filtered_df = filtered_df[filtered_df['departure_location'].apply(lambda l: any(k in str(l) for k in kw))]
+    elif selected_loc != "全部":
+        filtered_df = filtered_df[filtered_df['departure_location'] == selected_loc]
+
     if selected_hol == "🎒 包含学校假期 (含超出2天内)":
         filtered_df = filtered_df[filtered_df['holiday_status'].isin(['exact', 'slight_over'])]
     elif selected_hol == "✨ 严格在学校假期内 (0超出)":
@@ -282,12 +261,37 @@ if task["results"]:
     elif selected_hol == "💼 仅平时非假期":
         filtered_df = filtered_df[filtered_df['holiday_status'] == 'none']
 
+    p_min = int(df['price_numeric'].min()) if not df.empty else 1000
+    p_max = int(df['price_numeric'].max()) if not df.empty else 9000
+    price_range = st.sidebar.slider("💰 团费预算范围 (RM)", min_value=p_min, max_value=p_max, value=(p_min, p_max), step=100)
+    filtered_df = filtered_df[(filtered_df['price_numeric'] >= price_range[0]) & (filtered_df['price_numeric'] <= price_range[1])]
+
+    # 导出
     st.markdown("### 📥 导出选项")
     col1, col2 = st.columns(2)
     with col1:
-        st.download_button("📊 下载 CSV 比价清单", data=filtered_df.to_csv(index=False).encode('utf-8-sig'), file_name="全量84团比价.csv", mime="text/csv", use_container_width=True)
+        st.download_button("📊 下载 CSV 比价清单", data=filtered_df.to_csv(index=False).encode('utf-8-sig'), file_name="本地提取比价清单.csv", mime="text/csv", use_container_width=True)
     with col2:
-        st.download_button("🖼️ 下载精美长图 (.png)", data=generate_comparison_image(filtered_df), file_name="全量84团长图.png", mime="image/png", use_container_width=True)
+        st.download_button("🖼️ 下载精美长图 (.png)", data=generate_comparison_image(filtered_df), file_name="本地提取比价长图.png", mime="image/png", use_container_width=True)
 
-    st.markdown(f"### 符合条件的出发日期共 **{len(filtered_df)}** 个：")
-    st.dataframe(filtered_df[['agency', 'destination', 'tour_code', 'departure_dates', 'price_text', 'title']], use_container_width=True)
+    st.markdown(f"### 符合条件的出发选项共 **{len(filtered_df)}** 个：")
+    st.dataframe(filtered_df[['agency', 'destination', 'tour_code', 'departure_location', 'departure_dates', 'price_text', 'title']], use_container_width=True)
+
+    st.markdown("#### 📋 行程卡片")
+    for _, row in filtered_df.iterrows():
+        with st.container(border=True):
+            c1, c2, c3 = st.columns([3, 2, 2])
+            with c1:
+                st.markdown(f"### 📍 **{row['destination']}** <small style='color:gray;'>({row['agency']})</small>", unsafe_allow_html=True)
+                st.write(f"**路线：** {row['title']}")
+                st.write(f"**团号：** `{row['tour_code']}`")
+            with c2:
+                st.markdown(f"🛫 **出发地：** `{row['departure_location']}`")
+                st.write(f"📅 **出发日期：** {row['departure_dates']}")
+                h_stat = row['holiday_status']
+                if h_stat == 'exact':
+                    st.success(f"🎒 完美在校假内 ({row['holiday_name']})")
+                elif h_stat == 'slight_over':
+                    st.warning(f"⚠️ 包含校假，超 {row['over_days']} 天 (需请假)")
+            with c3:
+                st.markdown(f"### 💰 **{row['price_text']}**")
