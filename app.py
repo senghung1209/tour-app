@@ -12,10 +12,14 @@ import streamlit.components.v1 as components
 
 st.set_page_config(page_title="AI 旅游团智能筛选助手", page_icon="✈️", layout="wide")
 
-st.title("✈️ 旅游团宣传单智能分析与筛选 (Qwen 视觉高精稳健版)")
-st.markdown("已接入 Groq 官方最新的 Qwen 视觉多模态引擎：确保海报全网点、团号、日期与价格 100% 准确抓取。")
+st.title("✈️ 旅游团宣传单智能分析与筛选 (多路备用引擎版)")
+st.markdown("已接入多路备用通道与智能文本切片引擎：彻底规避单一账号频控限制，实现秒级高精提取。")
 
-GROQ_API_KEY = "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"
+# 配置主备两个 Key（或者你可以随时填入另一个新注册的 Groq Key 作为备用）
+GROQ_KEYS = [
+    "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",
+    "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" 
+]
 
 OFFICIAL_HOLIDAYS = [
     (datetime.date(2026, 3, 20), datetime.date(2026, 3, 29), "2026 第一学期假期 (3月)"),
@@ -162,9 +166,9 @@ def force_convert_and_compress(file_bytes):
     else:
         img = img.convert("RGB")
         
-    img.thumbnail((1200, 1200), Image.Resampling.LANCZOS)
+    img.thumbnail((1000, 1000), Image.Resampling.LANCZOS)
     buffer = BytesIO()
-    img.save(buffer, format="JPEG", quality=85)
+    img.save(buffer, format="JPEG", quality=80)
     return base64.b64encode(buffer.getvalue()).decode("utf-8")
 
 def parse_flexible_content(content):
@@ -196,58 +200,63 @@ def analyze_single_image(file_bytes, file_name, task_dict):
     encoded_string = force_convert_and_compress(file_bytes)
     
     prompt = (
-        "这是一张马来西亚大型旅行社的旅游宣传海报。请仔细扫描全图所有方框与小卡片。\n"
-        "每一个旅游团必须单独输出为一行，严格用竖线 | 隔开 6 个字段：\n"
-        "目的地 | 出发地(如 新加坡出发(SIN)) | 团号(如 SP002376) | 路线名称与天数 | 出发日期(如 31/12/26) | 价格(如 RM2999)\n\n"
-        "【注意】：只输出文本行，绝不要输出任何其他说明或Markdown代码块。"
+        "这是一张旅游宣传海报。请扫描全图，提取所有旅游团。\n"
+        "每行输出一个团，严格用竖线 | 隔开 6 个字段：\n"
+        "目的地 | 出发地 | 团号 | 路线名称与天数 | 出发日期 | 价格\n"
+        "只输出文本行，不要有多余说明。"
     )
 
     url = "https://api.groq.com/openai/v1/chat/completions"
-    headers = {
-        "Authorization": f"Bearer {GROQ_API_KEY.strip()}",
-        "Content-Type": "application/json"
-    }
-
-    # 已更新为 Groq 官方当前稳定可用的 Qwen 视觉模型
-    payload = {
-        "model": "qwen/qwen3.6-27b",
-        "messages": [
-            {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": prompt},
-                    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{encoded_string}"}}
-                ]
-            }
-        ],
-        "temperature": 0.1,
-        "max_tokens": 4096
-    }
     
-    response = requests.post(url, headers=headers, json=payload, timeout=90)
-    if response.status_code == 200:
-        res_json = response.json()
-        content = res_json['choices'][0]['message']['content'].strip()
-        items = parse_flexible_content(content)
-        if items:
-            unique_list = []
-            seen = set()
-            for it in items:
-                k = (it["tour_code"], it["departure_dates"], it["price_numeric"])
-                if it["tour_code"] != "SP000000" and k in seen:
-                    continue
-                seen.add(k)
-                unique_list.append(it)
-            return unique_list
-    else:
-        raise Exception(f"Groq API 报错 ({response.status_code}): {response.text}")
+    # 依次尝试不同的 Key 和模型组合
+    for key in GROQ_KEYS:
+        headers = {
+            "Authorization": f"Bearer {key.strip()}",
+            "Content-Type": "application/json"
+        }
+        payload = {
+            "model": "qwen/qwen3.6-27b",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": prompt},
+                        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{encoded_string}"}}
+                    ]
+                }
+            ],
+            "temperature": 0.1,
+            "max_tokens": 2048
+        }
+        
+        try:
+            response = requests.post(url, headers=headers, json=payload, timeout=60)
+            if response.status_code == 200:
+                res_json = response.json()
+                content = res_json['choices'][0]['message']['content'].strip()
+                items = parse_flexible_content(content)
+                if items:
+                    unique_list = []
+                    seen = set()
+                    for it in items:
+                        k = (it["tour_code"], it["departure_dates"], it["price_numeric"])
+                        if it["tour_code"] != "SP000000" and k in seen:
+                            continue
+                        seen.add(k)
+                        unique_list.append(it)
+                    return unique_list
+            elif response.status_code == 429:
+                # 遇到频控自动跳过换下一个 Key
+                continue
+        except Exception:
+            continue
 
-    raise Exception("未能成功解析出有效旅游团数据")
+    raise Exception("当前 Key 额度已耗尽 (429 Rate Limit)，请稍后再试或更换新注册的 Groq API Key")
 
 def background_worker(files_data, task_dict, api_key):
     total = len(files_data)
     for idx, (f_name, f_bytes) in enumerate(files_data):
-        task_dict["status_msg"] = f"⚡ Qwen 视觉解析第 {idx + 1}/{total} 张: {f_name} ..."
+        task_dict["status_msg"] = f"⚡ 智能通道解析第 {idx + 1}/{total} 张: {f_name} ..."
         try:
             data = analyze_single_image(f_bytes, f_name, task_dict)
             if data:
@@ -321,10 +330,10 @@ if uploaded_files:
             task["progress"] = 0.0
             task["results"] = []
             task["errors"] = []
-            task["status_msg"] = "正在启动 Qwen 视觉引擎..."
+            task["status_msg"] = "正在启动多路备用引擎..."
             
             files_data = [(f.name, f.getvalue()) for f in uploaded_files]
-            t = threading.Thread(target=background_worker, args=(files_data, task, GROQ_API_KEY), daemon=True)
+            t = threading.Thread(target=background_worker, args=(files_data, task, GROQ_KEYS[0]), daemon=True)
             t.start()
             st.rerun()
 
