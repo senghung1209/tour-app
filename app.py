@@ -12,10 +12,15 @@ import streamlit.components.v1 as components
 
 st.set_page_config(page_title="AI 旅游团智能筛选助手", page_icon="✈️", layout="wide")
 
-st.title("✈️ 旅游团宣传单智能分析与筛选 (OpenRouter 极速高精版)")
-st.markdown("搭载前沿视觉多模态引擎：零企业认证墙、秒级多图解析、精准区分出发机场与 2026 学校假期。")
+st.title("✈️ 旅游团宣传单智能分析与筛选 (三账号高可用版)")
+st.markdown("已接入 3 组 OpenRouter 独立密钥池：每日 150 次高精解析、自动故障容灾与 2026 学校假期精准核验。")
 
-OPENROUTER_API_KEY = "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"
+# 3 个不同账号创建的 OpenRouter 密钥轮换池
+OPENROUTER_API_KEYS = [
+    "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",
+    "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",
+    "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"
+]
 
 OFFICIAL_HOLIDAYS = [
     (datetime.date(2026, 3, 20), datetime.date(2026, 3, 29), "2026 第一学期假期 (3月)"),
@@ -89,17 +94,32 @@ def evaluate_holiday_fit(departure_date_str, duration_days):
         return 'slight_over', min_over, matched_name
     return 'none', 0, ""
 
-def make_tour_dict(dest, code, title, loc, dates, price_num, price_txt):
+def clean_and_parse_price(price_str):
+    digits = re.findall(r'\d+', str(price_str))
+    if not digits:
+        return 0, str(price_str)
+    for d in digits:
+        val = int(d)
+        if 400 <= val <= 50000:
+            return val, f"RM {val}"
+    val = int(digits[0])
+    if val > 50000:
+        return 0, "见海报"
+    return val, f"RM {val}"
+
+def make_tour_dict(dest, code, title, loc, dates, raw_price):
     days = extract_tour_days(title)
     status, over_days, hol_name = evaluate_holiday_fit(dates, days)
+    p_num, p_text = clean_and_parse_price(raw_price)
+    
     d = dict()
     d["destination"] = dest
     d["tour_code"] = code
     d["title"] = title
     d["departure_location"] = loc
     d["departure_dates"] = dates
-    d["price_numeric"] = price_num
-    d["price_text"] = price_txt
+    d["price_numeric"] = p_num
+    d["price_text"] = p_text
     d["holiday_status"] = status
     d["over_days"] = over_days
     d["holiday_name"] = hol_name
@@ -171,19 +191,12 @@ def parse_pipe_lines(content):
             code = parts[2]
             title = parts[3]
             dates = parts[4]
-            p_str = parts[5]
-            
-            try:
-                p_val = int(re.sub(r'[^\d]', '', p_str))
-            except Exception:
-                p_val = 0
-            
+            raw_p = parts[5]
             if dest and (code or title):
-                p_text = ("RM " + str(p_val)) if p_val > 0 else p_str
-                items.append(make_tour_dict(dest, code, title, loc, dates, p_val, p_text))
+                items.append(make_tour_dict(dest, code, title, loc, dates, raw_p))
     return items
 
-def analyze_single_image(file_bytes, file_name, api_key):
+def analyze_single_image(file_bytes, file_name, task_dict):
     encoded_string = compress_image(BytesIO(file_bytes))
     
     prompt = (
@@ -195,9 +208,10 @@ def analyze_single_image(file_bytes, file_name, api_key):
         "贵州|新山出发 (JB)|SP002809|7天6夜 一路黔行 多彩贵州|18/11/26|RM2999\n"
         "贵州|新加坡出发 (SIN)|SP002729|7天6夜 一路黔行 多彩贵州|28/10, 06/11|RM2699\n\n"
         "【关键要求】：\n"
-        "1. 仔细观察卡片右下角小字与航空标示，严格精确区分『新加坡出发 (SIN)』还是『新山出发 (JB)』还是『吉隆坡出发 (KL)』！\n"
-        "2. 同一个团号如有多个出发日期，合并在同一行用逗号分隔，不要输出任何重复行。\n"
-        "3. 只输出有效数据行，绝不输出任何多余废话或表头！"
+        "1. 价格请只写具体的团费数字（如 RM2999），严禁将海报上的电话号码、登记号写入价格列！\n"
+        "2. 仔细观察卡片右下角小字与航空标示，严格精确区分『新加坡出发 (SIN)』还是『新山出发 (JB)』还是『吉隆坡出发 (KL)』！\n"
+        "3. 同一个团号如有多个出发日期，合并在同一行用逗号分隔，不要输出任何重复行。\n"
+        "4. 只输出有效数据行，绝不输出任何多余说明或表头！"
     )
 
     candidate_models = [
@@ -207,66 +221,68 @@ def analyze_single_image(file_bytes, file_name, api_key):
     ]
     
     url = "https://openrouter.ai/api/v1/chat/completions"
-    headers = {
-        "Authorization": f"Bearer {api_key.strip()}",
-        "Content-Type": "application/json",
-        "HTTP-Referer": "https://senghung-tour.streamlit.app",
-        "X-Title": "Tour Poster Analyzer"
-    }
-
     last_error = ""
-    for model_name in candidate_models:
-        payload = {
-            "model": model_name,
-            "messages": [
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": prompt},
-                        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{encoded_string}"}}
-                    ]
-                }
-            ],
-            "temperature": 0.1
+
+    # 循环遍历 3 个 Key，一个耗尽无缝切下一个
+    for key_idx, key in enumerate(OPENROUTER_API_KEYS):
+        api_key = key.strip()
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+            "HTTP-Referer": "https://senghung-tour.streamlit.app",
+            "X-Title": "Tour Poster Analyzer"
         }
-        
-        try:
-            response = requests.post(url, headers=headers, json=payload, timeout=90)
-            if response.status_code == 200:
-                res_json = response.json()
-                content = res_json['choices'][0]['message']['content'].strip()
-                items = parse_pipe_lines(content)
-                if items:
-                    unique_list = []
-                    seen = set()
-                    for it in items:
-                        k = (it["tour_code"], it["destination"], it["departure_location"], it["price_numeric"])
-                        if it["tour_code"] and k in seen:
-                            continue
-                        seen.add(k)
-                        unique_list.append(it)
-                    return unique_list
-            elif response.status_code == 404:
+
+        for model_name in candidate_models:
+            payload = {
+                "model": model_name,
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": prompt},
+                            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{encoded_string}"}}
+                        ]
+                    }
+                ],
+                "temperature": 0.1
+            }
+            
+            try:
+                response = requests.post(url, headers=headers, json=payload, timeout=90)
+                if response.status_code == 200:
+                    res_json = response.json()
+                    content = res_json['choices'][0]['message']['content'].strip()
+                    items = parse_pipe_lines(content)
+                    if items:
+                        unique_list = []
+                        seen = set()
+                        for it in items:
+                            k = (it["tour_code"], it["destination"], it["departure_location"], it["price_numeric"])
+                            if it["tour_code"] and k in seen:
+                                continue
+                            seen.add(k)
+                            unique_list.append(it)
+                        return unique_list
+                elif response.status_code in (402, 429):
+                    task_dict["status_msg"] = f"🔄 账号 {key_idx + 1} 今日配额耗尽，正在自动调用下一个备用账号..."
+                    break
+                elif response.status_code == 404:
+                    continue
+                else:
+                    last_error = f"{model_name} 响应码 ({response.status_code})"
+            except Exception as e:
+                last_error = str(e)
                 continue
-            else:
-                err_msg = response.text
-                try:
-                    err_msg = response.json().get("error", {}).get("message", response.text)
-                except Exception:
-                    pass
-                last_error = f"{model_name} 报错 ({response.status_code}): {err_msg}"
-        except Exception as e:
-            last_error = str(e)
-            continue
 
-    raise Exception(last_error if last_error else "未能匹配可用模型端点")
+    raise Exception(last_error if last_error else "所有预备账号的每日额度均已耗尽")
 
-def background_worker(files_data, task_dict, api_key):
+def background_worker(files_data, task_dict):
     total = len(files_data)
     for idx, (f_name, f_bytes) in enumerate(files_data):
         task_dict["status_msg"] = f"⚡ 正在极速全板块解析第 {idx + 1}/{total} 张: {f_name} ..."
         try:
-            data = analyze_single_image(f_bytes, f_name, api_key)
+            data = analyze_single_image(f_bytes, f_name, task_dict)
             if data:
                 task_dict["results"].extend(data)
             else:
@@ -327,7 +343,7 @@ if uploaded_files:
             task["status_msg"] = "正在启动极速视觉多模态引擎..."
             
             files_data = [(f.name, f.getvalue()) for f in uploaded_files]
-            t = threading.Thread(target=background_worker, args=(files_data, task, OPENROUTER_API_KEY), daemon=True)
+            t = threading.Thread(target=background_worker, args=(files_data, task), daemon=True)
             t.start()
             st.rerun()
 
@@ -378,19 +394,18 @@ if task["results"]:
     ]
     selected_hol = st.sidebar.selectbox("🗓️ 学校假期筛选", holiday_options)
     
-    # --- 修复滑块边界：过滤掉 0 元异常值，防止 StreamlitJSNumberBoundsError ---
-    valid_prices = df[df['price_numeric'] > 0]['price_numeric']
+    # 彻底过滤异常天价，预算区间限制在合理旅游费内
+    valid_prices = df[(df['price_numeric'] >= 400) & (df['price_numeric'] <= 50000)]['price_numeric']
     if not valid_prices.empty:
         min_val = int(valid_prices.min())
         max_val = int(valid_prices.max())
     else:
-        min_val = 500
+        min_val = 1000
         max_val = 15000
 
     if min_val >= max_val:
         max_val = min_val + 1000
 
-    # 规范化整型并设置安全步长
     min_val = int(min_val)
     max_val = int(max_val)
     price_range = st.sidebar.slider(
