@@ -12,10 +12,9 @@ import streamlit.components.v1 as components
 
 st.set_page_config(page_title="AI 旅游团智能筛选助手", page_icon="✈️", layout="wide")
 
-st.title("✈️ 旅游团宣传单智能分析与筛选 (动态自适应版)")
-st.markdown("已接入 3 组 OpenRouter 密钥池：价格预算范围随实际提取结果全动态自适应、精准识别出发机场与 2026 学校假期。")
+st.title("✈️ 旅游团宣传单智能分析与筛选 (多账号高可用动态版)")
+st.markdown("已接入 3 组 OpenRouter 独立密钥池：支持额度精准故障转移、海报价格全动态自适应联动与一键重置。")
 
-# 3 个不同账号创建的 OpenRouter 密钥轮换池
 OPENROUTER_API_KEYS = [
     "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",
     "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",
@@ -39,7 +38,8 @@ def get_global_task_store():
         "progress": 0.0,
         "status_msg": "",
         "results": [],
-        "errors": []
+        "errors": [],
+        "current_key_idx": 0
     }
 
 task = get_global_task_store()
@@ -95,47 +95,37 @@ def evaluate_holiday_fit(departure_date_str, duration_days):
     return 'none', 0, ""
 
 def clean_and_parse_price(price_str):
-    digits = re.findall(r'\d+', str(price_str))
-    if not digits:
-        return 0, str(price_str)
-    # 精准剔除电话号码与微信号，只保留真实机票团费区间（300 ~ 50,000）
-    for d in digits:
-        val = int(d)
-        if 300 <= val <= 50000:
+    # 彻底杜绝长串电话号码（仅匹配 3-5 位数，且数值必须在 300 到 35000 之间）
+    candidates = re.findall(r'\b\d{3,5}\b', str(price_str))
+    for c in candidates:
+        val = int(c)
+        if 300 <= val <= 35000:
             return val, f"RM {val}"
-    val = int(digits[0])
-    if val > 50000:
-        return 0, "见海报"
-    return val, f"RM {val}"
+    return 0, "见海报"
 
 def make_tour_dict(dest, code, title, loc, dates, raw_price):
     days = extract_tour_days(title)
     status, over_days, hol_name = evaluate_holiday_fit(dates, days)
     p_num, p_text = clean_and_parse_price(raw_price)
     
-    d = dict()
-    d["destination"] = dest
-    d["tour_code"] = code
-    d["title"] = title
-    d["departure_location"] = loc
-    d["departure_dates"] = dates
-    d["price_numeric"] = p_num
-    d["price_text"] = p_text
-    d["holiday_status"] = status
-    d["over_days"] = over_days
-    d["holiday_name"] = hol_name
-    return d
+    return {
+        "destination": dest,
+        "tour_code": code,
+        "title": title,
+        "departure_location": loc,
+        "departure_dates": dates,
+        "price_numeric": p_num,
+        "price_text": p_text,
+        "holiday_status": status,
+        "over_days": over_days,
+        "holiday_name": hol_name
+    }
 
 def trigger_notification():
     js = """
     <script>
     (function() {
-        try {
-            if (navigator.vibrate) {
-                navigator.vibrate([300, 150, 300, 150, 500]);
-            }
-        } catch(e) {}
-
+        try { if (navigator.vibrate) navigator.vibrate([300, 150, 300, 150, 500]); } catch(e) {}
         try {
             var ctx = new (window.AudioContext || window.webkitAudioContext)();
             var freqs = [523.25, 659.25, 783.99, 1046.50];
@@ -152,11 +142,7 @@ def trigger_notification():
                 osc.stop(ctx.currentTime + i * 0.15 + 0.4);
             });
         } catch(e) {}
-
-        try {
-            parent.document.title = "【🔔 已完成分析！请查看结果】";
-        } catch(e) {}
-
+        try { parent.document.title = "【🔔 已完成分析！请查看结果】"; } catch(e) {}
         try {
             if ("Notification" in window && Notification.permission === "granted") {
                 new Notification("✈️ 旅游团分析已全部完成！", {
@@ -209,31 +195,36 @@ def analyze_single_image(file_bytes, file_name, task_dict):
         "贵州|新山出发 (JB)|SP002809|7天6夜 一路黔行 多彩贵州|18/11/26|RM2999\n"
         "贵州|新加坡出发 (SIN)|SP002729|7天6夜 一路黔行 多彩贵州|28/10, 06/11|RM2699\n\n"
         "【关键要求】：\n"
-        "1. 价格请只写具体的团费数字（如 RM2999），严禁将海报上的电话号码、登记号写入价格列！\n"
-        "2. 仔细观察卡片右下角小字与航空标示，严格精确区分『新加坡出发 (SIN)』还是『新山出发 (JB)』还是『吉隆坡出发 (KL)』！\n"
+        "1. 价格必须是真实团费（如 RM2999），严禁将海报上的电话号码、牌照号混入价格！\n"
+        "2. 严格精确区分『新加坡出发 (SIN)』还是『新山出发 (JB)』还是『吉隆坡出发 (KL)』！\n"
         "3. 同一个团号如有多个出发日期，合并在同一行用逗号分隔，不要输出任何重复行。\n"
-        "4. 只输出有效数据行，绝不输出任何多余说明或表头！"
+        "4. 只输出有效数据行，绝不输出任何多余废话或表头！"
     )
 
-    candidate_models = [
+    models_to_try = [
         "qwen/qwen-2.5-vl-72b-instruct",
         "meta-llama/llama-3.2-11b-vision-instruct:free",
         "google/gemini-2.0-flash-exp:free"
     ]
     
     url = "https://openrouter.ai/api/v1/chat/completions"
-    last_error = ""
-
-    for key_idx, key in enumerate(OPENROUTER_API_KEYS):
-        api_key = key.strip()
+    
+    total_keys = len(OPENROUTER_API_KEYS)
+    start_key_idx = task_dict.get("current_key_idx", 0)
+    
+    # 轮询 3 个账号 Key
+    for key_offset in range(total_keys):
+        current_idx = (start_key_idx + key_offset) % total_keys
+        active_key = OPENROUTER_API_KEYS[current_idx].strip()
+        
         headers = {
-            "Authorization": f"Bearer {api_key}",
+            "Authorization": f"Bearer {active_key}",
             "Content-Type": "application/json",
             "HTTP-Referer": "https://senghung-tour.streamlit.app",
             "X-Title": "Tour Poster Analyzer"
         }
 
-        for model_name in candidate_models:
+        for model_name in models_to_try:
             payload = {
                 "model": model_name,
                 "messages": [
@@ -249,10 +240,11 @@ def analyze_single_image(file_bytes, file_name, task_dict):
             }
             
             try:
-                response = requests.post(url, headers=headers, json=payload, timeout=90)
+                response = requests.post(url, headers=headers, json=payload, timeout=65)
+                
                 if response.status_code == 200:
-                    res_json = response.json()
-                    content = res_json['choices'][0]['message']['content'].strip()
+                    task_dict["current_key_idx"] = current_idx
+                    content = response.json()['choices'][0]['message']['content'].strip()
                     items = parse_pipe_lines(content)
                     if items:
                         unique_list = []
@@ -264,23 +256,25 @@ def analyze_single_image(file_bytes, file_name, task_dict):
                             seen.add(k)
                             unique_list.append(it)
                         return unique_list
-                elif response.status_code in (402, 429):
-                    task_dict["status_msg"] = f"🔄 账号 {key_idx + 1} 今日配额耗尽，正在自动调用下一个备用账号..."
+                elif response.status_code == 429:
+                    # 仅为瞬时并发超限，缓冲 2 秒继续
+                    time.sleep(2)
+                    continue
+                elif response.status_code == 402:
+                    # 真实额度耗尽，跳出模型循环，直接换下一个账号 Key
+                    task_dict["status_msg"] = f"🔄 账号 {current_idx + 1} 额度已尽，正在切换至账号 {(current_idx + 1) % total_keys + 1}..."
                     break
                 elif response.status_code == 404:
                     continue
-                else:
-                    last_error = f"{model_name} 响应码 ({response.status_code})"
-            except Exception as e:
-                last_error = str(e)
+            except Exception:
                 continue
 
-    raise Exception(last_error if last_error else "所有预备账号的每日额度均已耗尽")
+    raise Exception("三组 API 密钥均暂时无法返回数据，请检查网络或稍后重试")
 
 def background_worker(files_data, task_dict):
     total = len(files_data)
     for idx, (f_name, f_bytes) in enumerate(files_data):
-        task_dict["status_msg"] = f"⚡ 正在极速全板块解析第 {idx + 1}/{total} 张: {f_name} ..."
+        task_dict["status_msg"] = f"⚡ 正在深度解析第 {idx + 1}/{total} 张: {f_name} ..."
         try:
             data = analyze_single_image(f_bytes, f_name, task_dict)
             if data:
@@ -291,7 +285,7 @@ def background_worker(files_data, task_dict):
             task_dict["errors"].append(f"{f_name}: {str(err)}")
             
         task_dict["progress"] = (idx + 1) / total
-        time.sleep(1.0)
+        time.sleep(0.5)
             
     task_dict["running"] = False
     task_dict["finished"] = True
@@ -323,11 +317,25 @@ function requestAudioAndNotify() {
 </script>
 """, height=58)
 
-uploaded_files = st.file_uploader(
-    "批量上传宣传图 (支持 JPG/PNG，可多选)", 
-    type=["jpg", "jpeg", "png"],
-    accept_multiple_files=True
-)
+c_up, c_rst = st.columns([4, 1])
+with c_up:
+    uploaded_files = st.file_uploader(
+        "批量上传宣传图 (支持 JPG/PNG，可多选)", 
+        type=["jpg", "jpeg", "png"],
+        accept_multiple_files=True
+    )
+with c_rst:
+    st.write("")
+    st.write("")
+    if st.button("🗑️ 清空重置当前数据", use_container_width=True):
+        task["running"] = False
+        task["finished"] = False
+        task["notified"] = False
+        task["progress"] = 0.0
+        task["status_msg"] = ""
+        task["results"] = []
+        task["errors"] = []
+        st.rerun()
 
 if uploaded_files:
     st.success(f"已选择 {len(uploaded_files)} 张图片")
@@ -340,7 +348,7 @@ if uploaded_files:
             task["progress"] = 0.0
             task["results"] = []
             task["errors"] = []
-            task["status_msg"] = "正在启动极速视觉多模态引擎..."
+            task["status_msg"] = "正在启动多账号负载池..."
             
             files_data = [(f.name, f.getvalue()) for f in uploaded_files]
             t = threading.Thread(target=background_worker, args=(files_data, task), daemon=True)
@@ -379,16 +387,13 @@ if task["results"]:
     st.header("🔍 旅游团智能筛选面板")
     st.sidebar.header("🎛️ 筛选条件")
 
-    # 1. 目的地筛选
     dest_list = ["全部"] + sorted([d for d in df['destination'].unique() if d and d != "nan"])
     selected_dest = st.sidebar.selectbox("选择目的地", dest_list)
     
-    # 2. 出发地筛选
     raw_locs = sorted([l for l in df['departure_location'].unique() if l and l != "nan"])
     loc_list = ["全部", "🇲🇾 全马来西亚出发 (包含吉隆坡/新山/槟城)"] + raw_locs
     selected_loc = st.sidebar.selectbox("选择起飞地点", loc_list)
     
-    # 3. 学校假期筛选
     holiday_options = [
         "全部日期",
         "🎒 包含学校假期 (含最多超出2天)",
@@ -397,7 +402,7 @@ if task["results"]:
     ]
     selected_hol = st.sidebar.selectbox("🗓️ 学校假期筛选", holiday_options)
 
-    # 基础条件过滤（目的地、起飞地、假期）
+    # 预筛选联动
     base_filtered_df = df.copy()
     if selected_dest != "全部":
         base_filtered_df = base_filtered_df[base_filtered_df['destination'] == selected_dest]
@@ -417,10 +422,8 @@ if task["results"]:
     elif selected_hol == "💼 仅平时非假期出发":
         base_filtered_df = base_filtered_df[base_filtered_df['holiday_status'] == 'none']
 
-    # --- 核心更新：价格范围完全根据当前已提取的数据动态自适应 ---
+    # --- 严格价格动态范围适配 ---
     valid_prices = base_filtered_df[base_filtered_df['price_numeric'] > 0]['price_numeric']
-    
-    # 如果当前条件无有效价格，退回使用全局有效价格
     if valid_prices.empty:
         valid_prices = df[df['price_numeric'] > 0]['price_numeric']
 
@@ -431,29 +434,24 @@ if task["results"]:
         dynamic_min = 1000
         dynamic_max = 5000
 
-    # 如果最低价和最高价完全相同（如只搜出了一个团），安全浮动 100 以允许滑动
     if dynamic_min >= dynamic_max:
-        slider_min = max(dynamic_min - 100, 0)
-        slider_max = dynamic_max + 100
-        default_range = (dynamic_min, dynamic_max)
+        slider_min = max(dynamic_min - 50, 0)
+        slider_max = dynamic_max + 50
     else:
         slider_min = dynamic_min
         slider_max = dynamic_max
-        default_range = (dynamic_min, dynamic_max)
 
-    # 动态滑块：key 包含当前起止值，确保换海报或换选项时滑块立刻精准重置贴合
-    slider_key = f"price_slider_{selected_dest}_{selected_loc}_{slider_min}_{slider_max}"
+    slider_key = f"slider_{selected_dest}_{selected_loc}_{slider_min}_{slider_max}"
     
     price_range = st.sidebar.slider(
-        f"价格预算范围 (RM) [当前范围: {slider_min} ~ {slider_max}]", 
+        f"价格预算范围 (RM) [{slider_min} - {slider_max}]", 
         min_value=slider_min, 
         max_value=slider_max, 
-        value=default_range,
+        value=(slider_min, slider_max),
         step=50,
         key=slider_key
     )
     
-    # 应用最终价格范围筛选
     final_filtered_df = base_filtered_df[
         (base_filtered_df['price_numeric'] >= price_range[0]) & 
         (base_filtered_df['price_numeric'] <= price_range[1])
