@@ -101,7 +101,8 @@ OFFICIAL_HOLIDAYS = [
 ]
 
 RAW_KEY = st.secrets.get("GEMINI_API_KEY", "")
-CLEAN_KEY = re.sub(r'[\r\n\t\s\'\"]', '', str(RAW_KEY))
+# 强力剥离所有空格、引号、中括号等非法字符
+CLEAN_KEY = re.sub(r'[\r\n\t\s\'\"\[\]]', '', str(RAW_KEY))
 
 def extract_tour_days(title_str):
     m = re.search(r'(\d+)\s*(?:天|D|d)', str(title_str))
@@ -164,7 +165,7 @@ def parse_lines_robust(raw_text, poster_type):
                 loc = "🇸🇬 新加坡起飞 (SIN)" if any(k in line.upper() for k in ["SIN", "新加坡", "TR"]) else "🇲🇾 马来西亚起飞 (KUL)"
                 dates = parts[4] if len(parts) > 4 else parts[len(parts) - 2]
 
-                date_tokens = re.findall(r'\b\d{1,2}[/.-]\d{1,2}(?:[/.-](\d{2,4}))?\b', dates)
+                date_tokens = re.findall(r'\b\d{1,2}[/.-](\d{1,2})(?:[/.-](\d{2,4}))?\b', dates)
                 if not date_tokens:
                     date_tokens = [dates]
 
@@ -245,7 +246,10 @@ def call_gemini_vision_clean(img_bytes, poster_type, hint=""):
         "generationConfig": {"temperature": 0.0, "maxOutputTokens": 8192}
     }
 
+    # 绝对干净、硬编码拼接的 URL，防止任何中括号污染
     url = f"[https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=](https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=){CLEAN_KEY}"
+    url = url.replace('[', '').replace(']', '').strip()
+
     data_json = json.dumps(payload).encode('utf-8')
     req = urllib.request.Request(
         url,
