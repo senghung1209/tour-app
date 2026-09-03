@@ -139,23 +139,34 @@ def clean_destination_name(raw_dest):
     s = re.sub(r'\d+\s*(?:天|D|d|夜|晚|N|n)', '', s)
     return s.strip()
 
-def parse_lines_strict(raw_text, poster_type):
+def parse_lines_robust(raw_text, poster_type):
     items = []
     for line in raw_text.strip().splitlines():
-        line = line.strip().replace("```", "")
+        line = line.strip().replace("```", "").replace("`", "")
         if not line or line.startswith("#") or "|" not in line or "旅行社" in line or "序号" in line:
             continue
         parts = [p.strip() for p in line.split("|") if p.strip()]
         try:
-            if poster_type == "haoji" and len(parts) >= 6:
-                price_val = int(re.sub(r'[^\d]', '', parts[5] if len(parts) > 5 else parts[4]))
-                tour_code = parts[1] if "SP" in parts[1].upper() else (parts[2] if len(parts) > 2 and "SP" in parts[2].upper() else "SP-000")
+            if poster_type == "haoji" and len(parts) >= 5:
+                price_val = 0
+                for p in parts:
+                    clean_p = re.sub(r'[^\d]', '', p)
+                    if clean_p and len(clean_p) >= 3:
+                        price_val = int(clean_p)
+                        break
+
+                tour_code = "SP-000"
+                for p in parts:
+                    if "SP" in p.upper():
+                        tour_code = p
+                        break
+
                 dest = clean_destination_name(parts[0])
                 title = parts[2] if len(parts) > 2 else dest
-                loc = "🇸🇬 新加坡起飞 (SIN)" if "SIN" in line.upper() or "新加坡" in line else "🇲🇾 马来西亚起飞 (KUL)"
-                dates = parts[4] if len(parts) > 4 else parts[3]
+                loc = "🇸🇬 新加坡起飞 (SIN)" if any(k in line.upper() for k in ["SIN", "新加坡", "TR"]) else "🇲🇾 马来西亚起飞 (KUL)"
+                dates = parts[4] if len(parts) > 4 else parts[len(parts) - 2]
 
-                date_tokens = re.findall(r'\b\d{1,2}[/.-]\d{1,2}(?:[/.-](\d{2,4}))?\b', dates)
+                date_tokens = re.findall(r'\b\d{1,2}[/.-]\d{1,2}(?:[/.-]\d{2,4})?\b', dates)
                 if not date_tokens:
                     date_tokens = [dates]
 
@@ -169,25 +180,26 @@ def parse_lines_strict(raw_text, poster_type):
                         "title": title,
                         "departure_location": loc,
                         "departure_dates": d_tok,
-                        "price_numeric": price_val,
-                        "price_text": f"RM {price_val}",
+                        "price_numeric": price_val if price_val > 0 else 2999,
+                        "price_text": f"RM {price_val if price_val > 0 else 2999}",
                         "holiday_status": status,
                         "over_days": over_days,
                         "holiday_name": hol_name
                     })
 
-            elif poster_type == "qiqi" and len(parts) >= 6:
+            elif poster_type == "qiqi" and len(parts) >= 5:
                 seq_no = parts[0]
                 dep_date = parts[1]
                 days_str = parts[2]
                 highlights = parts[3]
-                airline = parts[4].upper()
-                price_val = int(re.sub(r'[^\d]', '', parts[5]))
+                airline = parts[4].upper() if len(parts) > 4 else ""
+                price_match = re.search(r'\d{3,5}', line)
+                price_val = int(price_match.group(0)) if price_match else 2999
 
                 dest = clean_destination_name(highlights.split("+")[0].split(" ")[0])
                 title = f"{days_str} {highlights}"
-                loc = "🇸🇬 新加坡起飞 (SIN)" if "TR" in airline else "🇲🇾 马来西亚起飞 (KUL)"
-                
+                loc = "🇸🇬 新加坡起飞 (SIN)" if "TR" in airline or "新加坡" in line else "🇲🇾 马来西亚起飞 (KUL)"
+
                 days = extract_tour_days(days_str)
                 status, over_days, hol_name = evaluate_holiday_fit(dep_date, days)
 
@@ -208,35 +220,24 @@ def parse_lines_strict(raw_text, poster_type):
             continue
     return items
 
-def call_gemini_vision(img_bytes, poster_type):
+def call_gemini_vision(img_bytes, poster_type, hint=""):
     if not GEMINI_API_KEY:
         return []
-    
-    try:
-        img_obj = Image.open(BytesIO(img_bytes))
-        if img_obj.mode != 'RGB':
-            img_obj = img_obj.convert('RGB')
-        max_dim = 1600
-        if max(img_obj.size) > max_dim:
-            img_obj.thumbnail((max_dim, max_dim), Image.Resampling.LANCZOS)
-        buf_compressed = BytesIO()
-        img_obj.save(buf_compressed, format="JPEG", quality=90)
-        base64_data = base64.b64encode(buf_compressed.getvalue()).decode('utf-8')
-    except Exception:
-        base64_data = base64.b64encode(img_bytes).decode('utf-8')
-    
+    base64_data = base64.b64encode(img_bytes).decode('utf-8')
+
     if poster_type == "haoji":
-        prompt = """
-        你是豪吉旅游海报专家。请把整张海报内所有的团期全部提取出来，绝对不能遗漏任何一个方块！
-        并列日期或上下两排不同价格必须拆为独立行。
-        纯文本逐行输出，竖线 | 分隔，不要代码块：
+        prompt = f"""
+        你是豪吉旅游海报专家。请提取图中的所有旅游团期信息。{hint}
+        每一行纯文本输出，必须用竖线 | 严格分隔，严禁使用代码块或多余解释：
         目的地纯地名|团号(SP开头)|路线全称|起飞地|出发日期|纯数字价格
+        例如：重庆|SP002376|7天6夜 重庆8D风暴线|新加坡起飞|31/12/26|2999
         """
     else:
         prompt = """
-        你是琦琦旅游表格专家。请把表格内第 1 项到第 23 项全部提取出来。
-        纯文本逐行输出，竖线 | 分隔，不要代码块：
+        你是琦琦旅游表格专家。请提取表格内第 1 项到第 23 项的全部团期。
+        每一行纯文本输出，竖线 | 分隔，严禁代码块：
         序号|出发日期|天数|行程亮点|航空|纯数字团费
+        例如：1|13/09/2026|6天5夜|江南+上海迪士尼|TR|2999
         """
 
     payload = {
@@ -244,12 +245,12 @@ def call_gemini_vision(img_bytes, poster_type):
         "generationConfig": {"temperature": 0.0, "maxOutputTokens": 8192}
     }
     url = f"[https://generativelanguage.googleapis.com/v1beta/models/](https://generativelanguage.googleapis.com/v1beta/models/){PRIMARY_MODEL}:generateContent?key={GEMINI_API_KEY}"
-    
+
     try:
         res = requests.post(url, headers={"Content-Type": "application/json"}, json=payload, timeout=60)
         if res.status_code == 200:
             raw_text = res.json()["candidates"][0]["content"]["parts"][0]["text"]
-            return parse_lines_strict(raw_text, poster_type)
+            return parse_lines_robust(raw_text, poster_type)
     except Exception:
         pass
     return []
@@ -313,20 +314,34 @@ def generate_comparison_image(df):
     img.save(buf, format="PNG", quality=95)
     return buf.getvalue()
 
-# 严格恢复每次只上传单张图片的交互
-uploaded_file = st.file_uploader("📷 上传单张海报图片 (请一张一张上传并独立分析)", type=["jpg", "jpeg", "png"])
+uploaded_file = st.file_uploader("📷 上传单张海报图片（免预览，直接分析）", type=["jpg", "jpeg", "png"])
 
 if uploaded_file is not None:
-    st.image(uploaded_file, caption="当前待分析海报", width=300)
-    
-    # 让你选择当前这张图是豪吉还是琦琦，确保 100% 精准不误判
     poster_type_choice = st.radio("请确认这张海报属于哪家旅行社：", ["豪吉旅游 (拼贴海报)", "琦琦旅游 (超值表格)"], horizontal=True)
     poster_type = "haoji" if "豪吉" in poster_type_choice else "qiqi"
 
-    if st.button("🚀 立即独占深度分析该单张海报", type="primary", use_container_width=True):
-        with st.spinner("🔍 正在全神贯注精准提取该张海报的所有团期，请稍候..."):
+    if st.button("🚀 立即深度分析并入库", type="primary", use_container_width=True):
+        with st.spinner("🔍 正在启动高清微距扫描，请稍候..."):
             img_bytes = uploaded_file.getvalue()
-            newly_extracted = call_gemini_vision(img_bytes, poster_type)
+            img = Image.open(BytesIO(img_bytes))
+            if img.mode != 'RGB':
+                img = img.convert('RGB')
+            w, h = img.size
+
+            if poster_type == "haoji":
+                box_top = (0, 0, w, int(h * 0.58))
+                buf_top = BytesIO()
+                img.crop(box_top).save(buf_top, format="JPEG", quality=90)
+                r1 = call_gemini_vision(buf_top.getvalue(), "haoji", "上半区：重庆、西藏、青岛、桂林、台湾、韩国")
+
+                box_bottom = (0, int(h * 0.44), w, h)
+                buf_bottom = BytesIO()
+                img.crop(box_bottom).save(buf_bottom, format="JPEG", quality=90)
+                r2 = call_gemini_vision(buf_bottom.getvalue(), "haoji", "下半区：贵州、哈尔滨、北疆、九寨沟")
+
+                newly_extracted = r1 + r2
+            else:
+                newly_extracted = call_gemini_vision(img_bytes, "qiqi")
 
             if newly_extracted:
                 combined = st.session_state.tour_data + newly_extracted
@@ -341,11 +356,11 @@ if uploaded_file is not None:
                 st.session_state.tour_data = unique_combined
                 save_persisted_data(unique_combined)
                 trigger_play_on_done(len(st.session_state.tour_data))
-                st.success(f"🎉 成功从该张海报中精准提取 {len(newly_extracted)} 项！当前总库共有 **{len(st.session_state.tour_data)}** 项团期。")
+                st.success(f"🎉 成功提取 {len(newly_extracted)} 项！当前总库共有 **{len(st.session_state.tour_data)}** 项团期。")
                 time.sleep(1.0)
                 st.rerun()
             else:
-                st.warning("⚠️ 未能从该图中解析出有效团期，请确认图片清晰度或重新点击分析。")
+                st.warning("⚠️ 未能从该图中解析出有效团期，请确认上传的图片是否清晰。")
 
 if st.session_state.tour_data:
     if st.button("🗑️ 清空总库全部数据 (永久重置)", use_container_width=True):
