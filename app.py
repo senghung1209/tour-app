@@ -111,51 +111,51 @@ def evaluate_holiday_fit(departure_date_str, duration_days):
         pass
     return 'none', 0, ""
 
-def parse_text_robust(raw_text):
+def parse_text_robust(raw_text, default_agency="豪吉旅游"):
     items = []
     for line in raw_text.strip().splitlines():
         line = line.strip().replace("```", "")
-        if not line or line.startswith("#") or "|" not in line:
+        if not line or line.startswith("#") or "|" not in line or "旅行社" in line or "序号" in line:
             continue
         parts = [p.strip() for p in line.split("|")]
-        if len(parts) >= 6:
-            try:
-                if "SP" in parts[2].upper() or "豪吉" in parts[0] or len(parts) >= 7:
-                    price_val = int(re.sub(r'[^\d]', '', parts[6] if len(parts) > 6 else parts[5]))
-                    items.append({
-                        "agency": "豪吉旅游",
-                        "destination": parts[1] or "精选目的地",
-                        "tour_code": parts[2] or "-",
-                        "title": parts[3] or "",
-                        "departure_location": "🇸🇬 新加坡起飞 (SIN)" if "SIN" in parts[4].upper() or "新加坡" in parts[4] else "🇲🇾 马来西亚起飞 (KUL)",
-                        "departure_dates": parts[5],
-                        "price": price_val
-                    })
-                else:
-                    price_val = int(re.sub(r'[^\d]', '', parts[5]))
-                    raw_dest = parts[3].split("+")[0].split(" ")[0].strip()
-                    airline = parts[4].upper()
-                    items.append({
-                        "agency": "琦琦旅游",
-                        "destination": raw_dest if raw_dest else "精选目的地",
-                        "tour_code": f"QIQI-{parts[0]}",
-                        "title": f"{parts[2]} {parts[3]}",
-                        "departure_location": "🇸🇬 新加坡起飞 (SIN)" if "TR" in airline else "🇲🇾 马来西亚起飞 (KUL)",
-                        "departure_dates": parts[1],
-                        "price": price_val
-                    })
-            except Exception:
-                continue
+        try:
+            if len(parts) >= 7:
+                price_val = int(re.sub(r'[^\d]', '', parts[6]))
+                items.append({
+                    "agency": parts[0] if parts[0] in ["豪吉旅游", "琦琦旅游"] else default_agency,
+                    "destination": parts[1] or "精选目的地",
+                    "tour_code": parts[2] or "-",
+                    "title": parts[3] or "",
+                    "departure_location": "🇸🇬 新加坡起飞 (SIN)" if "SIN" in parts[4].upper() or "新加坡" in parts[4] else "🇲🇾 马来西亚起飞 (KUL)",
+                    "departure_dates": parts[5],
+                    "price": price_val
+                })
+            elif len(parts) >= 6:
+                price_val = int(re.sub(r'[^\d]', '', parts[5]))
+                raw_dest = parts[3].split("+")[0].split(" ")[0].strip()
+                airline = parts[4].upper()
+                items.append({
+                    "agency": "琦琦旅游",
+                    "destination": raw_dest if raw_dest else "精选目的地",
+                    "tour_code": f"QIQI-{parts[0]}",
+                    "title": f"{parts[2]} {parts[3]}",
+                    "departure_location": "🇸🇬 新加坡起飞 (SIN)" if "TR" in airline else "🇲🇾 马来西亚起飞 (KUL)",
+                    "departure_dates": parts[1],
+                    "price": price_val
+                })
+        except Exception:
+            continue
     return items
 
-def call_gemini_vision(img_bytes):
+def call_gemini_vision(img_bytes, hint_text=""):
     if not GEMINI_API_KEY:
         return []
     base64_data = base64.b64encode(img_bytes).decode('utf-8')
-    prompt = """
-    请全量提取图中的所有旅游团期信息。
-    支持豪吉旅游（格式：豪吉旅游|目的地|团号SP开头|行程路线|起飞地|出发日期|价格）或琦琦旅游表格（格式：序号|出发日期|天数|行程亮点|航空|价格）。
-    每一行以竖线 | 分隔，严禁代码块标记：
+    prompt = f"""
+    你是旅游海报解析专家。请全量提取图中的所有旅游团期。
+    {hint_text}
+    要求：并列日期或多档价格必须拆为独立行！纯文本逐行输出，竖线 | 分隔，严禁代码块标记：
+    豪吉旅游|目的地纯地名|团号(SP开头)|行程路线全称|起飞地|出发日期|纯数字价格
     """
     payload = {
         "contents": [{"parts": [{"text": prompt}, {"inline_data": {"mime_type": "image/jpeg", "data": base64_data}}]}],
@@ -176,9 +176,29 @@ uploaded_file = st.file_uploader("📷 上传单张海报图片", type=["jpg", "
 if uploaded_file is not None:
     st.image(uploaded_file, caption="已上传海报预览", width=300)
     if st.button("🚀 立即开始分析并入库", type="primary"):
-        with st.spinner("🔍 正在调用 AI 视觉深度解析中..."):
+        with st.spinner("🔍 正在采用双半区高清微距扫描中..."):
             img_bytes = uploaded_file.getvalue()
-            raw_items = call_gemini_vision(img_bytes)
+            img = Image.open(BytesIO(img_bytes))
+            if img.mode != 'RGB':
+                img = img.convert('RGB')
+            w, h = img.size
+
+            filename_upper = uploaded_file.name.upper()
+            if "QIQI" in filename_upper or h < w * 1.35:
+                raw_items = call_gemini_vision(img_bytes, "提取琦琦旅游表格 1到23项")
+            else:
+                # 豪吉海报上下切片，保证高清晰度捕捉每个小方格
+                box_top = (0, 0, w, int(h * 0.58))
+                buf_top = BytesIO()
+                img.crop(box_top).save(buf_top, format="JPEG", quality=90)
+                r1 = call_gemini_vision(buf_top.getvalue(), "提取上半区：重庆(含SP002332两档与SP002374多日期)、西藏、青岛、桂林、台湾、韩国")
+
+                box_bottom = (0, int(h * 0.44), w, h)
+                buf_bottom = BytesIO()
+                img.crop(box_bottom).save(buf_bottom, format="JPEG", quality=90)
+                r2 = call_gemini_vision(buf_bottom.getvalue(), "提取下半区：贵州、哈尔滨、北疆、九寨沟")
+
+                raw_items = r1 + r2
             
             newly_extracted = []
             for item in raw_items:
@@ -221,11 +241,11 @@ if uploaded_file is not None:
                 </script>
                 """
                 components.html(success_js, height=0)
-                st.success(f"🎉 成功提取并入库！当前总库共有 **{len(st.session_state.tour_data)}** 项团期。")
+                st.success(f"🎉 成功提取 {len(newly_extracted)} 项！总库共有 **{len(st.session_state.tour_data)}** 项团期。")
                 time.sleep(1)
                 st.rerun()
             else:
-                st.warning("⚠️ 未能从图中解析出有效团期，请检查图片或重新上传。")
+                st.warning("⚠️ 未能解析出有效团期，请确认上传的是豪吉或琦琦的标准海报图片。")
 
 if st.session_state.tour_data:
     if st.button("🗑️ 清空总库数据"):
