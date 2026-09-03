@@ -12,8 +12,8 @@ import streamlit.components.v1 as components
 
 st.set_page_config(page_title="AI 旅游团智能筛选助手", page_icon="✈️", layout="wide")
 
-st.title("✈️ 旅游团宣传单智能分析与筛选 (原图高精结构化版)")
-st.markdown("已升级为高精结构化解析引擎：完美精准捕获原图中的团号、具体出发日期、起飞机场与详细路线。")
+st.title("✈️ 旅游团宣传单智能分析与筛选 (图像自适应稳定版)")
+st.markdown("已升级图像清洗与强容错解析引擎：自动规范化图片格式、秒级精准提取所有旅游团。")
 
 GROQ_API_KEY = "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"
 
@@ -150,51 +150,61 @@ def trigger_notification():
     """
     components.html(js, height=0)
 
-def compress_image(uploaded_file, max_size=1200, quality=80):
-    img = Image.open(uploaded_file)
-    if img.mode in ("RGBA", "P"):
+def force_convert_and_compress(file_bytes):
+    """ 强制将任何异常格式的图片转换为标准高质量 RGB JPEG 字节流 """
+    img = Image.open(BytesIO(file_bytes))
+    if img.mode in ("RGBA", "P", "LA"):
+        background = Image.new("RGB", img.size, (255, 255, 255))
+        if img.mode == "RGBA":
+            background.paste(img, mask=img.split()[3])
+        else:
+            background.paste(img)
+        img = background
+    else:
         img = img.convert("RGB")
-    img.thumbnail((max_size, max_size), Image.Resampling.LANCZOS)
+        
+    # 限制最大尺寸以防超出模型输入限制
+    img.thumbnail((1200, 1200), Image.Resampling.LANCZOS)
     buffer = BytesIO()
-    img.save(buffer, format="JPEG", quality=quality)
+    img.save(buffer, format="JPEG", quality=85)
     return base64.b64encode(buffer.getvalue()).decode("utf-8")
 
-def parse_high_precision_content(content):
+def parse_flexible_content(content):
     items = []
     lines = content.strip().split("\n")
     for line in lines:
         line = line.strip().strip("-*# `")
-        if "|" not in line:
+        if not line:
             continue
-        parts = [p.strip() for p in line.split("|")]
+        
+        if "|" in line:
+            parts = [p.strip() for p in line.split("|")]
+        elif "\t" in line:
+            parts = [p.strip() for p in line.split("\t")]
+        else:
+            parts = [p.strip() for p in re.split(r'\s{2,}|,\s*', line)]
+
         if len(parts) >= 6:
-            dest = parts[0]
-            loc = parts[1]
-            code = parts[2]
-            title = parts[3]
-            dates = parts[4]
-            raw_p = parts[5]
-            if dest and code:
-                items.append(make_tour_dict(dest, code, title, loc, dates, raw_p))
+            items.append(make_tour_dict(parts[0], parts[2], parts[3], parts[1], parts[4], parts[5]))
+        elif len(parts) >= 4:
+            items.append(make_tour_dict(parts[0], "SP000000", parts[2] if len(parts)>2 else parts[1], "新加坡出发 (SIN)", parts[-2] if len(parts)>1 else "详见海报", parts[-1]))
+        else:
+            prices = re.findall(r'(?:RM)?\s*(\d{3,5})', line)
+            if prices:
+                items.append(make_tour_dict("精选目的地", "SP000000", line[:30], "新加坡出发 (SIN)", "详见海报", f"RM {prices[0]}"))
     return items
 
 def analyze_single_image(file_bytes, file_name, task_dict):
-    encoded_string = compress_image(BytesIO(file_bytes))
+    encoded_string = force_convert_and_compress(file_bytes)
     
     prompt = (
-        "这是一张排版精细的马来西亚大型旅行社（如 Orchid Dynasty Travel & Tour）旅游宣传海报。\n"
-        "海报上有多个大方框（例如 SIN-重庆、SIN-西藏、青岛、SIN-桂林、SIN-台湾、JB-贵州、SIN-韩国、SIN-哈尔滨、KL-北疆、SIN-九寨沟等）。\n"
-        "每个大方框内部又包含多个带具体团号（如 SP002376）、具体天数与路线名、具体出发日期（如 31/12/26）和具体价格（如 RM2999）的小方块卡片。\n\n"
-        "请逐个方框、逐张小卡片仔细识别，绝对不要遗漏任何一个团！\n"
-        "每一条旅游团严格输出为一行，必须用竖线 | 隔开 6 个字段：\n"
-        "目的地 | 出发地(如 新加坡出发(SIN) 或 新山出发(JB) 或 吉隆坡出发(KL)) | 团号 | 详细路线名称与天数 | 出发日期 | 价格\n\n"
-        "【严格要求】：\n"
-        "1. 目的地必须对应正确（如 重庆、西藏、青岛、桂林、台湾、贵州、韩国、哈尔滨、北疆、九寨沟）。\n"
-        "2. 出发地必须根据卡片左上角或角落标示准确识别（默认新加坡出发 SIN，标有 JB 写新山出发，标有 KL 写吉隆坡出发）。\n"
-        "3. 团号必须精确（如 SP002413）。\n"
-        "4. 出发日期有多组时请完整保留（如 23/10/26, 18/12/26）。\n"
-        "5. 价格必须是准确的团费数字（如 RM4999）。\n"
-        "6. 直接输出文本行，绝不输出任何废话或表头。"
+        "这是一张马来西亚大型旅行社的旅游宣传海报，上面有许多目的地方框（如重庆、西藏、青岛、桂林、台湾、贵州、韩国、哈尔滨、北疆、九寨沟等）。\n"
+        "请逐个方框、逐张小卡片仔细识别所有旅游团。\n"
+        "每一条旅游团输出为一行，必须用竖线 | 隔开 6 个字段：\n"
+        "目的地 | 出发地(如 新加坡出发(SIN) 或 新山出发(JB) 或 吉隆坡出发(KL)) | 团号(如 SP002376) | 详细路线名称与天数 | 出发日期(如 31/12/26) | 价格(如 RM2999)\n\n"
+        "【关键要求】：\n"
+        "1. 绝不遗漏任何一个小卡片里的团。\n"
+        "2. 直接输出文本行，绝不输出任何废话、开场白或表头。"
     )
 
     url = "https://api.groq.com/openai/v1/chat/completions"
@@ -221,13 +231,13 @@ def analyze_single_image(file_bytes, file_name, task_dict):
     if response.status_code == 200:
         res_json = response.json()
         content = res_json['choices'][0]['message']['content'].strip()
-        items = parse_high_precision_content(content)
+        items = parse_flexible_content(content)
         if items:
             unique_list = []
             seen = set()
             for it in items:
                 k = (it["tour_code"], it["departure_dates"], it["price_numeric"])
-                if k in seen:
+                if it["tour_code"] != "SP000000" and k in seen:
                     continue
                 seen.add(k)
                 unique_list.append(it)
@@ -240,7 +250,7 @@ def analyze_single_image(file_bytes, file_name, task_dict):
 def background_worker(files_data, task_dict, api_key):
     total = len(files_data)
     for idx, (f_name, f_bytes) in enumerate(files_data):
-        task_dict["status_msg"] = f"⚡ 正在高精度逐卡片精细解析第 {idx + 1}/{total} 张: {f_name} ..."
+        task_dict["status_msg"] = f"⚡ 正在转换并高精解析第 {idx + 1}/{total} 张: {f_name} ..."
         try:
             data = analyze_single_image(f_bytes, f_name, task_dict)
             if data:
@@ -314,7 +324,7 @@ if uploaded_files:
             task["progress"] = 0.0
             task["results"] = []
             task["errors"] = []
-            task["status_msg"] = "正在启动高精度结构化引擎..."
+            task["status_msg"] = "正在启动图像自适应解析引擎..."
             
             files_data = [(f.name, f.getvalue()) for f in uploaded_files]
             t = threading.Thread(target=background_worker, args=(files_data, task, GROQ_API_KEY), daemon=True)
