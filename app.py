@@ -142,7 +142,7 @@ def trigger_notification():
             if ("Notification" in window && Notification.permission === "granted") {
                 new Notification("✈️ 旅游团分析已全部完成！", {
                     body: "海报数据已完整提取，请切回网页查看结果。",
-                    icon: "[https://fav.farm/](https://fav.farm/)✈️"
+                    icon: "https://fav.farm/✈️"
                 });
             }
         } catch(e) {}
@@ -170,7 +170,6 @@ def force_convert_and_compress(file_bytes):
 
 def robust_parse_content(content):
     items = []
-    # 1. 尝试作为 JSON 解析
     cleaned_content = re.sub(r'```json|```', '', content).strip()
     try:
         data_list = json.loads(cleaned_content)
@@ -189,11 +188,9 @@ def robust_parse_content(content):
     except Exception:
         pass
 
-    # 2. 如果 JSON 失败，尝试正则提取所有 JSON 对象
     try:
         matches = re.findall(r'\{([^}]+)\}', cleaned_content)
         for m in matches:
-            # 简单粗暴从花括号内容中拿键值
             d_match = re.search(r'"destination"\s*:\s*"([^"]+)"', m)
             c_match = re.search(r'"tour_code"\s*:\s*"([^"]+)"', m)
             t_match = re.search(r'"title"\s*:\s*"([^"]+)"', m)
@@ -215,7 +212,6 @@ def robust_parse_content(content):
     except Exception:
         pass
 
-    # 3. 兜底：按行用竖线 | 或逗号切分
     lines = content.strip().split("\n")
     for line in lines:
         line = line.strip().strip("-*# `")
@@ -245,9 +241,10 @@ def analyze_single_image(file_bytes, file_name, task_dict):
         "]"
     )
 
-    url = "[https://api.groq.com/openai/v1/chat/completions](https://api.groq.com/openai/v1/chat/completions)"
+    # 确保 URL 干净无任何隐藏字符
+    url = "https://api.groq.com/openai/v1/chat/completions"
     headers = {
-        "Authorization": f"Bearer {GROQ_API_KEY}",
+        "Authorization": f"Bearer {GROQ_API_KEY.strip()}",
         "Content-Type": "application/json"
     }
 
