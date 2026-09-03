@@ -12,8 +12,8 @@ import streamlit.components.v1 as components
 
 st.set_page_config(page_title="AI 旅游团智能筛选助手", page_icon="✈️", layout="wide")
 
-st.title("✈️ 旅游团宣传单智能分析与筛选 (图像自适应稳定版)")
-st.markdown("已升级图像清洗与强容错解析引擎：自动规范化图片格式、秒级精准提取所有旅游团。")
+st.title("✈️ 旅游团宣传单智能分析与筛选 (Groq 多模型高可用版)")
+st.markdown("已接入 Groq 视觉多模态引擎：支持模型自动降级切换、图像自适应清洗与 2026 学校假期智能匹配。")
 
 GROQ_API_KEY = "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"
 
@@ -151,7 +151,6 @@ def trigger_notification():
     components.html(js, height=0)
 
 def force_convert_and_compress(file_bytes):
-    """ 强制将任何异常格式的图片转换为标准高质量 RGB JPEG 字节流 """
     img = Image.open(BytesIO(file_bytes))
     if img.mode in ("RGBA", "P", "LA"):
         background = Image.new("RGB", img.size, (255, 255, 255))
@@ -163,7 +162,6 @@ def force_convert_and_compress(file_bytes):
     else:
         img = img.convert("RGB")
         
-    # 限制最大尺寸以防超出模型输入限制
     img.thumbnail((1200, 1200), Image.Resampling.LANCZOS)
     buffer = BytesIO()
     img.save(buffer, format="JPEG", quality=85)
@@ -212,40 +210,57 @@ def analyze_single_image(file_bytes, file_name, task_dict):
         "Authorization": f"Bearer {GROQ_API_KEY}",
         "Content-Type": "application/json"
     }
-    payload = {
-        "model": "qwen/qwen3.6-27b",
-        "messages": [
-            {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": prompt},
-                    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{encoded_string}"}}
-                ]
-            }
-        ],
-        "temperature": 0.1,
-        "max_tokens": 4096
-    }
-    
-    response = requests.post(url, headers=headers, json=payload, timeout=90)
-    if response.status_code == 200:
-        res_json = response.json()
-        content = res_json['choices'][0]['message']['content'].strip()
-        items = parse_flexible_content(content)
-        if items:
-            unique_list = []
-            seen = set()
-            for it in items:
-                k = (it["tour_code"], it["departure_dates"], it["price_numeric"])
-                if it["tour_code"] != "SP000000" and k in seen:
-                    continue
-                seen.add(k)
-                unique_list.append(it)
-            return unique_list
-    else:
-        raise Exception(f"Groq API 报错 ({response.status_code}): {response.text}")
 
-    raise Exception("未能成功解析出详细旅游团行")
+    # 使用 Groq 官方视觉模型列表进行自动轮换和回退
+    vision_models = [
+        "llama-3.2-11b-vision-preview",
+        "llama-3.2-90b-vision-preview"
+    ]
+
+    last_err = ""
+    for model_name in vision_models:
+        payload = {
+            "model": model_name,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": prompt},
+                        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{encoded_string}"}}
+                    ]
+                }
+            ],
+            "temperature": 0.1,
+            "max_tokens": 4096
+        }
+        
+        try:
+            response = requests.post(url, headers=headers, json=payload, timeout=60)
+            if response.status_code == 200:
+                res_json = response.json()
+                content = res_json['choices'][0]['message']['content'].strip()
+                items = parse_flexible_content(content)
+                if items:
+                    unique_list = []
+                    seen = set()
+                    for it in items:
+                        k = (it["tour_code"], it["departure_dates"], it["price_numeric"])
+                        if it["tour_code"] != "SP000000" and k in seen:
+                            continue
+                        seen.add(k)
+                        unique_list.append(it)
+                    return unique_list
+            elif response.status_code == 429:
+                # 触发频控或限额时自动尝试下一个备用模型
+                time.sleep(2)
+                continue
+            else:
+                last_err = f"模型 {model_name} 报错 ({response.status_code}): {response.text}"
+        except Exception as e:
+            last_err = str(e)
+            continue
+
+    raise Exception(last_err if last_err else "未能成功解析出详细旅游团行")
 
 def background_worker(files_data, task_dict, api_key):
     total = len(files_data)
@@ -324,7 +339,7 @@ if uploaded_files:
             task["progress"] = 0.0
             task["results"] = []
             task["errors"] = []
-            task["status_msg"] = "正在启动图像自适应解析引擎..."
+            task["status_msg"] = "正在启动多模型视觉引擎..."
             
             files_data = [(f.name, f.getvalue()) for f in uploaded_files]
             t = threading.Thread(target=background_worker, args=(files_data, task, GROQ_API_KEY), daemon=True)
