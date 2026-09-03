@@ -188,4 +188,23 @@ def generate_comparison_image(df):
     w = 1020
     rh = 42
     hh = 75
-    h = hh + (len(df) + 1) * rh +
+    h = hh + (len(df) + 1) * rh + 35
+    img = Image.new("RGB", (w, max(h, 220)), color=(255, 255, 255))
+    draw = ImageDraw.Draw(img)
+
+    f_head = get_chinese_font(20)
+    f_col = get_chinese_font(15)
+    f_body = get_chinese_font(14)
+    f_price = get_chinese_font(15)
+
+    draw.rectangle([0, 0, w, hh], fill=(30, 41, 59))
+    draw.text((30, 24), f"跨旅行社旅游团比价清单 (精选有效团期 {len(df)} 项)", fill=(255, 255, 255), font=f_head)
+
+    y = hh + 10
+    draw.rectangle([20, y, w - 20, y + 34], fill=(241, 245, 249))
+    cols = [("旅行社", 35), ("目的地", 160), ("团号", 250), ("起飞地", 360), ("出发日期", 500), ("团费价格", 620), ("行程路线", 740)]
+    for name, x in cols:
+        draw.text((x, y + 7), name, fill=(71, 85, 105), font=f_col)
+
+    y += 40
+    for idx, r in
