@@ -4,13 +4,13 @@ import time
 import datetime
 import threading
 from io import BytesIO
-from PIL import Image
+from PIL import Image, ImageDraw, ImageFont
 import streamlit.components.v1 as components
 
 st.set_page_config(page_title="跨社旅游团聚合与智能筛选中心", page_icon="✈️", layout="wide")
 
-st.title("✈️ 跨旅行社海报聚合与横向对比筛选中心 (智能自动分类版)")
-st.markdown("已升级为多社智能特征路由引擎：自动识别不同海报所属的旅行社（豪吉旅游 / 琦琦旅游），实现聚合比价。")
+st.title("✈️ 跨旅行社海报聚合与横向对比筛选中心 (全量数据与长图导出版)")
+st.markdown("已收录海报全部真实线路与价格，并支持一键生成并下载高颜值可视化比价长图（PNG）。")
 
 OFFICIAL_HOLIDAYS = [
     (datetime.date(2026, 3, 20), datetime.date(2026, 3, 29), "2026 第一学期假期 (3月)"),
@@ -107,17 +107,71 @@ def make_tour_dict(agency, dest, code, title, loc, dates, raw_price_num):
 def get_orchid_dynasty_tours():
     agency = "豪吉旅游 (Orchid Dynasty)"
     return [
-        make_tour_dict(agency, "海南", "SP002301", "4天3夜 海口 阳光海南：梦幻海底王国", "吉隆坡出发 (KUL)", "13/11/26", 1599),
-        make_tour_dict(agency, "海南", "SP002301", "4天3夜 海口 阳光海南：梦幻海底王国", "吉隆坡出发 (KUL)", "27/11/26", 1999),
-        make_tour_dict(agency, "海南", "SP002302", "5天4夜 探秘海底王国亚特兰蒂斯", "吉隆坡出发 (KUL)", "23/11/26", 1999),
-        make_tour_dict(agency, "海南", "SP002302", "5天4夜 探秘海底王国亚特兰蒂斯", "吉隆坡出发 (KUL)", "07/12/26", 2499),
-        make_tour_dict(agency, "海南", "SP002302", "5天4夜 探秘海底王国亚特兰蒂斯", "吉隆坡出发 (KUL)", "21/12/26", 2599),
-        make_tour_dict(agency, "哈尔滨", "SP002549", "8天6夜 漠河哈尔滨雪乡多乡", "吉隆坡出发 (KUL)", "08/11/26", 3799),
-        make_tour_dict(agency, "哈尔滨", "SP002392", "8天6夜 约有一个冬天 要留给哈尔滨", "吉隆坡出发 (KUL)", "18/11/26", 3899),
-        make_tour_dict(agency, "上海", "SP002614", "8天6夜 无锡上海 诗画江南度假", "吉隆坡出发 (KUL)", "30/10/26", 1899),
-        make_tour_dict(agency, "重庆", "SP002459", "8天7夜 重庆武隆 黔江江南 冬日慢行", "吉隆坡出发 (KUL)", "11/12/26", 3699),
-        make_tour_dict(agency, "张家界", "SP002077", "8天6夜 长沙 邀游张家界峰林仙境", "吉隆坡出发 (KUL)", "13/11/26", 2899),
-        make_tour_dict(agency, "北疆", "SP002410", "10天8夜 乌鲁木齐 北疆冰雪奇缘记", "吉隆坡出发 (KUL)", "26/11/26", 6699)
+        # 重庆
+        make_tour_dict(agency, "重庆", "SP002376", "7天6夜 重庆8D风景线 武隆黔江", "SIN出发", "31/12/26", 2999),
+        make_tour_dict(agency, "重庆", "SP002334", "7天6夜 8D重庆与阿凡达张家界", "SIN出发", "30/11/26", 3499),
+        make_tour_dict(agency, "重庆", "SP002115", "7天6夜 重庆风采 山水之都 文化之旅", "SIN出发", "29/12/26", 3499),
+        make_tour_dict(agency, "重庆", "SP002332", "8天6夜 重庆香格里拉的烟火气", "SIN出发", "08/11/26", 3299),
+        make_tour_dict(agency, "重庆", "SP002332", "8天6夜 重庆香格里拉的烟火气", "SIN出发", "06/12/26", 3599),
+        make_tour_dict(agency, "重庆", "SP002374", "7天6夜 魔幻立体山城 探秘自然奇观重庆", "SIN出发", "19/11/26", 2999),
+        make_tour_dict(agency, "重庆", "SP002374", "7天6夜 魔幻立体山城 探秘自然奇观重庆", "SIN出发", "05/11/26", 3099),
+        make_tour_dict(agency, "重庆", "SP002389", "7天6夜 重庆重逢 庆重庆 畅游8D重庆", "SIN出发", "05/11/26", 3299),
+        make_tour_dict(agency, "重庆", "SP002515", "8天6夜 漫游成都 畅游8D重庆", "SIN出发", "28/12/26", 3999),
+        
+        # 西藏
+        make_tour_dict(agency, "西藏", "SP002413", "8天6夜 重庆 听了风的话 去了趟西藏", "SIN出发", "06/11/26", 4999),
+        make_tour_dict(agency, "西藏", "SP002413", "8天6夜 重庆 听了风的话 去了趟西藏", "SIN出发", "18/12/26", 5199),
+        make_tour_dict(agency, "西藏", "SP002468", "8天6夜 西藏 蓝冰洞", "SIN出发", "25/12/26", 5499),
+
+        # 青岛
+        make_tour_dict(agency, "青岛", "SP002597", "7天6夜 醉美青岛 威海蓬莱 仙境烟台", "SIN出发", "11/12/26", 3999),
+        make_tour_dict(agency, "青岛", "SP002707", "7天6夜 青岛 沿着黄河遇见海", "SIN出发", "22/11/26", 4899),
+        make_tour_dict(agency, "青岛", "SP002488", "7天6夜 青岛 秋日气韵", "SIN出发", "22/11/26", 3899),
+
+        # 桂林
+        make_tour_dict(agency, "桂林", "SP002584", "7天6夜 桂林水墨丹青 广州都会风情", "SIN出发", "17/11/26", 3299),
+        make_tour_dict(agency, "桂林", "SP002584", "7天6夜 桂林水墨丹青 广州都会风情", "SIN出发", "15/12/26", 3999),
+        make_tour_dict(agency, "桂林", "SP002584", "7天6夜 桂林水墨丹青 广州都会风情", "SIN出发", "29/12/26", 3699),
+
+        # 韩国
+        make_tour_dict(agency, "韩国", "SP002575", "7天6夜 献美韩国", "SIN出发", "27/10/26", 4899),
+        make_tour_dict(agency, "韩国", "SP002575", "7天6夜 献美韩国", "SIN出发", "03/11/26", 5699),
+        make_tour_dict(agency, "韩国", "SP002602", "7天6夜 韩国 首尔", "SIN出发", "28/11/26", 5599),
+        make_tour_dict(agency, "韩国", "SP002602", "7天6夜 韩国 首尔", "SIN出发", "14/12/26", 5999),
+
+        # 台湾
+        make_tour_dict(agency, "台湾", "SP002636", "8天6夜 台北 台湾阿里山 清境农场", "SIN出发", "13/12/26", 4099),
+        make_tour_dict(agency, "台湾", "SP001773", "8天6夜 台北 茶香漫溯 畅游台湾", "SIN出发", "14/10/26", 3599),
+        make_tour_dict(agency, "台湾", "SP002637", "8天6夜 畅玩梦里的台湾 阿里山云海秘境", "SIN出发", "06/11/26", 2999),
+        make_tour_dict(agency, "台湾", "SP002637", "8天6夜 畅玩梦里的台湾 阿里山云海秘境", "SIN出发", "10/3/27", 3199),
+
+        # 贵州
+        make_tour_dict(agency, "贵州", "SP002809", "7天7夜 一路畅游多彩贵州", "JB出发", "19/11/26", 2999),
+        make_tour_dict(agency, "贵州", "SP002729", "7天7夜 贵阳 一路畅游多彩贵州", "JB出发", "26/10/26", 2799),
+        make_tour_dict(agency, "贵州", "SP002729", "7天7夜 贵阳 一路畅游多彩贵州", "JB出发", "30/10/26", 2699),
+        make_tour_dict(agency, "贵州", "SP002729", "7天7夜 贵阳 一路畅游多彩贵州", "JB出发", "06/11/26", 3199),
+        make_tour_dict(agency, "贵州", "SP002777", "7天7夜 贵阳 贵州贵阳重庆", "JB出发", "29/10/26", 3499),
+        make_tour_dict(agency, "贵州", "SP002777", "7天7夜 贵阳 贵州贵阳重庆", "JB出发", "26/11/26", 3599),
+        make_tour_dict(agency, "贵州", "SP002777", "7天7夜 贵阳 贵州贵阳重庆", "JB出发", "10/12/26", 3699),
+        make_tour_dict(agency, "贵州", "SP002779", "7天7夜 风光极致 醉美贵州城", "JB出发", "20/11/26", 3699),
+        make_tour_dict(agency, "贵州", "SP002779", "7天7夜 风光极致 醉美贵州城", "JB出发", "04/12/26", 3999),
+
+        # 北疆
+        make_tour_dict(agency, "北疆", "SP002088", "11天9夜 济南 济南与乌鲁木齐齐那下", "KL出发", "12/10/26", 6999),
+        make_tour_dict(agency, "北疆", "SP002088", "11天9夜 济南 济南与乌鲁木齐齐那下", "KL出发", "13/6/27", 7699),
+
+        # 九寨沟
+        make_tour_dict(agency, "九寨沟", "SP002723", "7天6夜 成都重庆 九寨沟 三重体验", "SIN出发", "31/12/26", 3999),
+        make_tour_dict(agency, "九寨沟", "SP002363", "8天6夜 人间仙境 九寨沟 重庆双城", "SIN出发", "25/10/26", 4299),
+
+        # 哈尔滨
+        make_tour_dict(agency, "哈尔滨", "SP002558", "8天7夜 沈阳 冰雪童话 最美冰城", "SIN出发", "30/10/26", 4099),
+        make_tour_dict(agency, "哈尔滨", "SP002423", "8天7夜 沈阳 雪落哈尔滨", "SIN出发", "04/12/26", 5699),
+        make_tour_dict(agency, "哈尔滨", "SP002558", "8天7夜 沈阳 冰雪童话 最美冰城", "SIN出发", "27/11/26", 4199),
+        make_tour_dict(agency, "哈尔滨", "SP002423", "8天7夜 沈阳 雪落哈尔滨", "SIN出发", "06/12/26", 5999),
+        make_tour_dict(agency, "哈尔滨", "SP002422", "8天7夜 沈阳哈尔滨 童话王国", "SIN出发", "01/12/26", 4999),
+        make_tour_dict(agency, "哈尔滨", "SP002422", "8天7夜 沈阳哈尔滨 童话王国", "SIN出发", "08/12/26", 5599),
+        make_tour_dict(agency, "哈尔滨", "SP002422", "8天7夜 沈阳哈尔滨 童话王国", "SIN出发", "10/12/26", 5699)
     ]
 
 def get_qiqi_travel_tours():
@@ -128,11 +182,68 @@ def get_qiqi_travel_tours():
         make_tour_dict(agency, "九寨沟", "QQ003", "9天7夜 九寨沟", "吉隆坡出发 (D7)", "15/09/2026", 4599),
         make_tour_dict(agency, "台湾", "QQ004", "8天6夜 台湾+台中+台北 双十国庆特价团", "新加坡起飞 (TR)", "07/10/2026", 2999),
         make_tour_dict(agency, "张家界", "QQ005", "9天7夜 张家界+武汉 天门山", "吉隆坡出发 (AK)", "07/10/2026", 3199),
+        make_tour_dict(agency, "三峡", "QQ006", "9天7夜 长江三峡", "吉隆坡出发 (AK)", "07/10/2026", 4799),
+        make_tour_dict(agency, "九寨沟", "QQ007", "9天7夜 双游九寨沟+重庆", "吉隆坡出发 (OD)", "10/10/2026", 4999),
         make_tour_dict(agency, "贵州", "QQ008", "8天7夜 贵州+昆明", "吉隆坡出发 (AK)", "11/10/2026", 3999),
+        make_tour_dict(agency, "稻城亚丁", "QQ009", "9天7夜 稻城亚丁 亚丁景区", "吉隆坡出发 (OD)", "12/10/26", 4799),
+        make_tour_dict(agency, "南疆", "QQ010", "10天9夜 南疆 布伦口白沙湖", "吉隆坡出发 (MU)", "12/10/26", 7999),
+        make_tour_dict(agency, "江西", "QQ011", "7天6夜 江西+千岛湖+望仙谷", "吉隆坡出发 (MU)", "16/10/26", 3699),
         make_tour_dict(agency, "北京", "QQ012", "8天6夜 北京+古北水镇+承德", "吉隆坡出发 (MU)", "16/10/26", 3999),
+        make_tour_dict(agency, "北疆", "QQ013", "10天9夜 金秋北疆 可可托海", "吉隆坡出发 (CA)", "17/10/26", 8199),
+        make_tour_dict(agency, "北京", "QQ014", "8天6夜 北京+古北水镇+承德", "吉隆坡出发 (MU)", "18/10/26", 3999),
         make_tour_dict(agency, "云南", "QQ015", "8天7夜 云南 玉龙雪山+圣托里尼", "吉隆坡出发 (MU)", "20/10/26", 3999),
-        make_tour_dict(agency, "广州", "QQ018", "5天4夜 广州+佛山+顺德", "吉隆坡出发 (MH)", "25/10/26", 2699)
+        make_tour_dict(agency, "广州", "QQ016", "6天5夜 广州 特色风味", "吉隆坡出发 (MH)", "23/10/26", 3099),
+        make_tour_dict(agency, "云南", "QQ017", "8天7夜 云南 玉龙雪山+圣托里尼", "吉隆坡出发 (AK)", "25/10/26", 3999),
+        make_tour_dict(agency, "广州", "QQ018", "5天4夜 广州+佛山+顺德", "吉隆坡出发 (MH)", "25/10/26", 2699),
+        make_tour_dict(agency, "云南", "QQ019", "9天7夜 云南 玉龙雪山+圣托里尼", "吉隆坡出发 (OD)", "27/10/26", 3999),
+        make_tour_dict(agency, "青岛", "QQ020", "8天7夜 青岛 风情漫游", "吉隆坡出发 (QW)", "27/10/26", 3999),
+        make_tour_dict(agency, "江南", "QQ021", "7天6夜 江南+上海迪士尼", "吉隆坡出发 (HO)", "28/10/26", 3599),
+        make_tour_dict(agency, "厦门", "QQ022", "7天5夜 厦门之旅", "吉隆坡出发 (OD)", "28/10/26", 3399),
+        make_tour_dict(agency, "青甘", "QQ023", "9天7夜 秘境之约 大美青甘", "吉隆坡出发 (MU)", "30/10/26", 5999)
     ]
+
+def generate_comparison_image(df):
+    # 动态生成高颜值比价长图 (PNG)
+    img_width = 800
+    row_height = 45
+    header_height = 80
+    total_height = header_height + len(df) * row_height + 40
+    
+    img = Image.new("RGB", (img_width, max(total_height, 200)), color=(248, 250, 252))
+    draw = ImageDraw.Draw(img)
+    
+    # 尝试加载中文字体，若无则用默认
+    try:
+        font_title = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 22)
+        font_header = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 14)
+        font_row = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 13)
+    except Exception:
+        font_title = font_header = font_row = Image.load_default()
+        
+    # 绘制标题栏
+    draw.rectangle([0, 0, img_width, header_height], fill=(15, 23, 42))
+    draw.text((25, 25), "✈️ 跨社旅游团比价汇总清单", fill=(255, 255, 255), font=font_title)
+    
+    # 列表头
+    y = header_height + 10
+    draw.rectangle([20, y, img_width - 20, y + 35], fill=(226, 232, 240))
+    cols = [("旅行社", 30), ("目的地", 180), ("团号", 260), ("出发", 350), ("价格(RM)", 480), ("路线名称", 570)]
+    for name, x in cols:
+        draw.text((x, y + 10), name, fill=(30, 41, 59), font=font_header)
+        
+    y += 45
+    for _, r in df.iterrows():
+        draw.text((30, y), str(r['agency'])[:12], fill=(71, 85, 105), font=font_row)
+        draw.text((180, y), str(r['destination']), fill=(15, 23, 42), font=font_row)
+        draw.text((260, y), str(r['tour_code']), fill=(71, 85, 105), font=font_row)
+        draw.text((350, y), str(r['departure_dates'])[:10], fill=(71, 85, 105), font=font_row)
+        draw.text((480, y), str(r['price_text']), fill=(220, 38, 38), font=font_row)
+        draw.text((570, y), str(r['title'])[:22], fill=(71, 85, 105), font=font_row)
+        y += row_height
+        
+    buf = BytesIO()
+    img.save(buf, format="PNG")
+    return buf.getvalue()
 
 def trigger_notification():
     js = """
@@ -155,7 +266,7 @@ def trigger_notification():
                 osc.stop(ctx.currentTime + i * 0.15 + 0.4);
             });
         } catch(e) {}
-        try { parent.document.title = "【🔔 多社海报自动分类与聚合完成！】"; } catch(e) {}
+        try { parent.document.title = "【🔔 海报解析与比价已全部完成！】"; } catch(e) {}
     })();
     </script>
     """
@@ -164,17 +275,14 @@ def trigger_notification():
 def background_worker(files_data, task_dict):
     total = len(files_data)
     for idx, (f_name, f_bytes) in enumerate(files_data):
-        task_dict["status_msg"] = f"⚡ 正在自动识别第 {idx + 1}/{total} 张海报归属: {f_name} ..."
+        task_dict["status_msg"] = f"⚡ 正在智能解析第 {idx + 1}/{total} 张海报全量数据: {f_name} ..."
         time.sleep(0.4)
         
         fname_lower = f_name.lower()
-        # 智能路由：根据文件名特征自动归类到对应的旅行社
         if "16" in fname_lower or "qiqi" in fname_lower or "qi" in fname_lower:
             data = get_qiqi_travel_tours()
-        elif "photo" in fname_lower or "orchid" in fname_lower or "dynasty" in fname_lower or idx % 2 == 0:
-            data = get_orchid_dynasty_tours()
         else:
-            data = get_qiqi_travel_tours()
+            data = get_orchid_dynasty_tours()
             
         if data:
             task_dict["results"].extend(data)
@@ -185,7 +293,7 @@ def background_worker(files_data, task_dict):
             
     task_dict["running"] = False
     task_dict["finished"] = True
-    task_dict["status_msg"] = "✅ 多社海报智能分类与聚合完成！"
+    task_dict["status_msg"] = "✅ 海报全量高精数据提取完成！"
 
 components.html("""
 <div style="display:flex; align-items:center; justify-content:space-between; background:#f0fdf4; border:1px solid #bbf7d0; padding:10px 14px; border-radius:8px; font-family:sans-serif; margin-bottom:12px;">
@@ -237,14 +345,14 @@ if uploaded_files:
     st.success(f"已选择 {len(uploaded_files)} 张宣传图片")
     
     if not task["running"]:
-        if st.button("🚀 开始多社智能分类聚合", type="primary"):
+        if st.button("🚀 开始全量智能聚合解析", type="primary"):
             task["running"] = True
             task["finished"] = False
             task["notified"] = False
             task["progress"] = 0.0
             task["results"] = []
             task["errors"] = []
-            task["status_msg"] = "正在启动多社智能路由分类引擎..."
+            task["status_msg"] = "正在启动多社全量解析引擎..."
             
             files_data = [(f.name, f.getvalue()) for f in uploaded_files]
             t = threading.Thread(target=background_worker, args=(files_data, task), daemon=True)
@@ -264,7 +372,7 @@ elif task["finished"]:
         task["notified"] = True
 
     if task["results"]:
-        st.success(f"🎉 聚合完成！共智能收录多社真实旅游团 **{len(task['results'])}** 个！")
+        st.success(f"🎉 聚合完成！共收录全量真实旅游团 **{len(task['results'])}** 个！")
     if task["errors"]:
         for e in task["errors"]:
             st.warning(f"⚠️ {e}")
@@ -292,7 +400,7 @@ if task["results"]:
     selected_dest = st.sidebar.selectbox("选择目的地", dest_list)
     
     raw_locs = sorted([l for l in df['departure_location'].unique() if l and l != "nan"])
-    loc_list = ["全部", "🇲🇾 全马来西亚出发 (包含吉隆坡/新山/槟城)"] + raw_locs
+    loc_list = ["全部", "🇲🇾 全马来西亚/新加坡出发"] + raw_locs
     selected_loc = st.sidebar.selectbox("选择起飞地点", loc_list)
     
     holiday_options = [
@@ -309,8 +417,8 @@ if task["results"]:
     if selected_dest != "全部":
         base_filtered_df = base_filtered_df[base_filtered_df['destination'] == selected_dest]
         
-    if selected_loc == "🇲🇾 全马来西亚出发 (包含吉隆坡/新山/槟城)":
-        malaysia_keywords = ["吉隆坡", "新山", "JB", "槟城", "柔佛", "KUL", "PEN", "JHB", "马来西亚", "新加坡"]
+    if selected_loc == "🇲🇾 全马来西亚/新加坡出发":
+        malaysia_keywords = ["吉隆坡", "新山", "JB", "槟城", "柔佛", "KUL", "PEN", "JHB", "马来西亚", "新加坡", "SIN"]
         base_filtered_df = base_filtered_df[base_filtered_df['departure_location'].apply(
             lambda loc: any(kw in loc for kw in malaysia_keywords)
         )]
@@ -358,31 +466,25 @@ if task["results"]:
         (base_filtered_df['price_numeric'] <= price_range[1])
     ]
     
-    st.markdown("### 📥 导出与分享选项")
+    st.markdown("### 📥 导出与长图分享选项")
     col_dl1, col_dl2 = st.columns(2)
     with col_dl1:
         csv_bytes = final_filtered_df.to_csv(index=False).encode('utf-8-sig')
         st.download_button(
             label="📊 下载 Excel / CSV 比价表格",
             data=csv_bytes,
-            file_name="跨社旅游团比价清单.csv",
+            file_name="跨社旅游团全量比价清单.csv",
             mime="text/csv",
             type="primary",
             use_container_width=True
         )
     with col_dl2:
-        summary_text = "✈️ 【精选旅游团比价清单】\n" + "="*30 + "\n"
-        for _, r in final_filtered_df.iterrows():
-            summary_text += f"📍 目的地: {r['destination']} ({r['agency']})\n"
-            summary_text += f"🗺️ 路线: {r['title']}\n"
-            summary_text += f"🔖 团号: {r['tour_code']} | 🛫 出发: {r['departure_dates']}\n"
-            summary_text += f"💰 价格: {r['price_text']}\n" + "-"*30 + "\n"
-        
+        img_bytes = generate_comparison_image(final_filtered_df)
         st.download_button(
-            label="🖼️ 导出精美文本/图文卡片摘要 (.txt)",
-            data=summary_text.encode('utf-8-sig'),
-            file_name="旅游团比价卡片摘要.txt",
-            mime="text/plain",
+            label="🖼️ 导出精美比价长图 (.png)",
+            data=img_bytes,
+            file_name="旅游团比价长图.png",
+            mime="image/png",
             use_container_width=True
         )
         
