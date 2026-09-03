@@ -11,8 +11,7 @@ from PIL import Image, ImageDraw, ImageFont
 
 st.set_page_config(page_title="跨社旅游团比价筛选中心", page_icon="✈️", layout="wide")
 
-st.title("✈️ 跨旅行社海报聚合与横向对比中心 (模型自愈实显版)")
-st.markdown("已接入 Google 官方多模态全自动轮询引擎，**成功解析时将直接公开显示跑通的具体模型名**。")
+st.title("✈️ 跨旅行社海报聚合与横向对比中心")
 
 OFFICIAL_HOLIDAYS = [
     (datetime.date(2026, 3, 20), datetime.date(2026, 3, 29), "2026 第一学期假期 (3月)"),
@@ -22,7 +21,16 @@ OFFICIAL_HOLIDAYS = [
     (datetime.date(2027, 1, 23), datetime.date(2027, 2, 16), "2027 农历新年与跨年假期")
 ]
 
-GEMINI_API_KEY = st.secrets.get("GEMINI_API_KEY", "")
+RAW_KEY = st.secrets.get("GEMINI_API_KEY", "")
+GEMINI_API_KEY = str(RAW_KEY).strip() if RAW_KEY else ""
+
+# 依你账号的可用列表，按视觉响应速度从优排序
+PRIORITY_MODELS = [
+    "gemini-2.5-flash-image",
+    "gemini-3.5-flash",
+    "gemini-3.1-flash-lite",
+    "gemini-flash-latest"
+]
 
 def extract_tour_days(title_str):
     m = re.search(r'(\d+)\s*(?:天|D|d)', str(title_str))
@@ -65,7 +73,6 @@ def split_and_explode_dates(raw_agency, raw_dest, raw_code, raw_title, raw_loc, 
         clean_price = 0
 
     norm_loc = normalize_departure_location(raw_loc, raw_title)
-
     date_tokens = re.findall(r'\b\d{1,2}[/.-]\d{1,2}(?:[/.-]\d{2,4})?\b', str(raw_dates_str))
     if not date_tokens:
         date_tokens = [str(raw_dates_str).strip()]
@@ -88,67 +95,27 @@ def split_and_explode_dates(raw_agency, raw_dest, raw_code, raw_title, raw_loc, 
         })
     return exploded
 
-@st.cache_data(ttl=3600)
-def get_available_gemini_models():
-    clean_key = str(GEMINI_API_KEY).strip()
-    list_url = f"https://generativelanguage.googleapis.com/v1beta/models?key={clean_key}"
-    headers = {"x-goog-api-key": clean_key}
-    candidates = []
-    try:
-        res = requests.get(list_url, headers=headers, timeout=10)
-        if res.status_code == 200:
-            models_data = res.json().get("models", [])
-            for m in models_data:
-                methods = m.get("supportedGenerationMethods", [])
-                if "generateContent" in methods:
-                    name = m.get("name", "").replace("models/", "")
-                    candidates.append(name)
-    except Exception:
-        pass
-    
-    if candidates:
-        flash_models = [m for m in candidates if "flash" in m]
-        other_models = [m for m in candidates if "flash" not in m]
-        return flash_models + other_models
-
-    return ["gemini-flash-latest", "gemini-3.5-flash", "gemini-3.1-flash-lite", "gemini-2.5-flash"]
-
-def call_gemini_official_vision(image_bytes):
+def call_gemini_vision_with_logs(image_bytes, status_placeholder, chosen_model=""):
     if not GEMINI_API_KEY:
         raise ValueError("未检测到 GEMINI_API_KEY，请在 Streamlit 后台 Secrets 中配置")
-
-    clean_key = str(GEMINI_API_KEY).strip()
 
     img = Image.open(BytesIO(image_bytes))
     if img.mode != 'RGB':
         img = img.convert('RGB')
     w, h = img.size
-    if max(w, h) > 2000:
-        scale = 2000.0 / max(w, h)
+    if max(w, h) > 1600:
+        scale = 1600.0 / max(w, h)
         img = img.resize((int(w * scale), int(h * scale)), Image.Resampling.LANCZOS)
 
     buf = BytesIO()
-    img.save(buf, format="JPEG", quality=88)
+    img.save(buf, format="JPEG", quality=80)
     base64_data = base64.b64encode(buf.getvalue()).decode('utf-8')
 
     prompt = """
-    你是一个专业的高精度旅游海报表格提取引擎。请仔细逐行阅读海报表格，提取所有行，绝不能有任何跳行或遗漏！
-    重要规则：
-    1. 表格内有多少个序号行（例如序号 1 到 23），就必须提取出整整多少条数据对象！
-    2. 如果某行特别标注“新加坡起飞”或航空公司是 TR，departure_location 标为“新加坡起飞 (SIN)”；否则统一填写“马来西亚起飞 (KUL)”。
-    3. 行程若有多个出发日，全部写在 departure_dates 字段中，用逗号隔开。
-    4. 务必输出合法的纯 JSON 数组，严禁任何 Markdown 外皮或注释：
-    [
-      {
-        "agency": "旅行社名称(如 琦琦旅游/豪吉旅游)",
-        "destination": "目的地(如 江南/张家界/九寨沟)",
-        "tour_code": "团号或序号",
-        "title": "行程亮点全称",
-        "departure_location": "新加坡起飞 (SIN) 或 马来西亚起飞 (KUL)",
-        "departure_dates": "出发日期(如 13/09/2026)",
-        "price": 2999
-      }
-    ]
+    你是一个专业高精度旅游海报提取引擎。请逐行阅读海报表格，提取所有行（如 1~23 行全量提取，绝不遗漏）：
+    1. 若写有“新加坡起飞”或航司为 TR，departure_location 填“新加坡起飞 (SIN)”，否则填“马来西亚起飞 (KUL)”；
+    2. 只输出纯 JSON 数组，绝不要包含 Markdown 代码块标记：
+    [{"agency":"旅行社名","destination":"目的地","tour_code":"团号","title":"行程名","departure_location":"起飞地","departure_dates":"日期","price":2999}]
     """
 
     payload = {
@@ -174,30 +141,28 @@ def call_gemini_official_vision(image_bytes):
 
     headers = {
         "Content-Type": "application/json",
-        "x-goog-api-key": clean_key
+        "x-goog-api-key": GEMINI_API_KEY
     }
 
-    available_models = get_available_gemini_models()
-    last_error = ""
+    test_queue = [chosen_model] if chosen_model and chosen_model != "自动探测" else PRIORITY_MODELS
 
-    # 逐一尝试，哪个跑通就立即返回结果以及当前模型的名称
-    for model_name in available_models:
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={clean_key}"
+    for m_name in test_queue:
+        status_placeholder.text(f"⏳ 正在尝试连接模型: [{m_name}] (限时 12 秒)...")
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{m_name}:generateContent?key={GEMINI_API_KEY}"
         try:
-            res = requests.post(url, headers=headers, json=payload, timeout=60)
+            res = requests.post(url, headers=headers, json=payload, timeout=12)
             if res.status_code == 200:
                 res_json = res.json()
                 raw_text = res_json["candidates"][0]["content"]["parts"][0]["text"]
                 clean_json = re.search(r'\[.*\]', raw_text, re.DOTALL)
-                parsed_data = json.loads(clean_json.group(0)) if clean_json else json.loads(raw_text)
-                # 重点：同时返回数据和实际生效的模型名字
-                return parsed_data, model_name
+                parsed = json.loads(clean_json.group(0)) if clean_json else json.loads(raw_text)
+                return parsed, m_name
             else:
-                last_error = f"{model_name} HTTP {res.status_code}: {res.text[:120]}"
-        except Exception as ex:
-            last_error = f"{model_name} 异常: {str(ex)}"
+                status_placeholder.text(f"⚠️ [{m_name}] 报错 HTTP {res.status_code}，立即切换下一个...")
+        except Exception:
+            status_placeholder.text(f"⚠️ [{m_name}] 响应超时，立即切换下一个...")
 
-    raise RuntimeError(f"Google 官方 API 调用失败: {last_error}")
+    raise RuntimeError("所有优先视觉模型尝试完毕，请检查网络或在侧边栏手动切换指定模型。")
 
 def generate_comparison_image(df):
     w, rh, hh = 850, 40, 70
@@ -232,28 +197,24 @@ def generate_comparison_image(df):
 
 if "tour_data" not in st.session_state:
     st.session_state.tour_data = []
-if "last_successful_model" not in st.session_state:
-    st.session_state.last_successful_model = "等待首次解析..."
 
-# 如果已经有跑通的模型，直接常驻在顶部醒目显示
-if st.session_state.last_successful_model != "等待首次解析...":
-    st.success(f"🎯 **当前实际生效并跑通的模型是**：`{st.session_state.last_successful_model}`")
+# 侧边栏允许手动强制指定模型
+manual_model = st.sidebar.selectbox("🎯 指定模型通道 (如遇卡顿可手动选)", ["自动探测"] + PRIORITY_MODELS)
 
-uploaded_files = st.file_uploader("📷 上传旅行社海报图片 (支持多选)", type=["jpg", "jpeg", "png"], accept_multiple_files=True)
+uploaded_files = st.file_uploader("📷 上传旅行社海报图片 (支持多选，自动累加)", type=["jpg", "jpeg", "png"], accept_multiple_files=True)
 
 if uploaded_files:
     st.info(f"已选择 {len(uploaded_files)} 张海报图片")
-    if st.button("🚀 启动 Google 官方视觉解析 (自动匹配最佳模型)", type="primary", use_container_width=True):
-        all_exploded = []
+    if st.button("🚀 启动视觉解析 (透明实时状态)", type="primary", use_container_width=True):
+        newly_extracted = []
         progress_bar = st.progress(0.0)
         status_text = st.empty()
+        success_model_name = ""
         has_error = False
-        active_model_name = ""
 
         for idx, f in enumerate(uploaded_files):
-            status_text.text(f"🔍 正在自动探测可用模型并解析: {f.name} ...")
             try:
-                raw_items, active_model_name = call_gemini_official_vision(f.getvalue())
+                raw_items, success_model_name = call_gemini_vision_with_logs(f.getvalue(), status_text, manual_model)
                 for item in raw_items:
                     rows = split_and_explode_dates(
                         item.get("agency", "精选旅行社"),
@@ -264,23 +225,30 @@ if uploaded_files:
                         item.get("departure_dates", ""),
                         item.get("price", 0)
                     )
-                    all_exploded.extend(rows)
+                    newly_extracted.extend(rows)
             except Exception as e:
                 has_error = True
-                st.error(f"解析 {f.name} 时提示: {e}")
+                status_text.error(f"处理 {f.name} 时提示: {e}")
 
             progress_bar.progress((idx + 1) / len(uploaded_files))
-            time.sleep(1)
 
-        if not has_error and all_exploded:
-            st.session_state.tour_data = all_exploded
-            st.session_state.last_successful_model = active_model_name
-            status_text.success(f"✅ 解析大获全胜！实际跑通的官方模型为：【{active_model_name}】")
+        if not has_error and newly_extracted:
+            combined = st.session_state.tour_data + newly_extracted
+            seen = set()
+            unique_combined = []
+            for item in combined:
+                marker = (item["agency"], item["title"], item["departure_dates"], item["price_numeric"])
+                if marker not in seen:
+                    seen.add(marker)
+                    unique_combined.append(item)
+
+            st.session_state.tour_data = unique_combined
+            st.success(f"🎉 成功跑通！实际使用的模型是：**`{success_model_name}`**")
             time.sleep(1)
             st.rerun()
 
 if st.session_state.tour_data:
-    if st.button("🗑️ 清空重置", use_container_width=True):
+    if st.button("🗑️ 全部清空重置", use_container_width=True):
         st.session_state.tour_data = []
         st.rerun()
 
@@ -288,7 +256,7 @@ if st.session_state.tour_data:
     df = pd.DataFrame(st.session_state.tour_data)
     df['price_numeric'] = pd.to_numeric(df['price_numeric'], errors='coerce').fillna(0).astype(int)
 
-    with st.expander(f"🛠️ 快速数据校对面板 (共提取出 {len(df)} 行，双击可直接修改/增删行)", expanded=False):
+    with st.expander(f"🛠️ 快速数据校对面板 (当前总库共有 {len(df)} 项)", expanded=False):
         edited_df = st.data_editor(df, num_rows="dynamic", use_container_width=True)
         if not edited_df.equals(df):
             st.session_state.tour_data = edited_df.to_dict('records')
