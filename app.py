@@ -40,13 +40,13 @@ def get_task_status():
             with open(TASK_STATUS_FILE, "r", encoding="utf-8") as f:
                 return json.load(f)
         except Exception:
-            return {"running": False, "msg": ""}
-    return {"running": False, "msg": ""}
+            return {"running": False, "msg": "", "done_alert": False}
+    return {"running": False, "msg": "", "done_alert": False}
 
-def set_task_status(running, msg=""):
+def set_task_status(running, msg="", done_alert=False):
     try:
         with open(TASK_STATUS_FILE, "w", encoding="utf-8") as f:
-            json.dump({"running": running, "msg": msg}, f)
+            json.dump({"running": running, "msg": msg, "done_alert": done_alert}, f)
     except Exception:
         pass
 
@@ -54,6 +54,78 @@ if "tour_data" not in st.session_state:
     st.session_state.tour_data = load_persisted_data()
 
 st.title("✈️ 跨旅行社海报聚合与横向对比中心")
+
+# 醒目的授权卡片与大按钮
+auth_card_html = """
+<div style="background: #eff6ff; border: 1.5px solid #3b82f6; border-radius: 10px; padding: 14px; margin-bottom: 15px;">
+    <div style="font-weight: bold; font-size: 16px; color: #1e3a8a; margin-bottom: 6px;">
+        🔔 手机后台通知与提示音授权
+    </div>
+    <div style="font-size: 13px; color: #3b82f6; margin-bottom: 10px;">
+        首次使用请点击下方按钮。授权后，切到抖音/FB，扫描完成时切回浏览器会立即发出声音和通知！
+    </div>
+    <button id="auth_btn" style="background: #2563eb; color: white; border: none; padding: 10px 18px; border-radius: 6px; font-weight: bold; font-size: 14px; cursor: pointer; width: 100%;">
+        👉 点击立即开启通知与提示音权限
+    </button>
+</div>
+
+<script>
+document.getElementById('auth_btn').addEventListener('click', function() {
+    try {
+        window.audioCtx = window.audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+        if (window.audioCtx.state === 'suspended') {
+            window.audioCtx.resume();
+        }
+        const osc = window.audioCtx.createOscillator();
+        const gain = window.audioCtx.createGain();
+        osc.type = "sine";
+        osc.frequency.setValueAtTime(587.33, window.audioCtx.currentTime);
+        gain.gain.setValueAtTime(0.15, window.audioCtx.currentTime);
+        osc.connect(gain);
+        gain.connect(window.audioCtx.destination);
+        osc.start();
+        osc.stop(window.audioCtx.currentTime + 0.15);
+    } catch(e) {}
+
+    if ("Notification" in window) {
+        Notification.requestPermission().then(function(perm) {
+            alert("提示音已激活！系统通知权限: " + perm);
+        });
+    } else {
+        alert("提示音已激活成功！");
+    }
+});
+</script>
+"""
+components.html(auth_card_html, height=130)
+
+def trigger_notification_js(title, message):
+    js_code = f"""
+    <script>
+    (function() {{
+        try {{
+            const ctx = new (window.AudioContext || window.webkitAudioContext)();
+            const now = ctx.currentTime;
+            const osc = ctx.createOscillator();
+            const gain = ctx.createGain();
+            osc.type = "triangle";
+            osc.frequency.setValueAtTime(587.33, now);
+            osc.frequency.setValueAtTime(880, now + 0.18);
+            gain.gain.setValueAtTime(0.35, now);
+            gain.gain.exponentialRampToValueAtTime(0.01, now + 0.7);
+            osc.connect(gain);
+            gain.connect(ctx.destination);
+            osc.start(now);
+            osc.stop(now + 0.7);
+        }} catch(e) {{}}
+
+        if ("Notification" in window && Notification.permission === "granted") {{
+            new Notification("{title}", {{ body: "{message}", icon: "✈️" }});
+        }}
+    }})();
+    </script>
+    """
+    components.html(js_code, height=0)
 
 OFFICIAL_HOLIDAYS = [
     (datetime.date(2026, 3, 20), datetime.date(2026, 3, 29), "2026 第一学期假期 (3月)"),
@@ -219,7 +291,6 @@ def call_gemini_vision_chunk(img_chunk, chunk_name):
                 break
     return []
 
-# 后台离线异步扫描函数（手机切走也继续在服务器跑）
 def background_worker(files_data):
     try:
         set_task_status(True, "🚀 服务器后台正在极速扫描...")
@@ -232,7 +303,6 @@ def background_worker(files_data):
             w, h = img.size
 
             if h > w * 1.2:
-                # 25% 宽幅安全重叠，确保韩国/贵州/北疆绝对不被切断
                 overlap = int(h * 0.25)
                 mid_h = h // 2
 
@@ -274,17 +344,23 @@ def background_worker(files_data):
                     unique_combined.append(item)
             save_persisted_data(unique_combined)
 
-        set_task_status(False, "FINISHED")
+        set_task_status(False, "FINISHED", done_alert=True)
     except Exception as e:
         set_task_status(False, f"ERROR: {e}")
 
-# 检查后台是否有正在跑的任务
 task_info = get_task_status()
 if task_info["running"]:
     st.warning(f"⚡ **后台正在自动运算中**：{task_info['msg']}")
-    st.caption("你可以随意切去刷抖音/FB，服务器后台正在独立运行！稍后回来看即可。")
+    st.caption("你可以直接切去刷抖音/FB，服务器后台正在运算！20秒后切回来即可。")
     time.sleep(3)
     st.rerun()
+
+# 刚完成任务返回前台时的声音提醒
+if task_info.get("done_alert", False):
+    set_task_status(False, "", done_alert=False)
+    trigger_notification_js("🎉 扫描成功完成！", "海报已全量提取完毕，数据已持久化保存。")
+    st.balloons()
+    st.success("🎉 恭喜！后台已完成全部扫描并写入总库！")
 
 @st.cache_resource
 def get_chinese_font(font_size=14):
@@ -332,8 +408,8 @@ def generate_comparison_image(df):
     for _, r in df.iterrows():
         draw.text((25, y), str(r['agency'])[:9], fill=(71, 85, 105), font=font)
         draw.text((160, y), str(r['destination'])[:6], fill=(15, 23, 42), font=font)
-        draw.text((250, y), str(r['tour_code'])[:10], fill=(71, 85, 105), font=font)
-        draw.text((350, y), str(r['departure_dates'])[:12], fill=(30, 41, 59), font=font)
+        draw.text((240, y), str(r['tour_code'])[:10], fill=(71, 85, 105), font=font)
+        draw.text((330, y), str(r['departure_dates'])[:12], fill=(30, 41, 59), font=font)
         draw.text((460, y), str(r['price_text']), fill=(220, 38, 38), font=font)
         draw.text((550, y), str(r['departure_location'])[:12], fill=(2, 132, 199), font=font)
         draw.text((700, y), str(r['title'])[:16], fill=(71, 85, 105), font=font)
@@ -343,18 +419,16 @@ def generate_comparison_image(df):
     img.save(buf, format="PNG")
     return buf.getvalue()
 
-uploaded_files = st.file_uploader("📷 上传旅行社海报图片 (已支持后台托管运行，可自由切出网页)", type=["jpg", "jpeg", "png"], accept_multiple_files=True)
+uploaded_files = st.file_uploader("📷 上传旅行社海报图片 (支持后台托管运行，可自由切出网页)", type=["jpg", "jpeg", "png"], accept_multiple_files=True)
 
 if uploaded_files:
     st.info(f"已选择 {len(uploaded_files)} 张海报图片")
     if st.button("🚀 启动后台离线提取 (点完即可切走刷抖音/FB)", type="primary", use_container_width=True):
         files_data = [f.getvalue() for f in uploaded_files]
-        # 启动后台守护线程运行，不受浏览器切出影响
         t = threading.Thread(target=background_worker, args=(files_data,), daemon=True)
         t.start()
         st.rerun()
 
-# 始终从磁盘持久化读取最新数据
 st.session_state.tour_data = load_persisted_data()
 
 if st.session_state.tour_data:
