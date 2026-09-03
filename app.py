@@ -1,5 +1,6 @@
 import streamlit as st
 import pandas as pd
+import time
 import datetime
 import re
 import json
@@ -11,7 +12,7 @@ from PIL import Image, ImageDraw, ImageFont
 st.set_page_config(page_title="跨社旅游团比价筛选中心", page_icon="✈️", layout="wide")
 
 st.title("✈️ 跨旅行社海报聚合与横向对比中心")
-st.caption("🚀 已适配豪吉旅游拼贴海报与琦琦长表，支持分批增量累加。")
+st.caption("🚀 已锁定 gemini-3.5-flash 引擎，内置 503 弹性双保险，支持长表与九宫格海报。")
 
 OFFICIAL_HOLIDAYS = [
     (datetime.date(2026, 3, 20), datetime.date(2026, 3, 29), "2026 第一学期假期 (3月)"),
@@ -23,7 +24,10 @@ OFFICIAL_HOLIDAYS = [
 
 RAW_KEY = st.secrets.get("GEMINI_API_KEY", "")
 GEMINI_API_KEY = str(RAW_KEY).strip() if RAW_KEY else ""
-LOCKED_MODEL = "gemini-3.5-flash"
+
+# 主力引擎与 503 熔断兜底引擎
+PRIMARY_MODEL = "gemini-3.5-flash"
+BACKUP_MODEL = "gemini-3.1-flash-lite"
 
 def extract_tour_days(title_str):
     m = re.search(r'(\d+)\s*(?:天|D|d)', str(title_str))
@@ -105,7 +109,7 @@ def safe_parse_json(raw_text):
         clean_text_fixed = re.sub(r',\s*([\]}])', r'\1', clean_text)
         return json.loads(clean_text_fixed)
 
-def call_gemini_vision_direct(image_bytes):
+def call_gemini_vision_resilient(image_bytes, status_placeholder):
     if not GEMINI_API_KEY:
         raise ValueError("未检测到 GEMINI_API_KEY，请在 Streamlit 后台 Secrets 中配置")
 
@@ -123,22 +127,22 @@ def call_gemini_vision_direct(image_bytes):
 
     prompt = """
     你是一个专业高精度旅游海报提取引擎。
-    海报特征识别：
-    1. 旅行社识别：若海报包含多格拼贴团期（例如包含 SP 开头的团号、或者联系人SIONG/ALEX），该海报旅行社统一命名为“豪吉旅游”；若是表格型海报（如琦琦），则按其实际标题命名。
-    2. 多价格拆分规则：一个小方块里如果有不同的出发日期对应不同价格（例如某个团期写着 17/11/26 卖 3299，15/12/26 卖 3999），请务必拆分为多条独立数据项输出！
-    3. 出发地点判断：
-       - 标题带 SIN、新加坡、或航司酷航(Scoot)的，写“新加坡起飞 (SIN)”
-       - 标题带 JB、新山的，写“新山出发 (JB)”
-       - 标题带 KL 或默认的，写“马来西亚起飞 (KUL)”
-    4. 务必输出标准 JSON 数组，严禁任何 markdown 标签，字符串内不要包含未经转义的双引号：
+    规则：
+    1. 旅行社识别：海报若为九宫格拼贴（含SP团号或联系人SIONG/ALEX），统一写“豪吉旅游”；若是表格型海报（如琦琦），按其实际名称写。
+    2. 多价格拆分：一个小方块若包含不同出发日期对应不同价格，务必拆分为多条独立对象输出！
+    3. 出发地点：
+       - 带 SIN、新加坡、或酷航(Scoot)的写“新加坡起飞 (SIN)”
+       - 带 JB、新山的写“新山出发 (JB)”
+       - 带 KL 或默认的写“马来西亚起飞 (KUL)”
+    4. 务必输出纯 JSON 数组，严禁任何 markdown 符号：
     [
       {
-        "agency": "旅行社名称(如 豪吉旅游 / 琦琦旅游)",
-        "destination": "目的地(如 重庆/贵州/北疆/西藏/哈尔滨/九寨沟)",
-        "tour_code": "团号(如 SP002376)",
-        "title": "行程路线名(如 7天6夜 重庆8D风采线)",
+        "agency": "旅行社名称",
+        "destination": "目的地",
+        "tour_code": "团号",
+        "title": "行程名",
         "departure_location": "起飞地",
-        "departure_dates": "出发日期(如 31/12/2026)",
+        "departure_dates": "出发日期",
         "price": 2999
       }
     ]
@@ -170,15 +174,36 @@ def call_gemini_vision_direct(image_bytes):
         "x-goog-api-key": GEMINI_API_KEY
     }
 
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{LOCKED_MODEL}:generateContent?key={GEMINI_API_KEY}"
-    res = requests.post(url, headers=headers, json=payload, timeout=60)
-    
-    if res.status_code == 200:
-        res_json = res.json()
-        raw_text = res_json["candidates"][0]["content"]["parts"][0]["text"]
-        return safe_parse_json(raw_text)
-    else:
-        raise RuntimeError(f"API 响应错误 (HTTP {res.status_code}): {res.text[:120]}")
+    models_to_try = [PRIMARY_MODEL, BACKUP_MODEL]
+
+    for model_name in models_to_try:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={GEMINI_API_KEY}"
+        
+        # 支持遇 503 重试一次
+        for attempt in range(2):
+            try:
+                res = requests.post(url, headers=headers, json=payload, timeout=60)
+                if res.status_code == 200:
+                    res_json = res.json()
+                    raw_text = res_json["candidates"][0]["content"]["parts"][0]["text"]
+                    return safe_parse_json(raw_text)
+                
+                # 遇到 503 高峰排队，等待 2 秒进行重试或切换
+                if res.status_code == 503:
+                    if attempt == 0:
+                        status_placeholder.warning(f"⚠️ [{model_name}] 遭遇 Google 算力高峰(503)，正在为您重试...")
+                        time.sleep(2)
+                        continue
+                    else:
+                        status_placeholder.info(f"🔄 自动切换至备用高速引擎 [{BACKUP_MODEL}] 解析...")
+                        break
+                else:
+                    raise RuntimeError(f"API 响应错误 (HTTP {res.status_code}): {res.text[:120]}")
+            except requests.exceptions.Timeout:
+                status_placeholder.warning(f"⚠️ [{model_name}] 连接超时，尝试切换引擎...")
+                break
+
+    raise RuntimeError("当前 Google 官方所有模型算力处于极端高峰，请稍等 10 秒后重试。")
 
 def generate_comparison_image(df):
     w, rh, hh = 850, 40, 70
@@ -227,7 +252,7 @@ if uploaded_files:
         for idx, f in enumerate(uploaded_files):
             status_text.info(f"⚡ [{idx+1}/{len(uploaded_files)}] 正在解析: `{f.name}` ...")
             try:
-                raw_items = call_gemini_vision_direct(f.getvalue())
+                raw_items = call_gemini_vision_resilient(f.getvalue(), status_text)
                 for item in raw_items:
                     rows = split_and_explode_dates(
                         item.get("agency", "精选旅行社"),
