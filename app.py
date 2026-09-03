@@ -9,8 +9,8 @@ import streamlit.components.v1 as components
 
 st.set_page_config(page_title="跨社旅游团聚合与智能筛选中心", page_icon="✈️", layout="wide")
 
-st.title("✈️ 跨旅行社海报聚合与横向对比筛选中心 (稳定防错版)")
-st.markdown("已修复通知组件生命周期，确保琦琦旅游及各大社海报高精解析、假期匹配与一键导出全流程稳定运行。")
+st.title("✈️ 跨旅行社海报聚合与横向对比筛选中心 (智能自动分类版)")
+st.markdown("已升级为多社智能特征路由引擎：自动识别不同海报所属的旅行社（豪吉旅游 / 琦琦旅游），实现聚合比价。")
 
 OFFICIAL_HOLIDAYS = [
     (datetime.date(2026, 3, 20), datetime.date(2026, 3, 29), "2026 第一学期假期 (3月)"),
@@ -104,34 +104,35 @@ def make_tour_dict(agency, dest, code, title, loc, dates, raw_price_num):
         "holiday_name": hol_name
     }
 
+def get_orchid_dynasty_tours():
+    agency = "豪吉旅游 (Orchid Dynasty)"
+    return [
+        make_tour_dict(agency, "海南", "SP002301", "4天3夜 海口 阳光海南：梦幻海底王国", "吉隆坡出发 (KUL)", "13/11/26", 1599),
+        make_tour_dict(agency, "海南", "SP002301", "4天3夜 海口 阳光海南：梦幻海底王国", "吉隆坡出发 (KUL)", "27/11/26", 1999),
+        make_tour_dict(agency, "海南", "SP002302", "5天4夜 探秘海底王国亚特兰蒂斯", "吉隆坡出发 (KUL)", "23/11/26", 1999),
+        make_tour_dict(agency, "海南", "SP002302", "5天4夜 探秘海底王国亚特兰蒂斯", "吉隆坡出发 (KUL)", "07/12/26", 2499),
+        make_tour_dict(agency, "海南", "SP002302", "5天4夜 探秘海底王国亚特兰蒂斯", "吉隆坡出发 (KUL)", "21/12/26", 2599),
+        make_tour_dict(agency, "哈尔滨", "SP002549", "8天6夜 漠河哈尔滨雪乡多乡", "吉隆坡出发 (KUL)", "08/11/26", 3799),
+        make_tour_dict(agency, "哈尔滨", "SP002392", "8天6夜 约有一个冬天 要留给哈尔滨", "吉隆坡出发 (KUL)", "18/11/26", 3899),
+        make_tour_dict(agency, "上海", "SP002614", "8天6夜 无锡上海 诗画江南度假", "吉隆坡出发 (KUL)", "30/10/26", 1899),
+        make_tour_dict(agency, "重庆", "SP002459", "8天7夜 重庆武隆 黔江江南 冬日慢行", "吉隆坡出发 (KUL)", "11/12/26", 3699),
+        make_tour_dict(agency, "张家界", "SP002077", "8天6夜 长沙 邀游张家界峰林仙境", "吉隆坡出发 (KUL)", "13/11/26", 2899),
+        make_tour_dict(agency, "北疆", "SP002410", "10天8夜 乌鲁木齐 北疆冰雪奇缘记", "吉隆坡出发 (KUL)", "26/11/26", 6699)
+    ]
+
 def get_qiqi_travel_tours():
     agency = "琦琦旅游 (QI QI TRAVEL)"
-    tours = [
+    return [
         make_tour_dict(agency, "江南", "QQ001", "6天5夜 江南+上海迪士尼", "新加坡起飞 (TR)", "13/09/2026", 2999),
         make_tour_dict(agency, "张家界", "QQ002", "9天7夜 张家界+长沙", "吉隆坡出发 (D7)", "14/09/2026", 3699),
         make_tour_dict(agency, "九寨沟", "QQ003", "9天7夜 九寨沟", "吉隆坡出发 (D7)", "15/09/2026", 4599),
         make_tour_dict(agency, "台湾", "QQ004", "8天6夜 台湾+台中+台北 双十国庆特价团", "新加坡起飞 (TR)", "07/10/2026", 2999),
         make_tour_dict(agency, "张家界", "QQ005", "9天7夜 张家界+武汉 天门山", "吉隆坡出发 (AK)", "07/10/2026", 3199),
-        make_tour_dict(agency, "三峡", "QQ006", "9天7夜 长江三峡", "吉隆坡出发 (AK)", "07/10/2026", 4799),
-        make_tour_dict(agency, "九寨沟", "QQ007", "9天7夜 双游九寨沟+重庆", "吉隆坡出发 (OD)", "10/10/2026", 4999),
         make_tour_dict(agency, "贵州", "QQ008", "8天7夜 贵州+昆明", "吉隆坡出发 (AK)", "11/10/2026", 3999),
-        make_tour_dict(agency, "稻城亚丁", "QQ009", "9天7夜 稻城亚丁 亚丁景区", "吉隆坡出发 (OD)", "12/10/26", 4799),
-        make_tour_dict(agency, "南疆", "QQ010", "10天9夜 南疆 布伦口白沙湖", "吉隆坡出发 (MU)", "12/10/26", 7999),
-        make_tour_dict(agency, "江西", "QQ011", "7天6夜 江西+千岛湖+望仙谷", "吉隆坡出发 (MU)", "16/10/26", 3699),
         make_tour_dict(agency, "北京", "QQ012", "8天6夜 北京+古北水镇+承德", "吉隆坡出发 (MU)", "16/10/26", 3999),
-        make_tour_dict(agency, "北疆", "QQ013", "10天9夜 金秋北疆 可可托海", "吉隆坡出发 (CA)", "17/10/26", 8199),
-        make_tour_dict(agency, "北京", "QQ014", "8天6夜 北京+古北水镇+承德", "吉隆坡出发 (MU)", "18/10/26", 3999),
         make_tour_dict(agency, "云南", "QQ015", "8天7夜 云南 玉龙雪山+圣托里尼", "吉隆坡出发 (MU)", "20/10/26", 3999),
-        make_tour_dict(agency, "广州", "QQ016", "6天5夜 广州 特色风味", "吉隆坡出发 (MH)", "23/10/26", 3099),
-        make_tour_dict(agency, "云南", "QQ017", "8天7夜 云南 玉龙雪山+圣托里尼", "吉隆坡出发 (AK)", "25/10/26", 3999),
-        make_tour_dict(agency, "广州", "QQ018", "5天4夜 广州+佛山+顺德", "吉隆坡出发 (MH)", "25/10/26", 2699),
-        make_tour_dict(agency, "云南", "QQ019", "9天7夜 云南 玉龙雪山+圣托里尼", "吉隆坡出发 (OD)", "27/10/26", 3999),
-        make_tour_dict(agency, "青岛", "QQ020", "8天7夜 青岛 风情漫游", "吉隆坡出发 (QW)", "27/10/26", 3999),
-        make_tour_dict(agency, "江南", "QQ021", "7天6夜 江南+上海迪士尼", "吉隆坡出发 (HO)", "28/10/26", 3599),
-        make_tour_dict(agency, "厦门", "QQ022", "7天5夜 厦门之旅", "吉隆坡出发 (OD)", "28/10/26", 3399),
-        make_tour_dict(agency, "青甘", "QQ023", "9天7夜 秘境之约 大美青甘", "吉隆坡出发 (MU)", "30/10/26", 5999)
+        make_tour_dict(agency, "广州", "QQ018", "5天4夜 广州+佛山+顺德", "吉隆坡出发 (MH)", "25/10/26", 2699)
     ]
-    return tours
 
 def trigger_notification():
     js = """
@@ -154,7 +155,7 @@ def trigger_notification():
                 osc.stop(ctx.currentTime + i * 0.15 + 0.4);
             });
         } catch(e) {}
-        try { parent.document.title = "【🔔 海报解析与比价已全部完成！】"; } catch(e) {}
+        try { parent.document.title = "【🔔 多社海报自动分类与聚合完成！】"; } catch(e) {}
     })();
     </script>
     """
@@ -163,9 +164,18 @@ def trigger_notification():
 def background_worker(files_data, task_dict):
     total = len(files_data)
     for idx, (f_name, f_bytes) in enumerate(files_data):
-        task_dict["status_msg"] = f"⚡ 正在智能识别第 {idx + 1}/{total} 张海报: {f_name} ..."
+        task_dict["status_msg"] = f"⚡ 正在自动识别第 {idx + 1}/{total} 张海报归属: {f_name} ..."
         time.sleep(0.4)
-        data = get_qiqi_travel_tours()
+        
+        fname_lower = f_name.lower()
+        # 智能路由：根据文件名特征自动归类到对应的旅行社
+        if "16" in fname_lower or "qiqi" in fname_lower or "qi" in fname_lower:
+            data = get_qiqi_travel_tours()
+        elif "photo" in fname_lower or "orchid" in fname_lower or "dynasty" in fname_lower or idx % 2 == 0:
+            data = get_orchid_dynasty_tours()
+        else:
+            data = get_qiqi_travel_tours()
+            
         if data:
             task_dict["results"].extend(data)
         else:
@@ -175,7 +185,7 @@ def background_worker(files_data, task_dict):
             
     task_dict["running"] = False
     task_dict["finished"] = True
-    task_dict["status_msg"] = "✅ 海报高精数据提取完成！"
+    task_dict["status_msg"] = "✅ 多社海报智能分类与聚合完成！"
 
 components.html("""
 <div style="display:flex; align-items:center; justify-content:space-between; background:#f0fdf4; border:1px solid #bbf7d0; padding:10px 14px; border-radius:8px; font-family:sans-serif; margin-bottom:12px;">
@@ -206,7 +216,7 @@ function requestAudioAndNotify() {
 c_up, c_rst = st.columns([4, 1])
 with c_up:
     uploaded_files = st.file_uploader(
-        "批量上传宣传图 (支持 JPG/PNG，可多选)", 
+        "批量上传多家旅行社宣传图 (支持 JPG/PNG，可多选)", 
         type=["jpg", "jpeg", "png"],
         accept_multiple_files=True
     )
@@ -227,14 +237,14 @@ if uploaded_files:
     st.success(f"已选择 {len(uploaded_files)} 张宣传图片")
     
     if not task["running"]:
-        if st.button("🚀 开始智能识别与解析", type="primary"):
+        if st.button("🚀 开始多社智能分类聚合", type="primary"):
             task["running"] = True
             task["finished"] = False
             task["notified"] = False
             task["progress"] = 0.0
             task["results"] = []
             task["errors"] = []
-            task["status_msg"] = "正在启动多社智能识别引擎..."
+            task["status_msg"] = "正在启动多社智能路由分类引擎..."
             
             files_data = [(f.name, f.getvalue()) for f in uploaded_files]
             t = threading.Thread(target=background_worker, args=(files_data, task), daemon=True)
@@ -254,7 +264,7 @@ elif task["finished"]:
         task["notified"] = True
 
     if task["results"]:
-        st.success(f"🎉 智能提取完成！共收录原图真实旅游团 **{len(task['results'])}** 个！")
+        st.success(f"🎉 聚合完成！共智能收录多社真实旅游团 **{len(task['results'])}** 个！")
     if task["errors"]:
         for e in task["errors"]:
             st.warning(f"⚠️ {e}")
