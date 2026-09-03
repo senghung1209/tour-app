@@ -10,7 +10,7 @@ import math
 import struct
 import requests
 from io import BytesIO
-from PIL import Image
+from PIL import Image, ImageDraw, ImageFont
 import streamlit.components.v1 as components
 
 st.set_page_config(page_title="跨社旅游团比价筛选中心", page_icon="✈️", layout="wide")
@@ -59,7 +59,7 @@ LOUD_WAV_B64 = get_loud_wav_base64()
 
 audio_html = f"""
 <div style="background: #eff6ff; border: 1.5px solid #3b82f6; border-radius: 8px; padding: 12px; margin-bottom: 15px;">
-    <div style="font-weight: bold; font-size: 14px; color: #1e40af; margin-bottom: 5px;">🔊 提示音与状态栏通知通道</div>
+    <div style="font-weight: bold; font-size: 14px; color: #1e40af; margin-bottom: 5px;">🔊 手机状态栏通知与完成提示音设置</div>
     <audio id="real_alert_sound" preload="auto"><source src="data:audio/wav;base64,{LOUD_WAV_B64}" type="audio/wav"></audio>
     <button id="direct_play_btn" style="background: #2563eb; color: white; border: none; padding: 10px 20px; border-radius: 6px; font-weight: bold; font-size: 14px; width: 100%; cursor: pointer;">👉 点击激活声音与通知权限</button>
 </div>
@@ -131,7 +131,6 @@ def parse_text_robust(raw_text, default_agency="豪吉旅游"):
                     "price": price_val
                 })
             elif len(parts) >= 6:
-                # 兼容简易格式
                 price_val = int(re.sub(r'[^\d]', '', parts[5]))
                 items.append({
                     "agency": default_agency,
@@ -169,85 +168,24 @@ def call_gemini_vision(img_bytes, hint_text="", default_agency="豪吉旅游"):
         pass
     return []
 
-uploaded_file = st.file_uploader("📷 上传单张海报图片", type=["jpg", "jpeg", "png"])
+@st.cache_resource
+def get_chinese_font(font_size=15):
+    font_paths = [
+        "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
+        "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+        "wqy-microhei.ttc"
+    ]
+    for p in font_paths:
+        if os.path.exists(p):
+            try:
+                return ImageFont.truetype(p, font_size)
+            except Exception:
+                pass
+    return ImageFont.load_default()
 
-if uploaded_file is not None:
-    st.image(uploaded_file, caption="已上传海报预览", width=300)
-    if st.button("🚀 立即开始分析并入库", type="primary"):
-        with st.spinner("🔍 正在采用双半区高清微距扫描中..."):
-            img_bytes = uploaded_file.getvalue()
-            img = Image.open(BytesIO(img_bytes))
-            if img.mode != 'RGB':
-                img = img.convert('RGB')
-            w, h = img.size
-
-            filename_upper = uploaded_file.name.upper()
-            if "QIQI" in filename_upper or h < w * 1.35:
-                raw_items = call_gemini_vision(img_bytes, "提取琦琦旅游表格", default_agency="琦琦旅游")
-            else:
-                box_top = (0, 0, w, int(h * 0.58))
-                buf_top = BytesIO()
-                img.crop(box_top).save(buf_top, format="JPEG", quality=90)
-                r1 = call_gemini_vision(buf_top.getvalue(), "提取上半区：重庆、西藏、青岛、桂林、台湾、韩国", default_agency="豪吉旅游")
-
-                box_bottom = (0, int(h * 0.44), w, h)
-                buf_bottom = BytesIO()
-                img.crop(box_bottom).save(buf_bottom, format="JPEG", quality=90)
-                r2 = call_gemini_vision(buf_bottom.getvalue(), "提取下半区：贵州、哈尔滨、北疆、九寨沟", default_agency="豪吉旅游")
-
-                raw_items = r1 + r2
-            
-            newly_extracted = []
-            for item in raw_items:
-                days = extract_tour_days(item.get("title", ""))
-                d_token = item.get("departure_dates", "")
-                status, over_days, hol_name = evaluate_holiday_fit(d_token, days)
-                newly_extracted.append({
-                    "agency": item.get("agency"),
-                    "destination": item.get("destination"),
-                    "tour_code": item.get("tour_code"),
-                    "title": item.get("title"),
-                    "departure_location": item.get("departure_location"),
-                    "departure_dates": d_token,
-                    "price_numeric": item.get("price"),
-                    "price_text": f"RM {item.get('price')}",
-                    "holiday_status": status,
-                    "over_days": over_days,
-                    "holiday_name": hol_name
-                })
-
-            if newly_extracted:
-                combined = st.session_state.tour_data + newly_extracted
-                seen = set()
-                unique_combined = []
-                for item in combined:
-                    marker = (item["agency"], item["tour_code"], item["departure_dates"], item["price_numeric"])
-                    if marker not in seen:
-                        seen.add(marker)
-                        unique_combined.append(item)
-
-                st.session_state.tour_data = unique_combined
-                save_persisted_data(unique_combined)
-                
-                success_js = f"""
-                <audio id="done_alert_sound" autoplay><source src="data:audio/wav;base64,{LOUD_WAV_B64}" type="audio/wav"></audio>
-                <script>
-                if ("vibrate" in navigator) {{ navigator.vibrate([250, 100, 250]); }}
-                var aud = document.getElementById('done_alert_sound');
-                if (aud) {{ aud.play().catch(function(){{}}); }}
-                </script>
-                """
-                components.html(success_js, height=0)
-                st.success(f"🎉 成功提取 {len(newly_extracted)} 项！总库共有 **{len(st.session_state.tour_data)}** 项团期。")
-                time.sleep(1)
-                st.rerun()
-            else:
-                st.warning("⚠️ 未能解析出有效团期，请确认上传的是豪吉或琦琦的标准海报图片。")
-
-if st.session_state.tour_data:
-    if st.button("🗑️ 清空总库数据"):
-        save_persisted_data([])
-        st.session_state.tour_data = []
-        st.rerun()
-        
-    st.markdown("
+def generate_comparison_image(df):
+    w = 1020
+    rh = 42
+    hh = 75
+    h = hh + (len(df) + 1) * rh +
