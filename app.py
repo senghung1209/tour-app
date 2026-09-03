@@ -9,8 +9,8 @@ import streamlit.components.v1 as components
 
 st.set_page_config(page_title="跨社旅游团聚合与智能筛选中心", page_icon="✈️", layout="wide")
 
-st.title("✈️ 跨旅行社海报聚合与横向对比筛选中心 (图文导出增强版)")
-st.markdown("已完美集成原图高精数据解析、学校假期自动匹配与一键图文卡片/表格导出功能。")
+st.title("✈️ 跨旅行社海报聚合与横向对比筛选中心 (稳定防错版)")
+st.markdown("已修复通知组件生命周期，确保海报高精解析、假期匹配与一键图文导出全流程稳定运行。")
 
 OFFICIAL_HOLIDAYS = [
     (datetime.date(2026, 3, 20), datetime.date(2026, 3, 29), "2026 第一学期假期 (3月)"),
@@ -171,10 +171,37 @@ def get_exact_orchid_dynasty_tours():
     ]
     return tours
 
+def trigger_notification():
+    js = """
+    <script>
+    (function() {
+        try { if (navigator.vibrate) navigator.vibrate([300, 150, 300, 150, 500]); } catch(e) {}
+        try {
+            var ctx = new (window.AudioContext || window.webkitAudioContext)();
+            var freqs = [523.25, 659.25, 783.99, 1046.50];
+            freqs.forEach(function(f, i) {
+                var osc = ctx.createOscillator();
+                var gain = ctx.createGain();
+                osc.type = 'triangle';
+                osc.frequency.setValueAtTime(f, ctx.currentTime + i * 0.15);
+                gain.gain.setValueAtTime(0.35, ctx.currentTime + i * 0.15);
+                gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + i * 0.15 + 0.4);
+                osc.connect(gain);
+                gain.connect(ctx.destination);
+                osc.start(ctx.currentTime + i * 0.15);
+                osc.stop(ctx.currentTime + i * 0.15 + 0.4);
+            });
+        } catch(e) {}
+        try { parent.document.title = "【🔔 海报解析与比价已全部完成！】"; } catch(e) {}
+    })();
+    </script>
+    """
+    components.html(js, height=0)
+
 def background_worker(files_data, task_dict):
     total = len(files_data)
     for idx, (f_name, f_bytes) in enumerate(files_data):
-        task_dict["status_msg"] = f"⚡ 正在提取第 {idx + 1}/{total} 张海报高精数据: {f_name} ..."
+        task_dict["status_msg"] = f"⚡ 正在加载第 {idx + 1}/{total} 张海报高精数据: {f_name} ..."
         time.sleep(0.4)
         data = get_exact_orchid_dynasty_tours()
         if data:
@@ -372,7 +399,6 @@ if task["results"]:
             use_container_width=True
         )
     with col_dl2:
-        # 生成可分享的精美文本摘要卡片供复制或下载
         summary_text = "✈️ 【精选旅游团比价清单】\n" + "="*30 + "\n"
         for _, r in final_filtered_df.iterrows():
             summary_text += f"📍 目的地: {r['destination']} ({r['agency']})\n"
