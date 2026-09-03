@@ -12,10 +12,9 @@ import streamlit.components.v1 as components
 
 st.set_page_config(page_title="AI 旅游团智能筛选助手", page_icon="✈️", layout="wide")
 
-st.title("✈️ 旅游团宣传单智能分析与筛选 (独立账号高精省流版)")
-st.markdown("已接入独立账号高额度 Key，并优化图像压缩与 Token 消耗，确保海报分析秒级通畅。")
+st.title("✈️ 旅游团宣传单智能分析与筛选 (高精过滤清洗版)")
+st.markdown("已升级为双重智能清洗与强校验引擎：自动过滤无效残缺行，确保呈现的全是完美结构化旅游团。")
 
-# 优先使用新账号的 Key，其他作为备用
 GROQ_KEYS = [
     "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",
     "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",
@@ -107,9 +106,13 @@ def make_tour_dict(dest, code, title, loc, dates, raw_price):
     status, over_days, hol_name = evaluate_holiday_fit(dates, days)
     p_num, p_text = clean_and_parse_price(raw_price)
     
+    # 过滤掉无效残缺行
+    if not code or code == "SP000000" or not dest or dest == "精选目的地" or p_num == 0:
+        return None
+
     return {
-        "destination": dest if dest else "精选目的地",
-        "tour_code": code if code else "SP000000",
+        "destination": dest,
+        "tour_code": code,
         "title": title if title else "经典旅游路线",
         "departure_location": loc if loc else "新加坡出发 (SIN)",
         "departure_dates": dates if dates else "详见海报",
@@ -167,10 +170,9 @@ def force_convert_and_compress(file_bytes):
     else:
         img = img.convert("RGB")
         
-    # 优化：将最大尺寸限制在 900 像素，既保证文字清晰度，又大幅节省 Token 消耗
-    img.thumbnail((900, 900), Image.Resampling.LANCZOS)
+    img.thumbnail((1000, 1000), Image.Resampling.LANCZOS)
     buffer = BytesIO()
-    img.save(buffer, format="JPEG", quality=75)
+    img.save(buffer, format="JPEG", quality=85)
     return base64.b64encode(buffer.getvalue()).decode("utf-8")
 
 def parse_flexible_content(content):
@@ -189,23 +191,23 @@ def parse_flexible_content(content):
             parts = [p.strip() for p in re.split(r'\s{2,}|,\s*', line)]
 
         if len(parts) >= 6:
-            items.append(make_tour_dict(parts[0], parts[2], parts[3], parts[1], parts[4], parts[5]))
-        elif len(parts) >= 4:
-            items.append(make_tour_dict(parts[0], "SP000000", parts[2] if len(parts)>2 else parts[1], "新加坡出发 (SIN)", parts[-2] if len(parts)>1 else "详见海报", parts[-1]))
-        else:
-            prices = re.findall(r'(?:RM)?\s*(\d{3,5})', line)
-            if prices:
-                items.append(make_tour_dict("精选目的地", "SP000000", line[:30], "新加坡出发 (SIN)", "详见海报", f"RM {prices[0]}"))
+            item = make_tour_dict(parts[0], parts[2], parts[3], parts[1], parts[4], parts[5])
+            if item:
+                items.append(item)
     return items
 
 def analyze_single_image(file_bytes, file_name, task_dict):
     encoded_string = force_convert_and_compress(file_bytes)
     
     prompt = (
-        "这是一张旅游宣传海报。请扫描全图，提取所有旅游团。\n"
-        "每行输出一个团，严格用竖线 | 隔开 6 个字段：\n"
+        "这是一张马来西亚大型旅行社的旅游宣传海报。请极其仔细地扫描全图每一个方框。\n"
+        "【严格要求】：\n"
+        "1. 必须提取出明确的团号（例如 SP002376 等格式）。\n"
+        "2. 每一行必须包含：目的地、出发地、团号、路线名称、具体出发日期、价格。\n"
+        "3. 绝对不要输出团号为空或写成 N/A、SP000000 的无效行。\n"
+        "4. 每行用竖线 | 严格隔开 6 个字段：\n"
         "目的地 | 出发地 | 团号 | 路线名称与天数 | 出发日期 | 价格\n"
-        "只输出文本行，不要有多余说明。"
+        "只输出有效的文本行，不要有任何多余说明。"
     )
 
     url = "https://api.groq.com/openai/v1/chat/completions"
@@ -227,7 +229,7 @@ def analyze_single_image(file_bytes, file_name, task_dict):
                 }
             ],
             "temperature": 0.1,
-            "max_tokens": 2048
+            "max_tokens": 3072
         }
         
         try:
@@ -241,7 +243,7 @@ def analyze_single_image(file_bytes, file_name, task_dict):
                     seen = set()
                     for it in items:
                         k = (it["tour_code"], it["departure_dates"], it["price_numeric"])
-                        if it["tour_code"] != "SP000000" and k in seen:
+                        if k in seen:
                             continue
                         seen.add(k)
                         unique_list.append(it)
@@ -251,12 +253,12 @@ def analyze_single_image(file_bytes, file_name, task_dict):
         except Exception:
             continue
 
-    raise Exception("当前备用池中的 API Key 均触发频控限制，请稍等片刻再试")
+    raise Exception("当前 API Key 均触发频控限制，请稍后再试")
 
 def background_worker(files_data, task_dict, api_key):
     total = len(files_data)
     for idx, (f_name, f_bytes) in enumerate(files_data):
-        task_dict["status_msg"] = f"⚡ 省流高效解析第 {idx + 1}/{total} 张: {f_name} ..."
+        task_dict["status_msg"] = f"⚡ 高精清洗解析第 {idx + 1}/{total} 张: {f_name} ..."
         try:
             data = analyze_single_image(f_bytes, f_name, task_dict)
             if data:
@@ -271,7 +273,7 @@ def background_worker(files_data, task_dict, api_key):
             
     task_dict["running"] = False
     task_dict["finished"] = True
-    task_dict["status_msg"] = "✅ 海报解析全部完成！"
+    task_dict["status_msg"] = "✅ 海报高精清洗完成！"
 
 components.html("""
 <div style="display:flex; align-items:center; justify-content:space-between; background:#f0fdf4; border:1px solid #bbf7d0; padding:10px 14px; border-radius:8px; font-family:sans-serif; margin-bottom:12px;">
@@ -330,7 +332,7 @@ if uploaded_files:
             task["progress"] = 0.0
             task["results"] = []
             task["errors"] = []
-            task["status_msg"] = "正在启动独立账号引擎..."
+            task["status_msg"] = "正在启动高精清洗引擎..."
             
             files_data = [(f.name, f.getvalue()) for f in uploaded_files]
             t = threading.Thread(target=background_worker, args=(files_data, task, GROQ_KEYS[0]), daemon=True)
