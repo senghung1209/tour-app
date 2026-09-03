@@ -15,10 +15,11 @@ st.set_page_config(page_title="AI 旅游团智能筛选助手", page_icon="✈�
 st.title("✈️ 旅游团宣传单智能分析与筛选 (多路备用引擎版)")
 st.markdown("已接入多路备用通道与智能文本切片引擎：彻底规避单一账号频控限制，实现秒级高精提取。")
 
-# 配置主备两个 Key（或者你可以随时填入另一个新注册的 Groq Key 作为备用）
+# 已配置多个高额度备用 Groq API Key
 GROQ_KEYS = [
-    "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",
-    "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" 
+    "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",
+    "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",
+    "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"
 ]
 
 OFFICIAL_HOLIDAYS = [
@@ -208,8 +209,8 @@ def analyze_single_image(file_bytes, file_name, task_dict):
 
     url = "https://api.groq.com/openai/v1/chat/completions"
     
-    # 依次尝试不同的 Key 和模型组合
-    for key in GROQ_KEYS:
+    # 轮流测试 Key，如果遇到 429 额度超限自动无缝切换到下一个可用 Key
+    for idx, key in enumerate(GROQ_KEYS):
         headers = {
             "Authorization": f"Bearer {key.strip()}",
             "Content-Type": "application/json"
@@ -246,17 +247,17 @@ def analyze_single_image(file_bytes, file_name, task_dict):
                         unique_list.append(it)
                     return unique_list
             elif response.status_code == 429:
-                # 遇到频控自动跳过换下一个 Key
+                # 切换下一个 Key
                 continue
         except Exception:
             continue
 
-    raise Exception("当前 Key 额度已耗尽 (429 Rate Limit)，请稍后再试或更换新注册的 Groq API Key")
+    raise Exception("所有 API Key 的额度均已耗尽 (429 Rate Limit)，请稍后再试")
 
 def background_worker(files_data, task_dict, api_key):
     total = len(files_data)
     for idx, (f_name, f_bytes) in enumerate(files_data):
-        task_dict["status_msg"] = f"⚡ 智能通道解析第 {idx + 1}/{total} 张: {f_name} ..."
+        task_dict["status_msg"] = f"⚡ 多通道自动轮换解析第 {idx + 1}/{total} 张: {f_name} ..."
         try:
             data = analyze_single_image(f_bytes, f_name, task_dict)
             if data:
