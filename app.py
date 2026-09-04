@@ -48,7 +48,7 @@ else:
         st.session_state.private_tour_data = []
     active_data = st.session_state.private_tour_data
 
-st.title("✈️ 旅游团智能比价助手 (多日期精准绑定版)")
+st.title("✈️ 旅游团智能比价助手 (区块循环代理全量版)")
 
 @st.cache_resource
 def get_loud_wav_base64():
@@ -189,7 +189,6 @@ def clean_destination_name(raw_dest):
     s = re.sub(r'\d+\s*(?:天|D|d|夜|晚|N|n)', '', s)
     return s.strip()
 
-# 💎 终极日期炸开器：确保同一个价格下有多个日期时，100% 拆分成独立行
 def split_and_explode_dates(raw_agency, raw_dest, raw_code, raw_title, raw_loc, raw_dates_str, raw_price, forced_agency=""):
     days = extract_tour_days(raw_title)
     try:
@@ -203,7 +202,6 @@ def split_and_explode_dates(raw_agency, raw_dest, raw_code, raw_title, raw_loc, 
     norm_loc = normalize_departure_location(raw_loc, raw_title)
     clean_dest = clean_destination_name(raw_dest)
 
-    # 提取所有出现的日期片段
     date_tokens = re.findall(r'\b\d{1,2}[/.-]\d{1,2}(?:[/.-]\d{2,4})?\b', str(raw_dates_str))
     if not date_tokens:
         date_tokens = [str(raw_dates_str).strip()]
@@ -292,24 +290,20 @@ def parse_json_response(raw_text, default_agency="豪吉旅游"):
                 })
     return items
 
-def call_gemini_micro_precision_agent(img, agency_name, status_box):
+def call_gemini_section_agent(img_chunk, section_name):
     if not GEMINI_API_KEY:
         return []
 
-    status_box.markdown(f"🔬 正在启动【{agency_name}】显微镜级高密度视觉审计（对一个价格对应多个日期的区块进行精确拆解）...")
     buf = BytesIO()
-    img.save(buf, format="JPEG", quality=95)
+    img_chunk.save(buf, format="JPEG", quality=95)
     base64_data = base64.b64encode(buf.getvalue()).decode('utf-8')
 
     prompt = (
-        "你是一个拥有“显微镜级视力”的旅游海报高精数据审计专家。宣传海报中经常出现：【一个价格（例如 RM 1599 或 RM 5299）上面对应了 2 个甚至 3 个不同的出发日期（例如 Departure Date 13/11/26、27/11/26 共享 1599）】。\n\n"
-        "【核心审计与多日期绑定铁律】：\n"
-        "1. 当一个价格下方或旁边写了好几个日期时，必须把该价格与每一个日期分别组成完整的对应关系返回！\n"
-        "2. 绝对不允许把多个日期合并成一个字符串后漏掉其中某几天。如果一个价格对应两个日期，请在返回的 JSON 中把它们写在一起（如 '13/11/26, 27/11/26'），系统会自动为你拆开。\n"
-        "3. 仔细核对团号、路线标题、起飞地点、价格。\n\n"
+        f"你是一位拥有显微镜级视力的旅游审计专家。当前正在专注分析【{section_name}】板块。\n"
+        "【核心任务】：全量提取该板块内的所有团号、完整路线名称、起飞地点、所有出发日期（包含用逗号、顿号紧密隔开的多个日期）以及对应的团费价格。\n\n"
         "输出规范：必须返回严格合法的纯 JSON 数组格式（不附加任何 markdown 额外说明）：\n"
         "[\n"
-        '  {"destination": "海南岛", "tour_code": "SP002301", "title": "4天3晚 海口 阳光海南", "departure_location": "新加坡起飞 (SIN)", "departure_dates": "13/11/26, 27/11/26", "price": 1599},\n'
+        '  {"destination": "目的地", "tour_code": "SP002301", "title": "路线名称", "departure_location": "起飞地", "departure_dates": "13/11/26, 27/11/26", "price": 1599},\n'
         "  ...\n"
         "]"
     )
@@ -325,10 +319,10 @@ def call_gemini_micro_precision_agent(img, agency_name, status_box):
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={GEMINI_API_KEY}"
         for attempt in range(3):
             try:
-                res = requests.post(url, headers=headers, json=payload, timeout=120)
+                res = requests.post(url, headers=headers, json=payload, timeout=90)
                 if res.status_code == 200:
                     raw_text = res.json()["candidates"][0]["content"]["parts"][0]["text"]
-                    items = parse_json_response(raw_text, default_agency=agency_name)
+                    items = parse_json_response(raw_text, default_agency="豪吉旅游")
                     if items:
                         return items
                 if res.status_code == 503:
@@ -402,7 +396,7 @@ uploaded_file = st.file_uploader("📷 请上传任意旅游海报图片", type=
 if uploaded_file is not None:
     agency_choice = st.radio("请选择这家海报对应的旅行社：", ["豪吉旅游", "琦琦旅游", "其他新旅行社"], horizontal=True)
 
-    if st.button("🚀 启动显微镜级 AI 高精提取", type="primary", use_container_width=True):
+    if st.button("🚀 启动区块循环代理全量提取", type="primary", use_container_width=True):
         newly_extracted = []
         progress_bar = st.progress(0.0)
         status_box = st.empty()
@@ -410,11 +404,52 @@ if uploaded_file is not None:
         img = Image.open(BytesIO(uploaded_file.getvalue()))
         if img.mode != 'RGB':
             img = img.convert('RGB')
+        w, h = img.size
 
-        progress_bar.progress(0.5)
-        raw_items = call_gemini_micro_precision_agent(img, agency_choice, status_box)
+        if agency_choice == "琦琦旅游":
+            status_box.markdown("🔍 正在全幅扫描琦琦旅游 1-23 行超值表格...")
+            progress_bar.progress(0.5)
+            buf = BytesIO()
+            img.save(buf, format="JPEG", quality=95)
+            base64_data = base64.b64encode(buf.getvalue()).decode('utf-8')
+            prompt = "请提取琦琦旅游23行表格。格式：序号 | 出发日期 | 天数 | 行程亮点 | 航空 | 团费RM"
+            payload = {
+                "contents": [{"parts": [{"text": prompt}, {"inline_data": {"mime_type": "image/jpeg", "data": base64_data}}]}],
+                "generationConfig": {"temperature": 0.0, "maxOutputTokens": 16384}
+            }
+            headers = {"Content-Type": "application/json", "x-goog-api-key": GEMINI_API_KEY}
+            raw_items = []
+            for model_name in [PRIMARY_MODEL, BACKUP_MODEL]:
+                url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={GEMINI_API_KEY}"
+                res = requests.post(url, headers=headers, json=payload, timeout=90)
+                if res.status_code == 200:
+                    raw_items = parse_json_response(res.json()["candidates"][0]["content"]["parts"][0]["text"], default_agency="琦琦旅游")
+                    if raw_items:
+                        break
+        else:
+            # 💎 豪吉海报全自动区块循环微距裁剪提取（精准锁定每一个省份板块，消灭 Token 截断，保证全量 70+ 项输出）
+            boxes = [
+                ("海南岛板块", (0, int(h * 0.13), int(w * 0.35), int(h * 0.39))),
+                ("哈尔滨板块(含上下及雪国列车)", (int(w * 0.32), int(h * 0.13), int(w * 0.68), int(h * 0.58))),
+                ("上海板块(含右侧边缘)", (int(w * 0.65), int(h * 0.13), w, int(h * 0.53))),
+                ("大连板块", (0, int(h * 0.38), int(w * 0.35), int(h * 0.68))),
+                ("广州澳门板块", (int(w * 0.32), int(h * 0.53), int(w * 0.65), int(h * 0.78))),
+                ("重庆板块", (int(w * 0.65), int(h * 0.51), w, int(h * 0.68))),
+                ("张家界板块", (0, int(h * 0.67), int(w * 0.35), h)),
+                ("北疆南疆板块", (int(w * 0.65), int(h * 0.67), w, h))
+            ]
+
+            raw_items = []
+            total_boxes = len(boxes)
+            for idx, (sec_name, box_coords) in enumerate(boxes):
+                status_box.markdown(f"🔍 正在微距分析【{sec_name}】...")
+                progress_bar.progress((idx + 1) / total_boxes)
+                cropped_img = img.crop(box_coords)
+                sec_items = call_gemini_section_agent(cropped_img, sec_name)
+                raw_items.extend(sec_items)
+
         progress_bar.progress(1.0)
-        status_box.markdown("✨ 正在进行显微镜级多日期独立炸开、去重与价格排序整理...")
+        status_box.markdown("✨ 正在进行多日期独立炸开、全局去重与价格排序整理...")
 
         for item in raw_items:
             rows = split_and_explode_dates(
@@ -452,7 +487,7 @@ if uploaded_file is not None:
                 st.session_state.private_tour_data = unique_combined
 
             trigger_play_on_done(len(unique_combined))
-            st.success(f"🎉 显微镜级多日期绑定提取完成！当前【{work_mode}】共有 **{len(unique_combined)}** 个精准团期。")
+            st.success(f"🎉 区块循环代理全量提取完成！当前【{work_mode}】共有 **{len(unique_combined)}** 个精准团期。")
             time.sleep(1.0)
             st.rerun()
         else:
