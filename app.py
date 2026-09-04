@@ -36,11 +36,10 @@ def save_persisted_data(data):
     except Exception as e:
         st.error(f"本地保存失败: {e}")
 
-# 🎛️ 侧边栏模式选择 (必须在顶层初始化)
+# 🎛️ 侧边栏模式选择
 st.sidebar.header("📌 系统工作模式")
 work_mode = st.sidebar.radio("请选择空间类型", ["🌐 公共共享模式 (多人实时同步)", "👤 独立个人模式 (私有独立沙盒)"])
 
-# 初始化数据容器
 if work_mode == "🌐 公共共享模式 (多人实时同步)":
     if "shared_tour_data" not in st.session_state:
         st.session_state.shared_tour_data = load_persisted_data()
@@ -50,7 +49,7 @@ else:
         st.session_state.private_tour_data = []
     active_data = st.session_state.private_tour_data
 
-st.title("✈️ 旅游团智能比价助手 (双模式高精AI版)")
+st.title("✈️ 旅游团智能比价助手 (高精微距版)")
 
 @st.cache_resource
 def get_loud_wav_base64():
@@ -187,6 +186,7 @@ def clean_destination_name(raw_dest):
     s = re.sub(r'\d+\s*(?:天|D|d|夜|晚|N|n)', '', s)
     return s.strip()
 
+# 💎 显微镜级高密度日期拆解器（彻底消灭逗号黏连和漏项）
 def split_and_explode_dates(raw_agency, raw_dest, raw_code, raw_title, raw_loc, raw_dates_str, raw_price, forced_agency=""):
     days = extract_tour_days(raw_title)
     try:
@@ -200,6 +200,7 @@ def split_and_explode_dates(raw_agency, raw_dest, raw_code, raw_title, raw_loc, 
     norm_loc = normalize_departure_location(raw_loc, raw_title)
     clean_dest = clean_destination_name(raw_dest)
 
+    # 显微镜级正则：支持逗号、顿号、斜杠、空格分隔的密集日期
     date_tokens = re.findall(r'\b\d{1,2}[/.-]\d{1,2}(?:[/.-]\d{2,4})?\b', str(raw_dates_str))
     if not date_tokens:
         date_tokens = [str(raw_dates_str).strip()]
@@ -278,30 +279,31 @@ def parse_json_response(raw_text, default_agency="豪吉旅游"):
                     "tour_code": code_matches[0].upper(),
                     "title": line[:30],
                     "departure_location": "新加坡起飞",
-                    "departure_dates": d_match[0] if d_match else "26/12/26",
+                    "departure_dates": ", ".join(d_match) if d_match else "26/12/26",
                     "price": int(p_match[-1]) if p_match else 2999
                 })
     return items
 
-def call_gemini_human_expert_agent(img, agency_name, status_box):
+def call_gemini_micro_precision_agent(img, agency_name, status_box):
     if not GEMINI_API_KEY:
         return []
 
-    status_box.markdown(f"🤖 正在启动【{agency_name}】人类专家级视觉微距扫描（模拟肉眼沉浸式逐格遍历）...")
+    status_box.markdown(f"🔬 正在启动【{agency_name}】显微镜级高密度视觉审计（对紧密排列、逗号分隔的日期进行逐一锁定）...")
     buf = BytesIO()
     img.save(buf, format="JPEG", quality=95)
     base64_data = base64.b64encode(buf.getvalue()).decode('utf-8')
 
     prompt = f"""
-    你是一位顶级的旅游海报排版审计专家。这张【{agency_name}】宣传海报包含多个目的地促销板块。
-    请完全模拟人类专家的视线，采用【逐格扫描、由上至下、从左向右】的动线：
-    1. 锁定每个独立行程卡片边界。
-    2. 严格核对团号（如SP开头或编号）、行程天数与全称、出发起飞点、所有出发日期与团费价格的对应关系。
-    3. 如果一个团卡片内有多个出发日期和价格，必须将其逐个独立展开，严禁遗漏边缘小字（如哈尔滨下半部或右侧边缘板块）。
+    你是一个拥有“显微镜级视力”的旅游海报高精数据审计专家。这张【{agency_name}】宣传海报排版紧密、许多卡片内包含多个用逗号、顿号或空格紧密隔开的出发日期。
 
-    严格输出规范：必须返回严格的合法的 JSON 数组格式（不附加任何多余 markdown 描述）：
+    【核心审计铁律（极其重要）】：
+    1. 绝对不允许遗漏任何一个紧密排列的日期！如果一行里写了多个日期（例如 `02/12/26, 04/12/26, 06/12/26`），必须把每一个日期都极其仔细地看清，绝不能只抓第一个或最后一个。
+    2. 严格核对团号、路线名称、起飞地、每一个独立日期与团费价格的精确绑定关系。
+    3. 哪怕字号再小、排版再密，也必须逐格、逐行全部审计完毕。
+
+    输出规范：必须返回严格合法的纯 JSON 数组格式（不附加任何 markdown 额外说明）：
     [
-      {{"destination": "目的地名称", "tour_code": "团号", "title": "完整路线名称", "departure_location": "起飞地点", "departure_dates": "DD/MM/YY", "price": 2999}},
+      {{"destination": "目的地名称", "tour_code": "团号", "title": "完整路线名称", "departure_location": "起飞地点", "departure_dates": "02/12/26, 04/12/26", "price": 5299}},
       ...
     ]
     """
@@ -394,7 +396,7 @@ uploaded_file = st.file_uploader("📷 请上传任意旅游海报图片", type=
 if uploaded_file is not None:
     agency_choice = st.radio("请选择这家海报对应的旅行社：", ["豪吉旅游", "琦琦旅游", "其他新旅行社"], horizontal=True)
 
-    if st.button("🚀 启动 AI 高精智能代理提取", type="primary", use_container_width=True):
+    if st.button("🚀 启动显微镜级 AI 高精提取", type="primary", use_container_width=True):
         newly_extracted = []
         progress_bar = st.progress(0.0)
         status_box = st.empty()
@@ -404,9 +406,9 @@ if uploaded_file is not None:
             img = img.convert('RGB')
 
         progress_bar.progress(0.5)
-        raw_items = call_gemini_human_expert_agent(img, agency_choice, status_box)
+        raw_items = call_gemini_micro_precision_agent(img, agency_choice, status_box)
         progress_bar.progress(1.0)
-        status_box.markdown("✨ 正在进行全局去重、假期核对与清单生成...")
+        status_box.markdown("✨ 正在进行显微镜级日期炸开、去重与全局排序...")
 
         for item in raw_items:
             rows = split_and_explode_dates(
@@ -444,13 +446,12 @@ if uploaded_file is not None:
                 st.session_state.private_tour_data = unique_combined
 
             trigger_play_on_done(len(unique_combined))
-            st.success(f"🎉 智能高精提取完成！当前【{work_mode}】共有 **{len(unique_combined)}** 个精准团期。")
+            st.success(f"🎉 显微镜级微距提取完成！当前【{work_mode}】共有 **{len(unique_combined)}** 个精准团期。")
             time.sleep(1.0)
             st.rerun()
         else:
             st.warning("⚠️ 未能从该图中解析出有效团期，请检查图片或重新点击。")
 
-# 根据当前工作模式获取渲染数据源
 current_display_data = st.session_state.shared_tour_data if work_mode == "🌐 公共共享模式 (多人实时同步)" else st.session_state.private_tour_data
 
 if current_display_data:
