@@ -48,7 +48,7 @@ else:
         st.session_state.private_tour_data = []
     active_data = st.session_state.private_tour_data
 
-st.title("✈️ 旅游团智能比价助手 (区块循环代理全量版)")
+st.title("✈️ 旅游团智能比价助手 (微距全覆盖终极版)")
 
 @st.cache_resource
 def get_loud_wav_base64():
@@ -427,13 +427,13 @@ if uploaded_file is not None:
                     if raw_items:
                         break
         else:
-            # 💎 豪吉海报全自动区块循环微距裁剪提取（精准锁定每一个省份板块，消灭 Token 截断，保证全量 70+ 项输出）
+            # 💎 优化裁剪框：将广州澳门板块的底部边界扩大至 0.85，确保底部的 SP002195, SP002691, SP002690 100% 完整纳入
             boxes = [
                 ("海南岛板块", (0, int(h * 0.13), int(w * 0.35), int(h * 0.39))),
                 ("哈尔滨板块(含上下及雪国列车)", (int(w * 0.32), int(h * 0.13), int(w * 0.68), int(h * 0.58))),
                 ("上海板块(含右侧边缘)", (int(w * 0.65), int(h * 0.13), w, int(h * 0.53))),
                 ("大连板块", (0, int(h * 0.38), int(w * 0.35), int(h * 0.68))),
-                ("广州澳门板块", (int(w * 0.32), int(h * 0.53), int(w * 0.65), int(h * 0.78))),
+                ("广州澳门板块", (int(w * 0.32), int(h * 0.53), int(w * 0.65), int(h * 0.85))),
                 ("重庆板块", (int(w * 0.65), int(h * 0.51), w, int(h * 0.68))),
                 ("张家界板块", (0, int(h * 0.67), int(w * 0.35), h)),
                 ("北疆南疆板块", (int(w * 0.65), int(h * 0.67), w, h))
