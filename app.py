@@ -206,7 +206,6 @@ def split_and_explode_dates(raw_agency, raw_dest, raw_code, raw_title, raw_loc, 
         })
     return exploded
 
-# 终极宽松超强容错解析器：只要行里能抠出日期和价格，统统放行入库
 def parse_bulletproof_lines(raw_text, default_agency="豪吉旅游"):
     items = []
     for line in raw_text.strip().splitlines():
@@ -221,13 +220,11 @@ def parse_bulletproof_lines(raw_text, default_agency="豪吉旅游"):
         try:
             full_line_str = " ".join(parts)
             
-            # 自动用正则在整行中搜寻价格（3到5位数字）
             price_val = 2999
             price_matches = re.findall(r'\b\d{3,5}\b', full_line_str.replace(",", ""))
             if price_matches:
-                price_val = int(price_matches[-1]) # 通常价格在最后
+                price_val = int(price_matches[-1])
 
-            # 自动用正则在整行中搜寻日期（格式如 DD/MM/YY 或 DD-MM-YY）
             date_matches = re.findall(r'\b\d{1,2}[/.-]\d{1,2}(?:[/.-]\d{2,4})?\b', full_line_str)
             dates_str = date_matches[0] if date_matches else "26/12/26"
 
@@ -251,7 +248,6 @@ def parse_bulletproof_lines(raw_text, default_agency="豪吉旅游"):
                     "price": price_val
                 })
             else:
-                # 琦琦旅游超级容错解析
                 seq_no = parts[0] if len(parts) > 0 and parts[0].isdigit() else "1"
                 highlights = parts[3] if len(parts) > 3 else (parts[1] if len(parts) > 1 else "超值精选路线")
                 days_str = parts[2] if len(parts) > 2 else "6天5夜"
@@ -272,6 +268,7 @@ def parse_bulletproof_lines(raw_text, default_agency="豪吉旅游"):
 
 def call_gemini_vision_bulletproof(img_bytes, prompt_text, agency_name):
     if not GEMINI_API_KEY:
+        st.error("❌ 未检测到 GEMINI_API_KEY！")
         return []
 
     base64_data = base64.b64encode(img_bytes).decode('utf-8')
@@ -287,15 +284,23 @@ def call_gemini_vision_bulletproof(img_bytes, prompt_text, agency_name):
             try:
                 res = requests.post(url, headers=headers, json=payload, timeout=60)
                 if res.status_code == 200:
-                    raw_text = res.json()["candidates"][0]["content"]["parts"][0]["text"]
-                    items = parse_bulletproof_lines(raw_text, default_agency=agency_name)
-                    if items:
-                        return items
-                if res.status_code == 503:
-                    time.sleep(2)
-                    continue
-            except Exception:
-                time.sleep(2)
+                    res_json = res.json()
+                    if "candidates" in res_json and len(res_json["candidates"]) > 0:
+                        raw_text = res_json["candidates"][0]["content"]["parts"][0]["text"]
+                        items = parse_bulletproof_lines(raw_text, default_agency=agency_name)
+                        if items:
+                            return items
+                        else:
+                            # 🔴 关键增强：如果解析出来为空，把大模型吐出的“原话”直接展示出来，让你看清到底返回了什么！
+                            st.warning(f"⚠️ 大模型成功返回了内容，但未能从文本中提取出有效格式。原始内容片段：\n\n```text\n{raw_text[:500]}\n```")
+                            return []
+                    else:
+                        st.error(f"⚠️ API 返回结构异常: {res_json}")
+                else:
+                    st.error(f"❌ API 请求失败 (HTTP {res.status_code}): {res.text}")
+            except Exception as err:
+                st.error(f"❌ 请求异常: {str(err)}")
+            time.sleep(1)
     return []
 
 @st.cache_resource
@@ -494,4 +499,46 @@ if st.session_state.tour_data:
     elif selected_loc == "🇲🇾 新山出发 (JB)":
         filtered_df = filtered_df[filtered_df['departure_location'].str.contains("JB|新山", na=False)]
     elif selected_loc == "🇸🇬 新加坡起飞 (SIN)":
-        filtered_df = filtered
+        filtered_df = filtered_df[filtered_df['departure_location'].str.contains("SIN|新加坡", na=False)]
+
+    if selected_hol == "🎒 包含学校假期 (含超出2天内)":
+        filtered_df = filtered_df[filtered_df['holiday_status'].isin(['exact', 'slight_over'])]
+    elif selected_hol == "✨ 严格在学校假期内 (0超出)":
+        filtered_df = filtered_df[filtered_df['holiday_status'] == 'exact']
+    elif selected_hol == "💼 仅平时非假期":
+        filtered_df = filtered_df[filtered_df['holiday_status'] == 'none']
+
+    p_min = int(df['price_numeric'].min()) if not df.empty else 1000
+    p_max = int(df['price_numeric'].max()) if not df.empty else 9000
+    if p_min >= p_max:
+        p_max = p_min + 100
+    price_range = st.sidebar.slider("💰 团费预算范围 (RM)", min_value=p_min, max_value=p_max, value=(p_min, p_max), step=100)
+    filtered_df = filtered_df[(filtered_df['price_numeric'] >= price_range[0]) & (filtered_df['price_numeric'] <= price_range[1])]
+
+    st.markdown(f"### 符合条件的出发选项共 **{len(filtered_df)}** 个：")
+    col1, col2 = st.columns(2)
+    with col1:
+        st.download_button("📊 下载 CSV 比价清单", data=filtered_df.to_csv(index=False).encode('utf-8-sig'), file_name="智能比价清单.csv", mime="text/csv", use_container_width=True)
+    with col2:
+        st.download_button("🖼️ 下载高清长图 (.png)", data=generate_comparison_image(filtered_df), file_name="智能比价长图.png", mime="image/png", use_container_width=True)
+
+    st.dataframe(filtered_df[['agency', 'destination', 'tour_code', 'departure_location', 'departure_dates', 'price_text', 'title']], use_container_width=True)
+
+    st.markdown("#### 📋 行程比对卡片")
+    for _, row in filtered_df.iterrows():
+        with st.container(border=True):
+            c1, c2, c3 = st.columns([3, 2, 2])
+            with c1:
+                st.markdown(f"### 📍 **{row['destination']}** <small style='color:gray;'>({row['agency']})</small>", unsafe_allow_html=True)
+                st.write(f"**路线：** {row['title']}")
+                st.write(f"**团号：** `{row['tour_code']}`")
+            with c2:
+                st.markdown(f"🛫 **出发地：** `{row['departure_location']}`")
+                st.write(f"📅 **出发日期：** {row['departure_dates']}")
+                h_stat = row['holiday_status']
+                if h_stat == 'exact':
+                    st.success(f"🎒 完美在校假内 ({row['holiday_name']})")
+                elif h_stat == 'slight_over':
+                    st.warning(f"⚠️ 包含校假，超 {row['over_days']} 天 (需请假)")
+            with c3:
+                st.markdown(f"### 💰 **{row['price_text']}**")
