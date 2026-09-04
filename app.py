@@ -10,7 +10,7 @@ import math
 import struct
 import requests
 from io import BytesIO
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFont, ImageEnhance
 import streamlit.components.v1 as components
 
 st.set_page_config(page_title="旅游团智能比价助手", page_icon="✈️", layout="wide")
@@ -48,7 +48,7 @@ else:
         st.session_state.private_tour_data = []
     active_data = st.session_state.private_tour_data
 
-st.title("✈️ 旅游团智能比价助手 (工业级绝对升序 & 豪吉深度强化版)")
+st.title("✈️ 旅游团智能比价助手 (妈妈专用·豪吉极致防错版)")
 
 @st.cache_resource
 def get_loud_wav_base64():
@@ -323,23 +323,28 @@ def parse_json_response(raw_text, default_agency="豪吉旅游"):
         pass
     return items
 
-def call_gemini_strict_matrix_agent(img_chunk, box_name):
+def call_gemini_ultra_haoji_agent(img_chunk, box_name):
     if not GEMINI_API_KEY:
         return []
+
+    # 💎 图像增强：提升对比度和锐度，让排版复杂的数字和斜体价格清晰可见
+    enhancer = ImageEnhance.Contrast(img_chunk)
+    img_chunk = enhancer.enhance(1.3)
+    enhancer_sharp = ImageEnhance.Sharpness(img_chunk)
+    img_chunk = enhancer_sharp.enhance(1.5)
 
     buf = BytesIO()
     img_chunk.save(buf, format="JPEG", quality=95)
     base64_data = base64.b64encode(buf.getvalue()).decode('utf-8')
 
     prompt = (
-        f"你是一位具备航天级精度的旅游海报数据提取专家。当前正在处理【{box_name}】板块。\n"
-        "【豪吉海报全方位结构化提取铁律】：\n"
-        "1. 豪吉海报卡片排版多变：有些价格在日期的【正下方】，有些在日期的【右侧】。你必须使用视觉交叉定位，绝对不能错配。\n"
-        "2. 每个团号（如 SP002580）下方的所有日期与价格必须一一对应。\n"
-        "3. 提取出的价格数字（price字段）必须是纯整数（如 2999、3299），严禁包含 RM 或其他字符。\n\n"
-        "输出规范：必须返回严格合法的纯 JSON 数组格式（不附加任何 markdown 额外说明）：\n"
+        f"你是一位具备最高视觉精度的旅游海报数据解构专家。当前正在深度扫描【{box_name}】板块。\n"
+        "【豪吉海报全方位防错与位置适配铁律】：\n"
+        "1. 豪吉海报的价格排版极度灵活：有些价格在出发日期的【正下方】，有些在日期的【正右侧】。你必须同时兼顾下方和右侧的邻近数字。\n"
+        "2. 每一个团号（如 SP 开头）对应的日期与价格必须 100% 对应，严禁错位。\n"
+        "3. 输出规范：必须返回严格合法的纯 JSON 数组格式（不附加任何 markdown 额外说明）：\n"
         "[\n"
-        '  {"destination": "上海", "tour_code": "SP002580", "title": "7天6夜 南京 江南水乡奇谭", "departure_location": "新加坡起飞 (SIN)", "departure_dates": "17/12/26", "price": 2999},\n'
+        '  {"destination": "目的地", "tour_code": "SP002580", "title": "7天6夜 南京 江南水乡奇谭", "departure_location": "新加坡起飞 (SIN)", "departure_dates": "17/12/26", "price": 2999},\n'
         "  ...\n"
         "]"
     )
@@ -432,7 +437,7 @@ uploaded_file = st.file_uploader("📷 请上传任意旅游海报图片", type=
 if uploaded_file is not None:
     agency_choice = st.radio("请选择这家海报对应的旅行社：", ["豪吉旅游", "琦琦旅游", "其他新旅行社"], horizontal=True)
 
-    if st.button("🚀 启动工业级高精提取与升序排序", type="primary", use_container_width=True):
+    if st.button("🚀 启动妈妈专用高精一键提取", type="primary", use_container_width=True):
         newly_extracted = []
         progress_bar = st.progress(0.0)
         status_box = st.empty()
@@ -463,7 +468,7 @@ if uploaded_file is not None:
                     if raw_items:
                         break
         else:
-            # 💎 豪吉海报：采用 3x3 宫格精细分区块扫描（完美兼容下方价格与右侧价格布局）
+            # 💎 豪吉海报：采用 3x3 极致宫格 + 图像锐化增强扫描
             boxes = [
                 ("左上区块", (0, int(h * 0.10), int(w * 0.35), int(h * 0.45))),
                 ("中上区块", (int(w * 0.32), int(h * 0.10), int(w * 0.68), int(h * 0.45))),
@@ -479,10 +484,10 @@ if uploaded_file is not None:
             raw_items = []
             total_boxes = len(boxes)
             for idx, (box_name, box_coords) in enumerate(boxes):
-                status_box.markdown(f"🔬 正在高精扫描【{box_name}】...")
+                status_box.markdown(f"🔬 正在进行画质增强与高精扫描【{box_name}】...")
                 progress_bar.progress((idx + 1) / total_boxes)
                 cropped_img = img.crop(box_coords)
-                box_items = call_gemini_strict_matrix_agent(cropped_img, box_name)
+                box_items = call_gemini_ultra_haoji_agent(cropped_img, box_name)
                 raw_items.extend(box_items)
 
         progress_bar.progress(1.0)
@@ -525,7 +530,7 @@ if uploaded_file is not None:
                 st.session_state.private_tour_data = unique_combined
 
             trigger_play_on_done(len(unique_combined))
-            st.success(f"🎉 工业级提取与升序排序完成！当前【{work_mode}】共有 **{len(unique_combined)}** 个精准团期。")
+            st.success(f"🎉 提取完成！当前【{work_mode}】共有 **{len(unique_combined)}** 个精准团期（已按价格从低到高排好）。")
             time.sleep(1.0)
             st.rerun()
         else:
@@ -546,7 +551,7 @@ if current_display_data:
     df = pd.DataFrame(current_display_data)
     df['price_numeric'] = pd.to_numeric(df['price_numeric'], errors='coerce').fillna(0).astype(int)
 
-    # 💎 前端展示时强制按 目的地、团费价格从低到高（主键）、出发日期进行严格升序排列
+    # 💎 前端展示时强制按 目的地、团费价格从低到高、出发日期进行严格升序排列
     df = df.sort_values(by=['destination', 'price_numeric', 'departure_dates'], ascending=[True, True, True])
 
     st.sidebar.header("🎛️ 高级筛选面板")
