@@ -131,9 +131,9 @@ if isinstance(RAW_KEY, list):
     RAW_KEY = RAW_KEY[0] if RAW_KEY else ""
 CLEAN_KEY = str(RAW_KEY).replace("[", "").replace("]", "").replace("'", "").replace('"', "").strip()
 
-# 🔒 修正为 Google 官方真正支持的稳定视觉模型名称
-PRIMARY_MODEL = "gemini-1.5-flash"
-BACKUP_MODEL = "gemini-1.5-pro"
+# 🔒 对应 Google 官方正式发布的最新工作负载模型
+PRIMARY_MODEL = "gemini-3.6-flash"
+BACKUP_MODEL = "gemini-3.5-flash-lite"
 
 def extract_tour_days(title_str):
     m = re.search(r'(\d+)\s*(?:天|D|d)', str(title_str))
@@ -309,6 +309,9 @@ def call_gemini_vision_chunk(img_chunk, chunk_name, status_box, hint_text="", de
                             return items
             except urllib.error.HTTPError as e:
                 err_body = e.read().decode('utf-8', errors='ignore') if e.fp else ""
+                # 如果当前模型返回 404，静默尝试备用模型
+                if e.code == 404:
+                    break
                 st.error(f"❌ 模型 [{model_name}] 触发 HTTP {e.code} 错误: {err_body}")
             except Exception as err:
                 st.error(f"❌ 请求异常: {str(err)}")
