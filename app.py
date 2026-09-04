@@ -199,14 +199,13 @@ def split_and_explode_dates(raw_agency, raw_dest, raw_code, raw_title, raw_loc, 
     norm_loc = normalize_departure_location(raw_loc, raw_title)
     clean_dest = clean_destination_name(raw_dest)
 
-    date_tokens = re.findall(r'\b\d{1,2}[/.-]\d{1,2}(?:[/.-](\d{2,4}))?\b', str(raw_dates_str))
+    # 💎 稳健日期切分：完美兼容斜杠、点、横杠等各种日期写法
+    date_tokens = re.findall(r'\b\d{1,2}[/.-]\d{1,2}(?:[/.-]\d{2,4})?\b', str(raw_dates_str))
     if not date_tokens:
         date_tokens = [str(raw_dates_str).strip()]
 
     exploded = []
     for d_token in date_tokens:
-        if str(d_token).isdigit() and len(str(d_token)) == 4:
-            continue
         status, over_days, hol_name = evaluate_holiday_fit(d_token, days)
         exploded.append({
             "agency": norm_agency,
@@ -264,7 +263,6 @@ def call_gemini_vision_chunk(img_chunk, chunk_name, status_box, hint_text="", de
     绝对严厉规则：
     1. 纯文本逐行输出，竖线 | 分隔，严禁代码块标记：
     旅行社|目的地|团号|行程路线全称|起飞地|出发日期|纯数字价格
-    2. 出发日期必须包含完整的日和月（例如 31/12/26），绝不能只写年份！
     """
 
     payload = {
@@ -370,7 +368,7 @@ if uploaded_file is not None:
             progress_bar.progress(0.5)
             raw_items = call_gemini_vision_chunk(img, "琦琦旅游表格", status_box, "提取琦琦旅游 1 到 23 项超值优惠团", default_agency="琦琦旅游")
         else:
-            # 💎 完美还原你指定的精确上下三段式切片比例 (0-40%, 35-80%, 75-100%) 带有重叠带防止截断
+            # 💎 完美还原你指定的精确上下三段式切片比例 (0-40%, 35-80%, 75-100%)
             box_top = (0, 0, w, int(h * 0.40))
             box_mid = (0, int(h * 0.35), w, int(h * 0.80))
             box_bottom = (0, int(h * 0.75), w, h)
