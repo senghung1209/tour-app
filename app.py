@@ -126,11 +126,10 @@ OFFICIAL_HOLIDAYS = [
     (datetime.date(2027, 1, 23), datetime.date(2027, 2, 16), "2027 农历新年与跨年假期")
 ]
 
-# 🔒 终极防线：无论 secrets 格式如何，强力剥离所有方括号、引号、空格及换行
-raw_secret = st.secrets.get("GEMINI_API_KEY", "")
-if isinstance(raw_secret, list):
-    raw_secret = raw_secret[0] if raw_secret else ""
-CLEAN_KEY = str(raw_secret).replace("[", "").replace("]", "").replace("'", "").replace('"', "").strip()
+RAW_KEY = st.secrets.get("GEMINI_API_KEY", "")
+if isinstance(RAW_KEY, list):
+    RAW_KEY = RAW_KEY[0] if RAW_KEY else ""
+CLEAN_KEY = str(RAW_KEY).replace("[", "").replace("]", "").replace("'", "").replace('"', "").strip()
 
 PRIMARY_MODEL = "gemini-3.5-flash"
 BACKUP_MODEL = "gemini-3.1-flash-lite"
@@ -262,6 +261,9 @@ def call_gemini_vision_chunk(img_chunk, chunk_name, status_box, hint_text="", de
 
     for model_name in [PRIMARY_MODEL, BACKUP_MODEL]:
         url = f"[https://generativelanguage.googleapis.com/v1beta/models/](https://generativelanguage.googleapis.com/v1beta/models/){model_name}:generateContent?key={CLEAN_KEY}"
+        # 🛡️ 强制净化 URL，剔除所有可能引发错误的方括号
+        url = re.sub(r'[\[\]]', '', url).strip()
+        
         for attempt in range(2):
             try:
                 req = urllib.request.Request(url, data=data_json, headers=headers, method="POST")
