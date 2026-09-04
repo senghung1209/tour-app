@@ -127,7 +127,8 @@ OFFICIAL_HOLIDAYS = [
 ]
 
 RAW_KEY = st.secrets.get("GEMINI_API_KEY", "")
-CLEAN_KEY = re.sub(r'[\r\n\t\s\'\"\[\]]', '', str(RAW_KEY))
+# 🔒 强力清洗密钥，剥离可能存在的方括号、引号和空白字符
+CLEAN_KEY = str(RAW_KEY).strip("[]'\" \r\n\t")
 
 PRIMARY_MODEL = "gemini-3.5-flash"
 BACKUP_MODEL = "gemini-3.1-flash-lite"
