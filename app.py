@@ -199,7 +199,6 @@ def split_and_explode_dates(raw_agency, raw_dest, raw_code, raw_title, raw_loc, 
     norm_loc = normalize_departure_location(raw_loc, raw_title)
     clean_dest = clean_destination_name(raw_dest)
 
-    # 💎 稳健日期切分：完美兼容斜杠、点、横杠等各种日期写法
     date_tokens = re.findall(r'\b\d{1,2}[/.-]\d{1,2}(?:[/.-]\d{2,4})?\b', str(raw_dates_str))
     if not date_tokens:
         date_tokens = [str(raw_dates_str).strip()]
@@ -257,17 +256,18 @@ def call_gemini_vision_chunk(img_chunk, chunk_name, status_box, hint_text="", de
     base64_data = base64.b64encode(buf.getvalue()).decode('utf-8')
 
     prompt = f"""
-    你是高精度海报视觉专家，正在扫描海报的【{chunk_name}】区域。请全量提取全部旅游团期信息。
+    你是高精度海报视觉专家，正在扫描豪吉海报的【{chunk_name}】区域。请全量提取该区域内的全部旅游团期信息，绝对不要遗漏任何一个方块（包括左侧、右侧及边缘的城市）。
     {f"核心区域提示: {hint_text}" if hint_text else ""}
 
     绝对严厉规则：
     1. 纯文本逐行输出，竖线 | 分隔，严禁代码块标记：
     旅行社|目的地|团号|行程路线全称|起飞地|出发日期|纯数字价格
+    2. 出发日期必须包含完整的日和月（例如 31/12/26），绝不能只写年份！
     """
 
     payload = {
         "contents": [{"parts": [{"text": prompt}, {"inline_data": {"mime_type": "image/jpeg", "data": base64_data}}]}],
-        "generationConfig": {"temperature": 0.0, "maxOutputTokens": 8192}
+        "generationConfig": {"temperature": 0.0, "maxOutputTokens": 16384}
     }
 
     headers = {"Content-Type": "application/json", "x-goog-api-key": GEMINI_API_KEY}
@@ -276,7 +276,7 @@ def call_gemini_vision_chunk(img_chunk, chunk_name, status_box, hint_text="", de
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={GEMINI_API_KEY}"
         for attempt in range(2):
             try:
-                res = requests.post(url, headers=headers, json=payload, timeout=60)
+                res = requests.post(url, headers=headers, json=payload, timeout=90)
                 if res.status_code == 200:
                     raw_text = res.json()["candidates"][0]["content"]["parts"][0]["text"]
                     items = parse_compact_lines(raw_text, default_agency=default_agency)
@@ -375,15 +375,15 @@ if uploaded_file is not None:
 
             status_box.markdown("🔍 豪吉海报【第一段 (0%-40%)：重庆/西藏/青岛】...")
             progress_bar.progress(0.2)
-            r1 = call_gemini_vision_chunk(img.crop(box_top), "豪吉海报第一段", status_box, "提取重庆、西藏、青岛", default_agency="豪吉旅游")
+            r1 = call_gemini_vision_chunk(img.crop(box_top), "豪吉海报第一段", status_box, "提取重庆、西藏、青岛等全量路线", default_agency="豪吉旅游")
 
             status_box.markdown("🔍 豪吉海报【第二段 (35%-80%)：桂林/台湾/韩国】...")
             progress_bar.progress(0.5)
-            r2 = call_gemini_vision_chunk(img.crop(box_mid), "豪吉海报第二段", status_box, "提取桂林、台湾、韩国", default_agency="豪吉旅游")
+            r2 = call_gemini_vision_chunk(img.crop(box_mid), "豪吉海报第二段", status_box, "提取桂林、台湾、韩国等全量路线", default_agency="豪吉旅游")
 
             status_box.markdown("🔍 豪吉海报【第三段 (75%-100%)：贵州/哈尔滨/北疆/九寨沟】...")
             progress_bar.progress(0.8)
-            r3 = call_gemini_vision_chunk(img.crop(box_bottom), "豪吉海报第三段", status_box, "提取贵州、哈尔滨、北疆、九寨沟", default_agency="豪吉旅游")
+            r3 = call_gemini_vision_chunk(img.crop(box_bottom), "豪吉海报第三段", status_box, "提取贵州、哈尔滨、北疆、九寨沟等全量路线", default_agency="豪吉旅游")
 
             raw_items = r1 + r2 + r3
 
@@ -408,7 +408,8 @@ if uploaded_file is not None:
             seen = set()
             unique_combined = []
             for item in combined:
-                marker = (item["agency"], item["tour_code"], item["departure_dates"], item["price_numeric"])
+                # 💎 优化唯一标识：包含 agency, tour_code, departure_location, departure_dates, price_numeric，确保跨段重叠扫描的团不会被误删
+                marker = (item["agency"], item["tour_code"], item["departure_location"], item["departure_dates"], item["price_numeric"])
                 if marker not in seen:
                     seen.add(marker)
                     unique_combined.append(item)
