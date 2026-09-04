@@ -186,7 +186,7 @@ def split_and_explode_dates(raw_agency, raw_dest, raw_code, raw_title, raw_loc, 
     norm_loc = normalize_departure_location(raw_loc, raw_title)
     clean_dest = clean_destination_name(raw_dest)
 
-    date_tokens = re.findall(r'\b\d{1,2}[/.-](\d{1,2})(?:[/.-](\d{2,4}))?\b', str(raw_dates_str))
+    date_tokens = re.findall(r'\b\d{1,2}[/.-]\d{1,2}(?:[/.-](\d{2,4}))?\b', str(raw_dates_str))
     if not date_tokens:
         date_tokens = [str(raw_dates_str).strip()]
 
@@ -270,4 +270,8 @@ def call_gemini_vision_chunk(img_chunk, chunk_name, status_box, hint_text="", de
                     res_data = json.loads(response.read().decode('utf-8'))
                     if "candidates" in res_data and len(res_data["candidates"]) > 0:
                         raw_text = res_data["candidates"][0]["content"]["parts"][0]["text"]
-                        items =
+                        items = parse_compact_lines(raw_text, default_agency=default_agency)
+                        if items:
+                            return items
+                        else:
+                            st.warning(f"⚠️【{chunk_name}】大模型返回了内容，但未能匹配到 6 列格式。原始内容：\n
