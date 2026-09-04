@@ -215,342 +215,56 @@ def split_and_explode_dates(raw_agency, raw_dest, raw_code, raw_title, raw_loc, 
         })
     return exploded
 
-def parse_compact_lines(raw_text, default_agency="豪吉旅游"):
-    clean_lines = raw_text.strip().splitlines()
+# 💎 智能网格解析器：专门适配 AI 逐格遍历输出的文本
+def parse_grid_scanned_lines(raw_text, default_agency="豪吉旅游"):
     items = []
-    for line in clean_lines:
+    lines = raw_text.strip().splitlines()
+    for line in lines:
         line = line.strip().replace("```text", "").replace("```", "").replace("`", "").strip()
-        if not line or line.startswith("#") or "旅行社|目的地" in line or "目的地|团号" in line:
+        if not line or line.startswith("#") or "目的地|团号" in line or "根据您" in line or "提取" in line:
             continue
+        
         parts = [p.strip() for p in line.split("|") if p.strip()]
-        if len(parts) >= 6:
-            try:
-                price_val = int(re.sub(r'[^\d]', '', parts[5]))
-            except Exception:
-                price_val = 2999
+        full_line_str = " ".join(parts) if parts else line
+
+        if not re.search(r'\bSP[-]?\d{4,6}\b', full_line_str, re.IGNORECASE):
+            continue
+
+        try:
+            price_val = 2999
+            price_matches = re.findall(r'\b\d{3,5}\b', full_line_str.replace(",", ""))
+            if price_matches:
+                price_val = int(price_matches[-1])
             if price_val == 0:
                 price_val = 2999
 
+            date_matches = re.findall(r'\b\d{1,2}[/.-]\d{1,2}(?:[/.-]\d{2,4})?\b', full_line_str)
+            dates_str = ", ".join(date_matches) if date_matches else "26/12/26"
+
+            tour_code = "SP-000"
+            code_matches = re.findall(r'\bSP[-]?\d{4,6}\b', full_line_str, re.IGNORECASE)
+            if code_matches:
+                tour_code = code_matches[0].upper()
+
+            dest = parts[0] if len(parts) > 0 and not "SP" in parts[0].upper() else "精选目的地"
+            title = parts[2] if len(parts) > 2 else (parts[1] if len(parts) > 1 else "精选路线")
+            loc = parts[3] if len(parts) > 3 else "新加坡起飞"
+
             items.append({
                 "agency": default_agency,
-                "destination": parts[0] or "精选目的地",
-                "tour_code": parts[1] or "-",
-                "title": parts[2] or "",
-                "departure_location": parts[3] or "",
-                "departure_dates": parts[4] or "",
+                "destination": clean_destination_name(dest),
+                "tour_code": tour_code,
+                "title": title,
+                "departure_location": loc,
+                "departure_dates": dates_str,
                 "price": price_val
             })
+        except Exception:
+            continue
     return items
 
 def parse_qiqi_lines(raw_text):
     items = []
     lines = raw_text.strip().splitlines()
     for line in lines:
-        line = line.strip().replace("```text", "").replace("```", "").replace("`", "").strip()
-        if not line or line.startswith("#") or "序号" in line or "团费" in line:
-            continue
-        parts = [p.strip() for p in line.split("|") if p.strip()]
-        if len(parts) >= 5:
-            try:
-                seq_no = re.sub(r'[^\d]', '', parts[0])
-                if not seq_no:
-                    continue
-                tour_code = f"QIQI-{seq_no}"
-
-                date_matches = re.findall(r'\b\d{1,2}[/.-]\d{1,2}[/.-]\d{2,4}\b', line)
-                if not date_matches:
-                    date_matches = re.findall(r'\b\d{1,2}[/.-]\d{1,2}\b', line)
-                dates_str = date_matches[0] if date_matches else "13/09/2026"
-
-                title = parts[3] if len(parts) > 3 else "超值优惠团"
-                price_val = 2999
-                price_matches = re.findall(r'\b\d{3,5}\b', parts[5].replace(",", "")) if len(parts) > 5 else []
-                if price_matches:
-                    price_val = int(price_matches[0])
-                else:
-                    all_p = re.findall(r'\b\d{3,5}\b', line.replace(",", ""))
-                    if all_p:
-                        price_val = int(all_p[-1])
-
-                items.append({
-                    "agency": "琦琦旅游",
-                    "destination": clean_destination_name(title),
-                    "tour_code": tour_code,
-                    "title": title,
-                    "departure_location": "新加坡起飞 (SIN)",
-                    "departure_dates": dates_str,
-                    "price": price_val
-                })
-            except Exception:
-                continue
-    return items
-
-def call_gemini_vision_chunk(img_chunk, chunk_name, status_box, hint_text="", default_agency="豪吉旅游"):
-    if not GEMINI_API_KEY:
-        return []
-
-    buf = BytesIO()
-    img_chunk.save(buf, format="JPEG", quality=95)
-    base64_data = base64.b64encode(buf.getvalue()).decode('utf-8')
-
-    if default_agency == "琦琦旅游":
-        prompt = f"""
-        你是一个精准的旅游表格提取专家。请提取【琦琦旅游】23行表格。
-        格式：序号 | 出发日期(如13/09/2026) | 天数 | 行程亮点 | 航空 | 团费RM
-        """
-    else:
-        prompt = f"""
-        你是顶级旅游海报视觉专家。当前正在扫描豪吉海报的【{chunk_name}】区域。
-        特别注意：必须完整提取该区域内的所有团期，绝不能漏掉中间或底部的任何团号（如 SP002395 哈尔滨下半部、SP002393 雪国列车等）！
-        提示: {hint_text}
-
-        严格规则：
-        1. 逐行输出，竖线 | 分隔，严禁任何代码块标记：
-        目的地 | 团号(如SP002301) | 行程路线全称 | 起飞地 | 完整出发日期(如31/12/26) | 纯数字价格(如1599)
-        2. 【多期独立铁律】：如果一个行程卡片包含多个不同的出发日期，绝不允许合并！必须为每一个出发日期单独独立写一行！
-        3. 绝不允许价格漏标或写成0。
-        """
-
-    payload = {
-        "contents": [{"parts": [{"text": prompt}, {"inline_data": {"mime_type": "image/jpeg", "data": base64_data}}]}],
-        "generationConfig": {"temperature": 0.0, "maxOutputTokens": 16384}
-    }
-
-    headers = {"Content-Type": "application/json", "x-goog-api-key": GEMINI_API_KEY}
-
-    for model_name in [PRIMARY_MODEL, BACKUP_MODEL]:
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={GEMINI_API_KEY}"
-        for attempt in range(3):
-            try:
-                res = requests.post(url, headers=headers, json=payload, timeout=90)
-                if res.status_code == 200:
-                    raw_text = res.json()["candidates"][0]["content"]["parts"][0]["text"]
-                    if default_agency == "琦琦旅游":
-                        items = parse_qiqi_lines(raw_text)
-                    else:
-                        items = parse_compact_lines(raw_text, default_agency=default_agency)
-                    if items:
-                        return items
-                if res.status_code == 503:
-                    time.sleep(3)
-                    continue
-            except Exception:
-                time.sleep(3)
-    return []
-
-@st.cache_resource
-def get_chinese_font(font_size=15):
-    font_paths = [
-        "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
-        "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
-        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
-        "wqy-microhei.ttc"
-    ]
-    for p in font_paths:
-        if os.path.exists(p):
-            try:
-                return ImageFont.truetype(p, font_size)
-            except Exception:
-                pass
-    return ImageFont.load_default()
-
-def generate_comparison_image(df):
-    w = 1020
-    rh = 42
-    hh = 75
-    h = hh + (len(df) + 1) * rh + 35
-    img = Image.new("RGB", (w, max(h, 220)), color=(255, 255, 255))
-    draw = ImageDraw.Draw(img)
-
-    f_head = get_chinese_font(20)
-    f_col = get_chinese_font(15)
-    f_body = get_chinese_font(14)
-    f_price = get_chinese_font(15)
-
-    draw.rectangle([0, 0, w, hh], fill=(30, 41, 59))
-    draw.text((30, 24), f"旅游团比价清单 (精选有效团期 {len(df)} 项)", fill=(255, 255, 255), font=f_head)
-
-    y = hh + 10
-    draw.rectangle([20, y, w - 20, y + 34], fill=(241, 245, 249))
-    cols = [("旅行社", 35), ("目的地", 160), ("团号", 250), ("起飞地", 360), ("出发日期", 500), ("团费价格", 620), ("行程路线", 740)]
-    for name, x in cols:
-        draw.text((x, y + 7), name, fill=(71, 85, 105), font=f_col)
-
-    y += 40
-    for idx, r in df.iterrows():
-        bg = (248, 250, 252) if idx % 2 == 0 else (255, 255, 255)
-        draw.rectangle([20, y, w - 20, y + rh - 2], fill=bg)
-
-        draw.text((35, y + 10), str(r['agency'])[:8], fill=(71, 85, 105), font=f_body)
-        draw.text((160, y + 10), str(r['destination'])[:6], fill=(15, 23, 42), font=f_body)
-        draw.text((250, y + 10), str(r['tour_code'])[:10], fill=(100, 116, 139), font=f_body)
-
-        loc_clean = str(r['departure_location']).replace("🇸🇬", "").replace("🇲🇾", "").strip()
-        draw.text((360, y + 10), loc_clean[:12], fill=(2, 132, 199), font=f_body)
-
-        draw.text((500, y + 10), str(r['departure_dates'])[:12], fill=(15, 23, 42), font=f_body)
-        draw.text((620, y + 9), str(r['price_text']), fill=(220, 38, 38), font=f_price)
-        draw.text((740, y + 10), str(r['title'])[:16], fill=(71, 85, 105), font=f_body)
-        y += rh
-
-    buf = BytesIO()
-    img.save(buf, format="PNG", quality=95)
-    return buf.getvalue()
-
-uploaded_file = st.file_uploader("📷 请上传旅游海报图片", type=["jpg", "jpeg", "png"])
-
-if uploaded_file is not None:
-    agency_choice = st.radio("请选择这家海报对应的旅行社：", ["豪吉旅游", "琦琦旅游"], horizontal=True)
-
-    if st.button("🚀 一键自动提取并比价", type="primary", use_container_width=True):
-        newly_extracted = []
-        progress_bar = st.progress(0.0)
-        status_box = st.empty()
-
-        img = Image.open(BytesIO(uploaded_file.getvalue()))
-        if img.mode != 'RGB':
-            img = img.convert('RGB')
-        w, h = img.size
-
-        if agency_choice == "琦琦旅游":
-            status_box.markdown("🔍 正在全幅扫描琦琦旅游 1-23 行超值表格...")
-            progress_bar.progress(0.5)
-            raw_items = call_gemini_vision_chunk(img, "琦琦旅游表格", status_box, "提取琦琦旅游全部 23 行团期", default_agency="琦琦旅游")
-        else:
-            # 💎 终极无缝重叠三段式切片（大幅加宽中段与上段、下段的重叠区，确保哈尔滨下半部 SP002395 和雪国列车 SP002393 绝对不被切断）
-            box_top = (0, 0, w, int(h * 0.48))
-            box_mid = (0, int(h * 0.28), w, int(h * 0.82))
-            box_bottom = (0, int(h * 0.62), w, h)
-
-            status_box.markdown("🔍 豪吉海报【第一视窗 (0%-48%)】...")
-            progress_bar.progress(0.2)
-            r1 = call_gemini_vision_chunk(img.crop(box_top), "豪吉海报上段", status_box, "提取海南岛、哈尔滨上段、上海", default_agency="豪吉旅游")
-
-            status_box.markdown("🔍 豪吉海报【第二视窗 (28%-82%)：含哈尔滨下半部】...")
-            progress_bar.progress(0.5)
-            r2 = call_gemini_vision_chunk(img.crop(box_mid), "豪吉海报中段", status_box, "提取哈尔滨下半部 SP002395、大连、广州澳门、重庆", default_agency="豪吉旅游")
-
-            status_box.markdown("🔍 豪吉海报【第三视窗 (62%-100%)：含雪国列车】...")
-            progress_bar.progress(0.8)
-            r3 = call_gemini_vision_chunk(img.crop(box_bottom), "豪吉海报下段", status_box, "提取张家界、雪国列车 SP002393、北疆、南疆", default_agency="豪吉旅游")
-
-            raw_items = r1 + r2 + r3
-
-        progress_bar.progress(1.0)
-        status_box.markdown("✨ 正在智能清洗与数据核对...")
-
-        for item in raw_items:
-            rows = split_and_explode_dates(
-                item.get("agency", ""),
-                item.get("destination", "精选路线"),
-                item.get("tour_code", "-"),
-                item.get("title", ""),
-                item.get("departure_location", ""),
-                item.get("departure_dates", ""),
-                item.get("price", 0),
-                forced_agency=agency_choice
-            )
-            newly_extracted.extend(rows)
-
-        if newly_extracted:
-            combined = st.session_state.tour_data + newly_extracted
-            unique_combined = []
-            seen = set()
-            for item in combined:
-                # 💎 严格按 团号 + 出发日期 + 价格 作为联合主键去重
-                key = (item["agency"], item["tour_code"], item["departure_dates"], item["price_numeric"])
-                if key not in seen:
-                    seen.add(key)
-                    unique_combined.append(item)
-
-            st.session_state.tour_data = unique_combined
-            save_persisted_data(unique_combined)
-            trigger_play_on_done(len(st.session_state.tour_data))
-            st.success(f"🎉 成功提取团期！当前总库共有 **{len(st.session_state.tour_data)}** 个精准团期供妈妈挑选。")
-            time.sleep(1.0)
-            st.rerun()
-        else:
-            st.warning("⚠️ 未能从该图中解析出有效团期，请检查图片或重新点击。")
-
-if st.session_state.tour_data:
-    if st.button("🗑️ 清空所有已保存数据 (重新开始)", use_container_width=True):
-        save_persisted_data([])
-        st.session_state.tour_data = []
-        st.rerun()
-
-    st.markdown("---")
-    df = pd.DataFrame(st.session_state.tour_data)
-    df['price_numeric'] = pd.to_numeric(df['price_numeric'], errors='coerce').fillna(0).astype(int)
-
-    st.sidebar.header("🎛️ 妈妈专属筛选面板")
-    clean_agencies = sorted(list({str(a) for a in df['agency'] if pd.notna(a) and str(a).strip()}))
-    selected_agency = st.sidebar.selectbox("选择旅行社", ["全部"] + clean_agencies)
-
-    clean_dests = sorted(list({str(d) for d in df['destination'] if pd.notna(d) and str(d).strip()}))
-    selected_dest = st.sidebar.selectbox("选择目的地", ["全部"] + clean_dests)
-
-    loc_options = [
-        "全部",
-        "🇲🇾 马来西亚全部地区 (包含吉隆坡KUL / 新山JB)",
-        "🇲🇾 马来西亚起飞 (KUL)",
-        "🇲🇾 新山出发 (JB)",
-        "🇸🇬 新加坡起飞 (SIN)"
-    ]
-    selected_loc = st.sidebar.selectbox("选择起飞地点", loc_options)
-
-    selected_hol = st.sidebar.selectbox("🗓️ 学校假期筛选", ["全部日期", "🎒 包含学校假期 (含超出2天内)", "✨ 严格在学校假期内 (0超出)", "💼 仅平时非假期"])
-
-    filtered_df = df.copy()
-    if selected_agency != "全部":
-        filtered_df = filtered_df[filtered_df['agency'] == selected_agency]
-    if selected_dest != "全部":
-        filtered_df = filtered_df[filtered_df['destination'] == selected_dest]
-
-    if selected_loc == "🇲🇾 马来西亚全部地区 (包含吉隆坡KUL / 新山JB)":
-        filtered_df = filtered_df[filtered_df['departure_location'].str.contains("马来西亚|新山|KUL|JB", na=False)]
-    elif selected_loc == "🇲🇾 马来西亚起飞 (KUL)":
-        filtered_df = filtered_df[filtered_df['departure_location'].str.contains("KUL", na=False)]
-    elif selected_loc == "🇲🇾 新山出发 (JB)":
-        filtered_df = filtered_df[filtered_df['departure_location'].str.contains("JB|新山", na=False)]
-    elif selected_loc == "🇸🇬 新加坡起飞 (SIN)":
-        filtered_df = filtered_df[filtered_df['departure_location'].str.contains("SIN|新加坡", na=False)]
-
-    if selected_hol == "🎒 包含学校假期 (含超出2天内)":
-        filtered_df = filtered_df[filtered_df['holiday_status'].isin(['exact', 'slight_over'])]
-    elif selected_hol == "✨ 严格在学校假期内 (0超出)":
-        filtered_df = filtered_df[filtered_df['holiday_status'] == 'exact']
-    elif selected_hol == "💼 仅平时非假期":
-        filtered_df = filtered_df[filtered_df['holiday_status'] == 'none']
-
-    p_min = int(df['price_numeric'].min()) if not df.empty else 1000
-    p_max = int(df['price_numeric'].max()) if not df.empty else 9000
-    if p_min >= p_max:
-        p_max = p_min + 100
-    price_range = st.sidebar.slider("💰 团费预算范围 (RM)", min_value=p_min, max_value=p_max, value=(p_min, p_max), step=100)
-    filtered_df = filtered_df[(filtered_df['price_numeric'] >= price_range[0]) & (filtered_df['price_numeric'] <= price_range[1])]
-
-    st.markdown(f"### 符合条件的出发选项共 **{len(filtered_df)}** 个：")
-    col1, col2 = st.columns(2)
-    with col1:
-        st.download_button("📊 下载 CSV 比价清单", data=filtered_df.to_csv(index=False).encode('utf-8-sig'), file_name="智能比价清单.csv", mime="text/csv", use_container_width=True)
-    with col2:
-        st.download_button("🖼️ 下载高清长图 (.png)", data=generate_comparison_image(filtered_df), file_name="智能比价长图.png", mime="image/png", use_container_width=True)
-
-    st.markdown("#### 📋 妈妈专属比对卡片 (点击即看)")
-    for _, row in filtered_df.iterrows():
-        with st.container(border=True):
-            c1, c2, c3 = st.columns([3, 2, 2])
-            with c1:
-                st.markdown(f"### 📍 **{row['destination']}** <small style='color:gray;'>({row['agency']})</small>", unsafe_allow_html=True)
-                st.write(f"**路线：** {row['title']}")
-                st.write(f"**团号：** `{row['tour_code']}`")
-            with c2:
-                st.markdown(f"🛫 **出发地：** `{row['departure_location']}`")
-                st.write(f"📅 **出发日期：** {row['departure_dates']}")
-                h_stat = row['holiday_status']
-                if h_stat == 'exact':
-                    st.success(f"🎒 完美在校假内 ({row['holiday_name']})")
-                elif h_stat == 'slight_over':
-                    st.warning(f"⚠️ 包含校假，超 {row['over_days']} 天 (需请假)")
-            with c3:
-                st.markdown(f"### 💰 **{row['price_text']}**")
+        line = line.strip().replace("```text", "").replace("
