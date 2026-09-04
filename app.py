@@ -188,6 +188,8 @@ def split_and_explode_dates(raw_agency, raw_dest, raw_code, raw_title, raw_loc, 
     norm_loc = normalize_departure_location(raw_loc, raw_title)
     clean_dest = clean_destination_name(raw_dest)
 
+    date_tokens = re.findall(r'\b\d{1,2}[/.-](\d{1,2})[/.-](\d{2,4})?\b|\b\d{1,2}[/.-]\d{1,2}\b', str(raw_dates_str))
+    # 采用最宽泛的日期Token匹配
     date_tokens = re.findall(r'\b\d{1,2}[/.-]\d{1,2}(?:[/.-]\d{2,4})?\b', str(raw_dates_str))
     if not date_tokens:
         date_tokens = [str(raw_dates_str).strip()]
@@ -215,7 +217,7 @@ def split_and_explode_dates(raw_agency, raw_dest, raw_code, raw_title, raw_loc, 
         })
     return exploded
 
-def parse_tolerant_full_lines(raw_text, default_agency="豪吉旅游"):
+def parse_tolerant_lines(raw_text, default_agency="豪吉旅游"):
     clean_lines = raw_text.strip().splitlines()
     items = []
     for line in clean_lines:
@@ -302,30 +304,23 @@ def parse_qiqi_lines(raw_text):
                 continue
     return items
 
-def call_gemini_full_traversal(img, agency_name, status_box):
+def call_gemini_half_scan(img_chunk, side_name, hint_text):
     if not GEMINI_API_KEY:
         return []
 
-    status_box.markdown(f"🔍 正在启动【{agency_name}】整张海报的 AI 顺藤摸瓜全景视觉遍历...")
     buf = BytesIO()
-    img.save(buf, format="JPEG", quality=95)
+    img_chunk.save(buf, format="JPEG", quality=95)
     base64_data = base64.b64encode(buf.getvalue()).decode('utf-8')
 
-    if agency_name == "琦琦旅游":
-        prompt = "请提取琦琦旅游23行表格。格式：序号 | 出发日期 | 天数 | 行程亮点 | 航空 | 团费RM"
-    else:
-        prompt = f"""
-        你是一位精通旅游海报排版的资深视觉专家。这是一张完整的【豪吉旅游】宣传海报。
-        请像人类专家阅读海报那样，顺着视觉动线【从左上角开始，按板块顺藤摸瓜、从上到下、由左至右】完整遍历整张图：
-        1. 顶部落点：海南岛板块 ➔ 哈尔滨板块（包含上半部及你绝对不能漏掉的中下部 SP002395 各个价格区间） ➔ 上海板块（包含中间及右侧所有的上海团）。
-        2. 中间落点：大连板块 ➔ 广州澳门板块 ➔ 重庆板块。
-        3. 底部落点：张家界板块 ➔ 雪国列车（SP002393） ➔ 北疆板块 ➔ 南疆板块。
+    prompt = f"""
+    你是顶级旅游海报视觉专家。当前正在微距扫描豪吉海报的【{side_name}】半边区域。
+    提示: {hint_text}
 
-        严格铁律：
-        1. 逐行输出，竖线 | 分隔，严禁任何代码块标记：
-        目的地 | 团号 | 行程路线全称 | 起飞地 | 完整出发日期 | 纯数字价格
-        2. 【绝不漏项】：必须把整张图所有板块每一个方块、每一个多期团全部抓完，绝对不能因为页面长而中途截断！
-        """
+    严格规则：
+    1. 逐行输出，竖线 | 分隔，严禁任何代码块标记：
+    目的地 | 团号 | 行程路线全称 | 起飞地 | 完整出发日期 | 纯数字价格
+    2. 【绝不漏项】：必须将该半边区域内的所有团号（包括哈尔滨全系列、广州澳门、重庆等）全部抓完！
+    """
 
     payload = {
         "contents": [{"parts": [{"text": prompt}, {"inline_data": {"mime_type": "image/jpeg", "data": base64_data}}]}],
@@ -338,13 +333,10 @@ def call_gemini_full_traversal(img, agency_name, status_box):
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={GEMINI_API_KEY}"
         for attempt in range(3):
             try:
-                res = requests.post(url, headers=headers, json=payload, timeout=120)
+                res = requests.post(url, headers=headers, json=payload, timeout=90)
                 if res.status_code == 200:
                     raw_text = res.json()["candidates"][0]["content"]["parts"][0]["text"]
-                    if agency_name == "琦琦旅游":
-                        items = parse_qiqi_lines(raw_text)
-                    else:
-                        items = parse_tolerant_full_lines(raw_text, default_agency="豪吉旅游")
+                    items = parse_tolerant_lines(raw_text, default_agency="豪吉旅游")
                     if items:
                         return items
                 if res.status_code == 503:
@@ -426,9 +418,43 @@ if uploaded_file is not None:
         img = Image.open(BytesIO(uploaded_file.getvalue()))
         if img.mode != 'RGB':
             img = img.convert('RGB')
+        w, h = img.size
 
-        progress_bar.progress(0.5)
-        raw_items = call_gemini_full_traversal(img, agency_choice, status_box)
+        if agency_choice == "琦琦旅游":
+            status_box.markdown("🔍 正在全幅扫描琦琦旅游 1-23 行超值表格...")
+            progress_bar.progress(0.5)
+            buf = BytesIO()
+            img.save(buf, format="JPEG", quality=95)
+            base64_data = base64.b64encode(buf.getvalue()).decode('utf-8')
+            prompt = "请提取琦琦旅游23行表格。格式：序号 | 出发日期 | 天数 | 行程亮点 | 航空 | 团费RM"
+            payload = {
+                "contents": [{"parts": [{"text": prompt}, {"inline_data": {"mime_type": "image/jpeg", "data": base64_data}}]}],
+                "generationConfig": {"temperature": 0.0, "maxOutputTokens": 16384}
+            }
+            headers = {"Content-Type": "application/json", "x-goog-api-key": GEMINI_API_KEY}
+            raw_items = []
+            for model_name in [PRIMARY_MODEL, BACKUP_MODEL]:
+                url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={GEMINI_API_KEY}"
+                res = requests.post(url, headers=headers, json=payload, timeout=90)
+                if res.status_code == 200:
+                    raw_items = parse_qiqi_lines(res.json()["candidates"][0]["content"]["parts"][0]["text"])
+                    if raw_items:
+                        break
+        else:
+            # 💎 左右两半独立微距并行扫描：确保左半边（海南岛/哈尔滨全系列/大连/张家界）与右半边（上海/广州澳门/重庆/北疆南疆）各自独立拥有完整 Token 额度，绝对不截断
+            left_box = (0, 0, int(w * 0.58), h)
+            right_box = (int(w * 0.42), 0, w, h)
+
+            status_box.markdown("🔍 豪吉海报【左半边：海南岛 / 哈尔滨全系列 / 大连 / 张家界】...")
+            progress_bar.progress(0.3)
+            r_left = call_gemini_half_scan(img.crop(left_box), "左半边", "提取左侧所有板块，特别是哈尔滨所有团号 SP002145, SP002549, SP002392, SP002395, SP002393、大连、张家界、海南岛")
+
+            status_box.markdown("🔍 豪吉海报【右半边：上海 / 广州澳门 / 重庆 / 北疆南疆】...")
+            progress_bar.progress(0.7)
+            r_right = call_gemini_half_scan(img.crop(right_box), "右半边", "提取右侧所有板块，特别是广州澳门 SP002739, SP002738, SP002195, SP002691, SP002690、重庆 SP002459, SP002722、上海、北疆南疆")
+
+            raw_items = r_left + r_right
+
         progress_bar.progress(1.0)
         status_box.markdown("✨ 正在智能清洗与数据核对...")
 
@@ -460,7 +486,7 @@ if uploaded_file is not None:
             st.session_state.tour_data = unique_combined
             save_persisted_data(unique_combined)
             trigger_play_on_done(len(st.session_state.tour_data))
-            st.success(f"🎉 顺藤摸瓜全景视觉分析完成！当前总库共有 **{len(st.session_state.tour_data)}** 个精准团期供妈妈挑选。")
+            st.success(f"🎉 左右独立双半图并行分析完成！当前总库共有 **{len(st.session_state.tour_data)}** 个精准团期供妈妈挑选。")
             time.sleep(1.0)
             st.rerun()
         else:
