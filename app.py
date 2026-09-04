@@ -8,7 +8,7 @@ import base64
 import time
 import math
 import struct
-import urllib.request
+import requests
 from io import BytesIO
 from PIL import Image, ImageDraw, ImageFont
 import streamlit.components.v1 as components
@@ -284,31 +284,28 @@ def call_gemini_full_poster(img, agency_name, status_box):
         "contents": [{"parts": [{"text": prompt}, {"inline_data": {"mime_type": "image/jpeg", "data": base64_data}}]}],
         "generationConfig": {"temperature": 0.0, "maxOutputTokens": 8192}
     }
-
-    data_json = json.dumps(payload).encode('utf-8')
-    headers = {"Content-Type": "application/json"}
+    headers = {"Content-Type": "application/json", "x-goog-api-key": GEMINI_API_KEY}
 
     for model_name in [PRIMARY_MODEL, BACKUP_MODEL]:
         url = f"[https://generativelanguage.googleapis.com/v1beta/models/](https://generativelanguage.googleapis.com/v1beta/models/){model_name}:generateContent?key={GEMINI_API_KEY}"
         for attempt in range(3):
             try:
-                req = urllib.request.Request(url, data=data_json, headers=headers, method="POST")
-                with urllib.request.urlopen(req, timeout=120) as response:
-                    res_data = json.loads(response.read().decode('utf-8'))
-                    if "candidates" in res_data and len(res_data["candidates"]) > 0:
-                        raw_text = res_data["candidates"][0]["content"]["parts"][0]["text"]
+                res = requests.post(url, headers=headers, json=payload, timeout=120)
+                if res.status_code == 200:
+                    res_json = res.json()
+                    if "candidates" in res_json and len(res_json["candidates"]) > 0:
+                        raw_text = res_json["candidates"][0]["content"]["parts"][0]["text"]
                         items = parse_bulletproof_full_text(raw_text, default_agency=agency_name)
                         if items:
                             return items
                         else:
-                            st.warning(f"⚠️ 大模型返回了内容，但未能匹配解析。")
+                            st.warning("⚠️ 大模型返回了内容，但未能匹配解析。")
                             return []
-            except urllib.error.HTTPError as e:
-                err_detail = e.read().decode('utf-8') if e.fp else str(e)
-                st.error(f"API 请求失败 (HTTP {e.code}): {err_detail}")
-            except Exception as err:
-                st.error(f"请求异常: {str(err)}")
-            time.sleep(3)
+                if res.status_code == 503:
+                    time.sleep(3)
+                    continue
+            except Exception:
+                time.sleep(3)
     return []
 
 @st.cache_resource
