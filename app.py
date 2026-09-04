@@ -126,9 +126,11 @@ OFFICIAL_HOLIDAYS = [
     (datetime.date(2027, 1, 23), datetime.date(2027, 2, 16), "2027 农历新年与跨年假期")
 ]
 
-RAW_KEY = st.secrets.get("GEMINI_API_KEY", "")
-# 🔒 强力清洗密钥，剥离可能存在的方括号、引号和空白字符
-CLEAN_KEY = str(RAW_KEY).strip("[]'\" \r\n\t")
+# 🔒 终极防线：无论 secrets 格式如何，强力剥离所有方括号、引号、空格及换行
+raw_secret = st.secrets.get("GEMINI_API_KEY", "")
+if isinstance(raw_secret, list):
+    raw_secret = raw_secret[0] if raw_secret else ""
+CLEAN_KEY = str(raw_secret).replace("[", "").replace("]", "").replace("'", "").replace('"', "").strip()
 
 PRIMARY_MODEL = "gemini-3.5-flash"
 BACKUP_MODEL = "gemini-3.1-flash-lite"
