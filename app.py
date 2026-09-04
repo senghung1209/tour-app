@@ -215,31 +215,53 @@ def split_and_explode_dates(raw_agency, raw_dest, raw_code, raw_title, raw_loc, 
         })
     return exploded
 
-def parse_split_lines(raw_text, default_agency="豪吉旅游"):
+# 💎 宽容型自适应容错解析器：只要有团号、日期和价格，绝对不漏掉任何一行
+def parse_tolerant_split_lines(raw_text, default_agency="豪吉旅游"):
     clean_lines = raw_text.strip().splitlines()
     items = []
     for line in clean_lines:
         line = line.strip().replace("```text", "").replace("```", "").replace("`", "").strip()
         if not line or line.startswith("#") or "旅行社|目的地" in line or "目的地|团号" in line:
             continue
+        
         parts = [p.strip() for p in line.split("|") if p.strip()]
-        if len(parts) >= 6:
-            try:
-                price_val = int(re.sub(r'[^\d]', '', parts[5]))
-            except Exception:
-                price_val = 2999
+        full_line_str = " ".join(parts) if parts else line
+
+        # 只要行里包含 SP 开头的团号，即视为有效行
+        code_matches = re.findall(r'\bSP[-]?\d{4,6}\b', full_line_str, re.IGNORECASE)
+        if not code_matches:
+            continue
+
+        try:
+            tour_code = code_matches[0].upper()
+
+            # 智能提取价格
+            price_val = 2999
+            price_matches = re.findall(r'\b\d{3,5}\b', full_line_str.replace(",", ""))
+            if price_matches:
+                price_val = int(price_matches[-1])
             if price_val == 0:
                 price_val = 2999
 
+            # 智能提取日期
+            date_matches = re.findall(r'\b\d{1,2}[/.-]\d{1,2}(?:[/.-]\d{2,4})?\b', full_line_str)
+            dates_str = ", ".join(date_matches) if date_matches else "26/12/26"
+
+            dest = parts[0] if len(parts) > 0 and not "SP" in parts[0].upper() else "精选目的地"
+            title = parts[2] if len(parts) > 2 else (parts[1] if len(parts) > 1 else "精选路线")
+            loc = parts[3] if len(parts) > 3 else "新加坡起飞"
+
             items.append({
                 "agency": default_agency,
-                "destination": parts[0] or "精选目的地",
-                "tour_code": parts[1] or "-",
-                "title": parts[2] or "",
-                "departure_location": parts[3] or "",
-                "departure_dates": parts[4] or "",
+                "destination": clean_destination_name(dest),
+                "tour_code": tour_code,
+                "title": title,
+                "departure_location": loc,
+                "departure_dates": dates_str,
                 "price": price_val
             })
+        except Exception:
+            continue
     return items
 
 def parse_qiqi_lines(raw_text):
@@ -297,10 +319,10 @@ def call_gemini_split_scan(img_chunk, chunk_name, status_box, hint_text=""):
     你是顶级旅游海报视觉专家。当前正在微距扫描豪吉海报的【{chunk_name}】半边区域。
     提示: {hint_text}
 
-    严格规则：
-    1. 逐行输出，竖线 | 分隔，严禁任何代码块标记：
+    绝对规则：
+    1. 逐行输出，竖线 | 分隔，严禁代码块标记：
     目的地 | 团号 | 行程路线全称 | 起飞地 | 完整出发日期 | 纯数字价格
-    2. 【绝不漏项铁律】：必须将该半边区域内的所有团号、所有出发日期和价格全部抓完！多期独立分行！
+    2. 【绝不漏项】：必须将该区域内的所有团号（包括广州澳门、重庆、哈尔滨、上海等）全部抓完！
     """
 
     payload = {
@@ -317,7 +339,7 @@ def call_gemini_split_scan(img_chunk, chunk_name, status_box, hint_text=""):
                 res = requests.post(url, headers=headers, json=payload, timeout=90)
                 if res.status_code == 200:
                     raw_text = res.json()["candidates"][0]["content"]["parts"][0]["text"]
-                    items = parse_split_lines(raw_text, default_agency="豪吉旅游")
+                    items = parse_tolerant_split_lines(raw_text, default_agency="豪吉旅游")
                     if items:
                         return items
                 if res.status_code == 503:
@@ -404,7 +426,6 @@ if uploaded_file is not None:
         if agency_choice == "琦琦旅游":
             status_box.markdown("🔍 正在全幅扫描琦琦旅游 1-23 行超值表格...")
             progress_bar.progress(0.5)
-            # 琦琦旅游单列整图扫描
             buf = BytesIO()
             img.save(buf, format="JPEG", quality=95)
             base64_data = base64.b64encode(buf.getvalue()).decode('utf-8')
@@ -423,17 +444,17 @@ if uploaded_file is not None:
                     if raw_items:
                         break
         else:
-            # 💎 左右分栏微距并行扫描：彻底消除 Token 截断，左半边（海南岛/哈尔滨/大连/张家界），右半边（上海/广州澳门/重庆/北疆南疆/雪国列车）
-            left_box = (0, 0, int(w * 0.55), h)   # 稍微加宽重叠带至 55%
-            right_box = (int(w * 0.45), 0, w, h)
+            # 💎 左右分栏微距扫描（加宽重叠带）
+            left_box = (0, 0, int(w * 0.58), h)
+            right_box = (int(w * 0.42), 0, w, h)
 
             status_box.markdown("🔍 豪吉海报【左半边分栏：海南岛 / 哈尔滨 / 大连 / 张家界】...")
             progress_bar.progress(0.3)
-            r_left = call_gemini_split_scan(img.crop(left_box), "左半边", status_box, "提取左半边所有板块及哈尔滨下半部 SP002395")
+            r_left = call_gemini_split_scan(img.crop(left_box), "左半边", status_box, "提取左半边所有板块及哈尔滨下半部 SP002395、张家界")
 
             status_box.markdown("🔍 豪吉海报【右半边分栏：上海 / 广州澳门 / 重庆 / 北疆南疆 / 雪国列车】...")
             progress_bar.progress(0.7)
-            r_right = call_gemini_split_scan(img.crop(right_box), "右半边", status_box, "提取右半边所有上海团、雪国列车 SP002393、北疆南疆")
+            r_right = call_gemini_split_scan(img.crop(right_box), "右半边", status_box, "提取右半边所有上海团、广州澳门、重庆、雪国列车 SP002393、北疆南疆")
 
             raw_items = r_left + r_right
 
@@ -468,7 +489,7 @@ if uploaded_file is not None:
             st.session_state.tour_data = unique_combined
             save_persisted_data(unique_combined)
             trigger_play_on_done(len(st.session_state.tour_data))
-            st.success(f"🎉 左右分栏全景分析完成！当前总库共有 **{len(st.session_state.tour_data)}** 个精准团期供妈妈挑选。")
+            st.success(f"🎉 左右分栏容错分析完成！当前总库共有 **{len(st.session_state.tour_data)}** 个精准团期供妈妈挑选。")
             time.sleep(1.0)
             st.rerun()
         else:
