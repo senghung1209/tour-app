@@ -1,4 +1,4 @@
-Import streamlit as st
+import streamlit as st
 import pandas as pd
 import datetime
 import re
@@ -8,7 +8,6 @@ import base64
 import time
 import math
 import struct
-import urllib.request
 import requests
 from io import BytesIO
 from PIL import Image, ImageDraw, ImageFont
@@ -348,11 +347,9 @@ def generate_comparison_image(df):
     img.save(buf, format="PNG", quality=95)
     return buf.getvalue()
 
-# 单张海报上传
 uploaded_file = st.file_uploader("📷 上传单张海报图片 (请一张一张上传)", type=["jpg", "jpeg", "png"])
 
 if uploaded_file is not None:
-    # 明确的手动选择框，让用户自己选择是豪吉还是琦琦
     agency_choice = st.radio("请为这张海报选择对应的旅行社：", ["豪吉旅游", "琦琦旅游"], horizontal=True)
 
     if st.button("🚀 立即开始深度精准分析并入库", type="primary", use_container_width=True):
@@ -370,7 +367,6 @@ if uploaded_file is not None:
             progress_bar.progress(0.5)
             raw_items = call_gemini_vision_chunk(img, "琦琦旅游表格", status_box, "提取琦琦旅游 1 到 23 项超值优惠团", default_agency="琦琦旅游")
         else:
-            # 豪吉旅游采用三段式精细微距扫描，保证全量 61 项不漏项
             box_top = (0, 0, w, int(h * 0.38))
             box_mid = (0, int(h * 0.32), w, int(h * 0.70))
             box_bottom = (0, int(h * 0.62), w, h)
