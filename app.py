@@ -242,14 +242,7 @@ def call_gemini_vision_chunk(img_chunk, chunk_name, status_box, hint_text="", de
     img_chunk.save(buf, format="JPEG", quality=95)
     base64_data = base64.b64encode(buf.getvalue()).decode('utf-8')
 
-    prompt = f"""
-    你是高精度海报视觉专家，正在扫描海报的【{chunk_name}】区域。请全量提取全部旅游团期信息。
-    {f"核心区域提示: {hint_text}" if hint_text else ""}
-
-    绝对严厉规则：
-    1. 纯文本逐行输出，竖线 | 分隔，严禁代码块标记：
-    目的地|团号|行程路线全称|起飞地|出发日期|纯数字价格
-    """
+    prompt = f"你是高精度海报视觉专家，正在扫描海报的【{chunk_name}】区域。请全量提取全部旅游团期信息。\n{f'核心区域提示: {hint_text}' if hint_text else ''}\n\n绝对严厉规则：\n1. 纯文本逐行输出，竖线 | 分隔，严禁代码块标记：\n目的地|团号|行程路线全称|起飞地|出发日期|纯数字价格"
 
     payload = {
         "contents": [{"parts": [{"text": prompt}, {"inline_data": {"mime_type": "image/jpeg", "data": base64_data}}]}],
@@ -495,4 +488,16 @@ if st.session_state.tour_data:
         with st.container(border=True):
             c1, c2, c3 = st.columns([3, 2, 2])
             with c1:
-                st.markdown(f"### 📍 **{row['destination']}** <small style='color:gray;'>({row['agency']})</small>", unsafe
+                st.markdown(f"### 📍 **{row['destination']}** <small style='color:gray;'>({row['agency']})</small>", unsafe_allow_html=True)
+                st.write(f"**路线：** {row['title']}")
+                st.write(f"**团号：** `{row['tour_code']}`")
+            with c2:
+                st.markdown(f"🛫 **出发地：** `{row['departure_location']}`")
+                st.write(f"📅 **出发日期：** {row['departure_dates']}")
+                h_stat = row['holiday_status']
+                if h_stat == 'exact':
+                    st.success(f"🎒 完美在校假内 ({row['holiday_name']})")
+                elif h_stat == 'slight_over':
+                    st.warning(f"⚠️ 包含校假，超 {row['over_days']} 天 (需请假)")
+            with c3:
+                st.markdown(f"### 💰 **{row['price_text']}**")
