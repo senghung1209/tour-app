@@ -38,7 +38,7 @@ def save_persisted_data(data):
 
 st.session_state.tour_data = load_persisted_data()
 
-st.title("✈️ 旅游团智能比价助手 (通用智能版)")
+st.title("✈️ 旅游团智能比价助手")
 
 @st.cache_resource
 def get_loud_wav_base64():
@@ -188,7 +188,7 @@ def split_and_explode_dates(raw_agency, raw_dest, raw_code, raw_title, raw_loc, 
     norm_loc = normalize_departure_location(raw_loc, raw_title)
     clean_dest = clean_destination_name(raw_dest)
 
-    date_tokens = re.findall(r'\b\d{1,2}[/.-]\d{1,2}(?:[/.-](\d{2,4}))?\b', str(raw_dates_str))
+    date_tokens = re.findall(r'\b\d{1,2}[/.-](\d{1,2})(?:[/.-](\d{2,4}))?\b|\b\d{1,2}[/.-]\d{1,2}\b', str(raw_dates_str))
     date_tokens = re.findall(r'\b\d{1,2}[/.-]\d{1,2}(?:[/.-]\d{2,4})?\b', str(raw_dates_str))
     if not date_tokens:
         date_tokens = [str(raw_dates_str).strip()]
@@ -216,11 +216,9 @@ def split_and_explode_dates(raw_agency, raw_dest, raw_code, raw_title, raw_loc, 
         })
     return exploded
 
-# 💎 真正的通用 JSON 智能解析引擎：支持解析 AI 返回的任意合法的 JSON 结构数据
 def parse_json_response(raw_text, default_agency="豪吉旅游"):
     items = []
     try:
-        # 清理 markdown 代码块
         clean_json = raw_text.strip()
         if "```json" in clean_json:
             clean_json = clean_json.split("```json")[1].split("```")[0].strip()
@@ -229,7 +227,6 @@ def parse_json_response(raw_text, default_agency="豪吉旅游"):
         
         data = json.loads(clean_json)
         if isinstance(data, dict):
-            # 如果按板块分组返回
             for k, v in data.items():
                 if isinstance(v, list):
                     for row in v:
@@ -256,7 +253,6 @@ def parse_json_response(raw_text, default_agency="豪吉旅游"):
                         "price": row.get("price", 2999)
                     })
     except Exception:
-        # 降级退回到纯文本行匹配
         lines = raw_text.strip().splitlines()
         for line in lines:
             if not line.strip() or line.startswith("#"):
@@ -286,13 +282,11 @@ def call_gemini_universal_agent(img, agency_name, status_box):
     base64_data = base64.b64encode(buf.getvalue()).decode('utf-8')
 
     prompt = f"""
-    你是一个世界顶级的视觉 AI 智能代理，能够自主分析任意排版的旅游海报（无论是多宫格拼图海报还是规整表格）。
+    你是一个世界顶级的视觉 AI 智能代理，能够自主分析任意排版的旅游海报。
     这是一张【{agency_name}】的宣传海报。
 
-    请像人类专家那样：
-    1. 自适应识别海报上的每一个板块/每一个独立团期（按从左到右、由上到下的自然顺序逐个清点，绝不遗漏任何一个方块或卡片，例如所有省份、哈尔滨各段、上海、雪国列车、广澳等）。
-    2. 提取出每一个团的：目的地、团号、完整行程名称、起飞地、出发日期、纯数字价格。
-    3. 如果一个团有多个出发日期或价格，必须拆分为多条独立记录。
+    请按从左到右、由上到下的自然顺序逐个清点，提取出每一个团的：目的地、团号、完整行程名称、起飞地、出发日期、纯数字价格。
+    如果一个团有多个出发日期或价格，必须拆分为多条独立记录。
 
     严格规则：必须以纯 JSON 格式返回（不要加任何 markdown 额外包裹说明，直接返回合法 JSON 数组）：
     [
@@ -431,7 +425,7 @@ if uploaded_file is not None:
             st.session_state.tour_data = unique_combined
             save_persisted_data(unique_combined)
             trigger_play_on_done(len(st.session_state.tour_data))
-            st.success(f"🎉 通用代理智能提取完成！当前总库共有 **{len(st.session_state.tour_data)}** 个精准团期供妈妈挑选。")
+            st.success(f"🎉 通用代理智能提取完成！当前总库共有 **{len(st.session_state.tour_data)}** 个精准团期供选择。")
             time.sleep(1.0)
             st.rerun()
         else:
@@ -447,7 +441,7 @@ if st.session_state.tour_data:
     df = pd.DataFrame(st.session_state.tour_data)
     df['price_numeric'] = pd.to_numeric(df['price_numeric'], errors='coerce').fillna(0).astype(int)
 
-    st.sidebar.header("🎛️ 妈妈专属筛选面板")
+    st.sidebar.header("🎛️ 高级筛选面板")
     clean_agencies = sorted(list({str(a) for a in df['agency'] if pd.notna(a) and str(a).strip()}))
     selected_agency = st.sidebar.selectbox("选择旅行社", ["全部"] + clean_agencies)
 
@@ -501,7 +495,7 @@ if st.session_state.tour_data:
     with col2:
         st.download_button("🖼️ 下载高清长图 (.png)", data=generate_comparison_image(filtered_df), file_name="智能比价长图.png", mime="image/png", use_container_width=True)
 
-    st.markdown("#### 📋 妈妈专属比对卡片 (点击即看)")
+    st.markdown("#### 📋 旅游团比对详情卡片 (点击即看)")
     for _, row in filtered_df.iterrows():
         with st.container(border=True):
             c1, c2, c3 = st.columns([3, 2, 2])
@@ -518,4 +512,4 @@ if st.session_state.tour_data:
                 elif h_stat == 'slight_over':
                     st.warning(f"⚠️ 包含校假，超 {row['over_days']} 天 (需请假)")
             with c3:
-                st.markdown(f"### ### 💰 **{row['price_text']}**")
+                st.markdown(f"### 💰 **{row['price_text']}**")
