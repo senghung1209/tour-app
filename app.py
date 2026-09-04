@@ -119,7 +119,7 @@ OFFICIAL_HOLIDAYS = [
     (datetime.date(2026, 3, 20), datetime.date(2026, 3, 29), "2026 第一学期假期 (3月)"),
     (datetime.date(2026, 5, 22), datetime.date(2026, 6, 7), "2026 年中假期 (5/6月)"),
     (datetime.date(2026, 8, 28), datetime.date(2026, 9, 6), "2026 第二学期假期 (8/9月)"),
-    (datetime.date(2026, 12, 4), datetime.date(2027, 1, 3), "2026 学年末大假期 (12月)"),
+    (datetime.date(2026, 12, 4), datetime.date(2027, 1, 3), "2026 学年末大假期 (12月/1月)"),
     (datetime.date(2027, 1, 23), datetime.date(2027, 2, 16), "2027 农历新年与跨年假期")
 ]
 
@@ -139,7 +139,12 @@ def evaluate_holiday_fit(departure_date_str, duration_days):
 
     d, mth, y = matches[0]
     d, mth = int(d), int(mth)
-    y = int(y) + 2000 if y and int(y) < 100 else (int(y) if y else 2026)
+    
+    if y:
+        y = int(y) + 2000 if int(y) < 100 else int(y)
+    else:
+        # 智能年份推断：如果月份是 1 或 2，默认是 2027 年，否则为 2026 年
+        y = 2027 if mth in [1, 2] else 2026
 
     try:
         dep_date = datetime.date(y, mth, d)
@@ -185,6 +190,7 @@ def clean_destination_name(raw_dest):
     s = re.sub(r'\d+\s*(?:天|D|d|夜|晚|N|n)', '', s)
     return s.strip()
 
+# 💎 升级版高精日期炸开器：支持处理省略年份的日期（如 09/12, 13/12）并自动补全年份
 def split_and_explode_dates(raw_agency, raw_dest, raw_code, raw_title, raw_loc, raw_dates_str, raw_price, forced_agency=""):
     days = extract_tour_days(raw_title)
     try:
@@ -198,25 +204,32 @@ def split_and_explode_dates(raw_agency, raw_dest, raw_code, raw_title, raw_loc, 
     norm_loc = normalize_departure_location(raw_loc, raw_title)
     clean_dest = clean_destination_name(raw_dest)
 
+    # 提取所有日期串
     date_tokens = re.findall(r'\b\d{1,2}[/.-]\d{1,2}(?:[/.-]\d{2,4})?\b', str(raw_dates_str))
     if not date_tokens:
         date_tokens = [str(raw_dates_str).strip()]
 
     exploded = []
     for d_token in date_tokens:
-        if len(d_token.split('/')[-1]) == 2:
-            pass
-        elif len(d_token.split('/')) == 2:
-            d_token = f"{d_token}/26"
+        parts_d = d_token.split('/') if '/' in d_token else (d_token.split('.') if '.' in d_token else d_token.split('-'))
+        if len(parts_d) == 2:
+            d_mth, d_day = parts_d[0], parts_d[1]
+            # 自动推断年份：1月、2月归为2027年，其余归为2026年
+            y_str = "27" if int(d_mth) in [1, 2] else "26"
+            full_d_token = f"{d_mth}/{d_day}/{y_str}"
+        elif len(parts_d) == 3:
+            full_d_token = d_token
+        else:
+            full_d_token = f"{d_token}/26"
 
-        status, over_days, hol_name = evaluate_holiday_fit(d_token, days)
+        status, over_days, hol_name = evaluate_holiday_fit(full_d_token, days)
         exploded.append({
             "agency": norm_agency,
             "destination": clean_dest,
             "tour_code": str(raw_code or "-"),
             "title": str(raw_title or ""),
             "departure_location": norm_loc,
-            "departure_dates": str(d_token),
+            "departure_dates": str(full_d_token),
             "price_numeric": clean_price,
             "price_text": f"RM {clean_price}",
             "holiday_status": status,
@@ -276,7 +289,7 @@ def parse_json_response(raw_text, default_agency="豪吉旅游"):
                     "tour_code": code_matches[0].upper(),
                     "title": line[:30],
                     "departure_location": "新加坡起飞",
-                    "departure_dates": ", ".join(d_match) if d_match else "26/12/26",
+                    "departure_dates": ", ".join(d_match) if d_match else "09/12/26",
                     "price": int(p_match[-1]) if p_match else 2999
                 })
     return items
@@ -285,20 +298,20 @@ def call_gemini_micro_precision_agent(img, agency_name, status_box):
     if not GEMINI_API_KEY:
         return []
 
-    status_box.markdown(f"🔬 正在启动【{agency_name}】显微镜级高密度视觉审计（对紧密排列、逗号分隔的日期进行逐一锁定）...")
+    status_box.markdown(f"🔬 正在启动【{agency_name}】显微镜级高密度视觉审计（对紧密排列、逗号分隔、省略年份的日期进行精准锁定）...")
     buf = BytesIO()
     img.save(buf, format="JPEG", quality=95)
     base64_data = base64.b64encode(buf.getvalue()).decode('utf-8')
 
     prompt = (
-        "你是一个拥有“显微镜级视力”的旅游海报高精数据审计专家。这张宣传海报排版紧密、许多卡片内包含多个用逗号、顿号或空格紧密隔开的出发日期。\n\n"
+        "你是一个拥有“显微镜级视力”的旅游海报高精数据审计专家。宣传海报排版紧密、许多卡片内包含多个用逗号、顿号或空格紧密隔开的出发日期（例如 09/12, 13/12 等，通常省略年份，默认应视作 2026 或 2027 年）。\n\n"
         "【核心审计铁律（极其重要）】：\n"
-        "1. 绝对不允许遗漏任何一个紧密排列的日期！如果一行里写了多个日期（例如 02/12/26, 04/12/26, 06/12/26），必须把每一个日期都极其仔细地看清，绝不能只抓第一个或最后一个。\n"
+        "1. 绝对不允许遗漏任何一个紧密排列的日期！如果一行里写了多个日期，必须把每一个日期都极其仔细地看清，绝不能只抓第一个或最后一个。\n"
         "2. 严格核对团号、路线名称、起飞地、每一个独立日期与团费价格的精确绑定关系。\n"
         "3. 哪怕字号再小、排版再密，也必须逐格、逐行全部审计完毕。\n\n"
         "输出规范：必须返回严格合法的纯 JSON 数组格式（不附加任何 markdown 额外说明）：\n"
         "[\n"
-        '  {"destination": "目的地名称", "tour_code": "团号", "title": "完整路线名称", "departure_location": "起飞地点", "departure_dates": "02/12/26, 04/12/26", "price": 5299},\n'
+        '  {"destination": "目的地名称", "tour_code": "团号", "title": "完整路线名称", "departure_location": "起飞地点", "departure_dates": "09/12, 13/12", "price": 5299},\n'
         "  ...\n"
         "]"
     )
