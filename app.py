@@ -188,7 +188,6 @@ def split_and_explode_dates(raw_agency, raw_dest, raw_code, raw_title, raw_loc, 
     norm_loc = normalize_departure_location(raw_loc, raw_title)
     clean_dest = clean_destination_name(raw_dest)
 
-    # 💎 强力日期提取：精确匹配 DD/MM/YY 或 DD/MM 格式
     date_tokens = re.findall(r'\b\d{1,2}[/.-]\d{1,2}(?:[/.-]\d{2,4})?\b', str(raw_dates_str))
     if not date_tokens:
         date_tokens = [str(raw_dates_str).strip()]
@@ -216,7 +215,7 @@ def split_and_explode_dates(raw_agency, raw_dest, raw_code, raw_title, raw_loc, 
         })
     return exploded
 
-# 💎 豪吉全景海报专用解析器（绝对防杂质、精准提取团号、日期、价格）
+# 💎 豪吉全景海报精准映射解析器（严格绑定价格与日期）
 def parse_haoji_full_lines(raw_text):
     items = []
     lines = raw_text.strip().splitlines()
@@ -228,21 +227,11 @@ def parse_haoji_full_lines(raw_text):
         parts = [p.strip() for p in line.split("|") if p.strip()]
         full_line_str = " ".join(parts) if parts else line
 
-        # 必须包含团号 SP 才是一条有效的旅游团行
         if not re.search(r'\bSP[-]?\d{4,6}\b', full_line_str, re.IGNORECASE):
             continue
 
         try:
-            price_val = 2999
-            price_matches = re.findall(r'\b\d{3,5}\b', full_line_str.replace(",", ""))
-            if price_matches:
-                price_val = int(price_matches[-1])
-            if price_val == 0:
-                price_val = 2999
-
-            date_matches = re.findall(r'\b\d{1,2}[/.-]\d{1,2}(?:[/.-]\d{2,4})?\b', full_line_str)
-            dates_str = ", ".join(date_matches) if date_matches else "26/12/26"
-
+            # 提取团号
             tour_code = "SP-000"
             code_matches = re.findall(r'\bSP[-]?\d{4,6}\b', full_line_str, re.IGNORECASE)
             if code_matches:
@@ -252,15 +241,38 @@ def parse_haoji_full_lines(raw_text):
             title = parts[2] if len(parts) > 2 else (parts[1] if len(parts) > 1 else "精选路线")
             loc = parts[3] if len(parts) > 3 else "新加坡起飞"
 
-            items.append({
-                "agency": "豪吉旅游",
-                "destination": clean_destination_name(dest),
-                "tour_code": tour_code,
-                "title": title,
-                "departure_location": loc,
-                "departure_dates": dates_str,
-                "price": price_val
-            })
+            # 提取日期和价格对
+            date_price_pairs = re.findall(r'(\d{1,2}[/.-]\d{1,2}(?:[/.-]\d{2,4})?)\s*[:：->]?\s*(?:RM)?\s*(\d{3,5})', full_line_str)
+            if date_price_pairs:
+                for d_str, p_str in date_price_pairs:
+                    items.append({
+                        "agency": "豪吉旅游",
+                        "destination": clean_destination_name(dest),
+                        "tour_code": tour_code,
+                        "title": title,
+                        "departure_location": loc,
+                        "departure_dates": d_str,
+                        "price": int(p_str)
+                    })
+            else:
+                # 备用单价回退
+                price_val = 2999
+                price_matches = re.findall(r'\b\d{3,5}\b', full_line_str.replace(",", ""))
+                if price_matches:
+                    price_val = int(price_matches[-1])
+                
+                date_matches = re.findall(r'\b\d{1,2}[/.-]\d{1,2}(?:[/.-]\d{2,4})?\b', full_line_str)
+                dates_str = ", ".join(date_matches) if date_matches else "26/12/26"
+
+                items.append({
+                    "agency": "豪吉旅游",
+                    "destination": clean_destination_name(dest),
+                    "tour_code": tour_code,
+                    "title": title,
+                    "departure_location": loc,
+                    "departure_dates": dates_str,
+                    "price": price_val
+                })
         except Exception:
             continue
     return items
@@ -326,14 +338,13 @@ def call_gemini_full_poster(img, agency_name, status_box):
         """
     else:
         prompt = f"""
-        你是一个极其精准的旅游海报视觉专家。这是一张完整的【豪吉旅游】宣传海报，上面包含海南岛、哈尔滨（包含下半部 SP002395、雪国列车 SP002393）、上海、大连、广州澳门、重庆、张家界、北疆、南疆等所有板块。
+        你是一个极其精准的旅游海报视觉专家。这是一张完整的【豪吉旅游】宣传海报，包含海南岛、哈尔滨、上海、大连、广州澳门、重庆、张家界、北疆、南疆等所有板块。
         请以绝对的上帝视角，全量、零漏项地提取出海报上的每一个旅游团期！
 
         绝对严厉规则：
         1. 逐行输出，严格使用竖线 | 分隔，绝对不要使用 markdown 代码块：
-        目的地 | 团号(如SP002301) | 完整行程路线名称 | 起飞地(如KUL/JB/SIN) | 完整出发日期(如30/10/26, 11/11/26) | 纯数字价格(如1899)
-        2. 【多期独立铁律】：如果某个旅游团包含多个不同的出发日期，必须全部提取并在出发日期栏中列出。
-        3. 绝对不允许输出任何解释性文字或对话，只允许输出管道符分隔的数据行！
+        目的地 | 团号(如SP002301) | 完整行程路线名称 | 起飞地 | 出发日期与价格严格对应格式(例如: 30/10/26:1899, 11/11/26:1899) | 基准价格
+        2. 【多期与价格精准绑定】：如果某个团有多个不同出发日期和不同价格，必须在日期栏写清楚哪个日期对应哪个价格（如 02/12/26:5399, 16/12/26:6399）。绝对不允许把整行的价格胡乱混搭！
         """
 
     payload = {
