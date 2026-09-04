@@ -48,7 +48,7 @@ else:
         st.session_state.private_tour_data = []
     active_data = st.session_state.private_tour_data
 
-st.title("✈️ 旅游团智能比价助手 (板块化视觉追踪 & 极致增强版)")
+st.title("✈️ 旅游团智能比价助手 (无缝大重叠·终极完美版)")
 
 @st.cache_resource
 def get_loud_wav_base64():
@@ -328,18 +328,18 @@ def call_gemini_cluster_agent(img_chunk, cluster_name):
         return []
 
     enhancer = ImageEnhance.Contrast(img_chunk)
-    img_chunk = enhancer.enhance(1.5)
+    img_chunk = enhancer.enhance(1.6)
     enhancer_sharp = ImageEnhance.Sharpness(img_chunk)
-    img_chunk = enhancer_sharp.enhance(1.8)
+    img_chunk = enhancer_sharp.enhance(2.0)
 
     buf = BytesIO()
     img_chunk.save(buf, format="JPEG", quality=95)
     base64_data = base64.b64encode(buf.getvalue()).decode('utf-8')
 
     prompt = (
-        f"你是一位具备航天级精度的旅游海报审计专家。当前正在专注审计【{cluster_name}】板块。\n"
-        "【极致精准聚落审阅铁律】：\n"
-        "1. 仔细观察该板块内的每一个团号（如 SP 开头），找出它对应的路线名称、起飞地点。\n"
+        f"你是一位拥有顶级视觉审计能力的旅游海报专家。当前正在审核【{cluster_name}】板块。\n"
+        "【绝对完美提取铁律】：\n"
+        "1. 请把该板块里所有的团号、路线、起飞地、每一个出发日期、以及对应的团费（RM）100%全量提取出来，绝对不准遗漏任何一个卡片或数字！\n"
         "2. 价格无论印在日期的下方还是右侧，必须进行双向空间锁定，绝对禁止错配。\n"
         "3. 输出规范：必须返回严格合法的纯 JSON 数组格式（不附加任何 markdown 额外说明）：\n"
         "[\n"
@@ -436,7 +436,7 @@ uploaded_file = st.file_uploader("📷 请上传任意旅游海报图片", type=
 if uploaded_file is not None:
     agency_choice = st.radio("请选择这家海报对应的旅行社：", ["豪吉旅游", "琦琦旅游", "其他新旅行社"], horizontal=True)
 
-    if st.button("🚀 启动全方位高精深度提取", type="primary", use_container_width=True):
+    if st.button("🚀 启动终极无缝全量一键提取", type="primary", use_container_width=True):
         newly_extracted = []
         progress_bar = st.progress(0.0)
         status_box = st.empty()
@@ -467,20 +467,20 @@ if uploaded_file is not None:
                     if raw_items:
                         break
         else:
-            # 💎 豪吉海报：采用 6 大全景重叠聚落板块（边缘大幅溢出重叠，绝不漏掉任何板块边缘的团）
+            # 💎 终极无缝大重叠聚落区块：边界大幅向外扩展 15%，确保任何边缘卡片双重覆盖、绝无死角
             clusters = [
-                ("左上聚落", (0, int(h * 0.08), int(w * 0.38), int(h * 0.52))),
-                ("中上聚落", (int(w * 0.28), int(h * 0.08), int(w * 0.72), int(h * 0.52))),
-                ("右上聚落", (int(w * 0.62), int(h * 0.08), w, int(h * 0.52))),
-                ("左下聚落", (0, int(h * 0.45), int(w * 0.38), h)),
-                ("中下聚落", (int(w * 0.28), int(h * 0.45), int(w * 0.72), h)),
-                ("右下聚落", (int(w * 0.62), int(h * 0.45), w, h))
+                ("左上聚落", (0, 0, int(w * 0.42), int(h * 0.55))),
+                ("中上聚落", (int(w * 0.25), 0, int(w * 0.75), int(h * 0.55))),
+                ("右上聚落", (int(w * 0.58), 0, w, int(h * 0.55))),
+                ("左下聚落", (0, int(h * 0.42), int(w * 0.42), h)),
+                ("中下聚落", (int(w * 0.25), int(h * 0.42), int(w * 0.75), h)),
+                ("右下聚落", (int(w * 0.58), int(h * 0.42), w, h))
             ]
 
             raw_items = []
             total_c = len(clusters)
             for idx, (cluster_name, box_coords) in enumerate(clusters):
-                status_box.markdown(f"🔬 正在进行画质增强与深度审阅【{cluster_name}】...")
+                status_box.markdown(f"🔬 正在进行无缝大重叠高精扫描【{cluster_name}】...")
                 progress_bar.progress((idx + 1) / total_c)
                 cropped_img = img.crop(box_coords)
                 cluster_items = call_gemini_cluster_agent(cropped_img, cluster_name)
@@ -516,7 +516,6 @@ if uploaded_file is not None:
                     seen.add(key)
                     unique_combined.append(item)
 
-            # 💎 强制全局按 目的地 + 价格从低到高 + 出发日期 严格升序排序
             unique_combined = sorted(unique_combined, key=lambda x: (x['destination'], x['price_numeric'], x['departure_dates']))
 
             if work_mode == "🌐 公共共享模式 (多人实时同步)":
@@ -526,7 +525,7 @@ if uploaded_file is not None:
                 st.session_state.private_tour_data = unique_combined
 
             trigger_play_on_done(len(unique_combined))
-            st.success(f"🎉 高精提取完成！当前【{work_mode}】共有 **{len(unique_combined)}** 个精准团期（已按价格从低到高排好）。")
+            st.success(f"🎉 终极提取完成！当前【{work_mode}】共有 **{len(unique_combined)}** 个精准团期（已按价格从低到高排好）。")
             time.sleep(1.0)
             st.rerun()
         else:
@@ -547,7 +546,6 @@ if current_display_data:
     df = pd.DataFrame(current_display_data)
     df['price_numeric'] = pd.to_numeric(df['price_numeric'], errors='coerce').fillna(0).astype(int)
 
-    # 💎 前端展示时强制按 目的地、团费价格从低到高、出发日期进行严格升序排列
     df = df.sort_values(by=['destination', 'price_numeric', 'departure_dates'], ascending=[True, True, True])
 
     st.sidebar.header("🎛️ 高级筛选面板")
@@ -597,7 +595,6 @@ if current_display_data:
     price_range = st.sidebar.slider("💰 团费预算范围 (RM)", min_value=p_min, max_value=p_max, value=(p_min, p_max), step=100)
     filtered_df = filtered_df[(filtered_df['price_numeric'] >= price_range[0]) & (filtered_df['price_numeric'] <= price_range[1])]
 
-    # 再次确保筛选后的结果绝对按价格升序
     filtered_df = filtered_df.sort_values(by=['destination', 'price_numeric', 'departure_dates'], ascending=[True, True, True])
 
     st.markdown(f"### 符合条件的出发选项共 **{len(filtered_df)}** 个（已按团费价格从低到高精细排序）：")
