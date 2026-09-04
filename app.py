@@ -48,7 +48,7 @@ else:
         st.session_state.private_tour_data = []
     active_data = st.session_state.private_tour_data
 
-st.title("✈️ 旅游团智能比价助手 (价格显微镜精准绑定版)")
+st.title("✈️ 旅游团智能比价助手 (横向窄条压线精准版)")
 
 @st.cache_resource
 def get_loud_wav_base64():
@@ -196,7 +196,6 @@ def clean_destination_name(raw_dest):
     s = re.sub(r'\d+\s*(?:天|D|d|夜|晚|N|n)', '', s)
     return s.strip()
 
-# 💎 价格与日期严格原子级配对炸开器
 def split_and_explode_dates(raw_agency, raw_dest, raw_code, raw_title, raw_loc, raw_dates_str, raw_price, forced_agency=""):
     days = extract_tour_days(raw_title)
     try:
@@ -210,8 +209,7 @@ def split_and_explode_dates(raw_agency, raw_dest, raw_code, raw_title, raw_loc, 
     norm_loc = normalize_departure_location(raw_loc, raw_title)
     clean_dest = clean_destination_name(raw_dest)
 
-    # 针对 AI 返回的精细配对格式进行解析
-    date_tokens = re.findall(r'\b\d{1,2}[/.-]\d{1,2}(?:[/.-]\d{2,4})?\b', str(raw_dates_str))
+    date_tokens = re.findall(r'\b\d{1,2}[/.-]\d{1,2}(?:[/.-](\d{2,4}))?\b', str(raw_dates_str))
     if not date_tokens:
         date_tokens = [str(raw_dates_str).strip()]
 
@@ -284,7 +282,7 @@ def parse_json_response(raw_text, default_agency="豪吉旅游"):
         pass
     return items
 
-def call_gemini_micro_price_agent(img_chunk, section_name):
+def call_gemini_horizontal_strip_agent(img_chunk, strip_name):
     if not GEMINI_API_KEY:
         return []
 
@@ -293,15 +291,14 @@ def call_gemini_micro_price_agent(img_chunk, section_name):
     base64_data = base64.b64encode(buf.getvalue()).decode('utf-8')
 
     prompt = (
-        f"你是一位拥有显微镜级视觉审计能力的旅游海报审计专家。当前正在审核【{section_name}】板块。\n"
-        "【绝对核心铁律——价格与日期一一对应】：\n"
-        "1. 海报中一个团号（如 SP002395）下面往往有多个不同的价格区块（例如左边是 5399 对应 04/12, 06/12，中间是 6399 对应 16/12，右边是 6999 对应 23/12）。\n"
-        "2. 你必须把【每一个价格】和【它正上方或紧挨着的那个具体出发日期】做死死绑定的对应提取！绝对不允许把不同价格的日期张冠李戴。\n"
-        "3. 如果一个价格对应多个日期，请把这几个日期写在一起（如 '04/12, 06/12'），并给出对应的那个价格。\n\n"
+        f"你是一位拥有显微镜级视力的旅游海报审计专家。当前正在以【横向窄条压线模式】审计海报的【{strip_name}】区域。\n"
+        "【绝对核心铁律——防止跳行与价格错配】：\n"
+        "1. 在当前这一条极窄的横向视窗内，团号（如 SP002580）、路线名称、起飞地点、出发日期和对应的团费价格（RM）必须做到 100% 严格水平/垂直对应。\n"
+        "2. 绝对不允许上下跳行借用价格！每个价格只能属于它正上方或紧挨着的那个具体出发日期。\n"
+        "3. 如果一个价格对应多个日期，请把这几个日期写在一起（如 '20/12/26, 27/12/26'）。\n\n"
         "输出规范：必须返回严格合法的纯 JSON 数组格式（不附加任何 markdown 额外说明）：\n"
         "[\n"
-        '  {"destination": "目的地", "tour_code": "SP002395", "title": "路线名称", "departure_location": "起飞地", "departure_dates": "04/12/26, 06/12/26", "price": 5399},\n'
-        '  {"destination": "目的地", "tour_code": "SP002395", "title": "路线名称", "departure_location": "起飞地", "departure_dates": "16/12/26", "price": 6399},\n'
+        '  {"destination": "上海", "tour_code": "SP002580", "title": "7天6夜 南京 江南水乡奇谭", "departure_location": "新加坡起飞 (SIN)", "departure_dates": "17/12/26", "price": 2999},\n'
         "  ...\n"
         "]"
     )
@@ -394,7 +391,7 @@ uploaded_file = st.file_uploader("📷 请上传任意旅游海报图片", type=
 if uploaded_file is not None:
     agency_choice = st.radio("请选择这家海报对应的旅行社：", ["豪吉旅游", "琦琦旅游", "其他新旅行社"], horizontal=True)
 
-    if st.button("🚀 启动价格显微镜精准提取", type="primary", use_container_width=True):
+    if st.button("🚀 启动横向窄条压线精准提取", type="primary", use_container_width=True):
         newly_extracted = []
         progress_bar = st.progress(0.0)
         status_box = st.empty()
@@ -425,26 +422,23 @@ if uploaded_file is not None:
                     if raw_items:
                         break
         else:
-            # 💎 终极全景大范围重叠裁剪框：四面八方全部向外扩展溢出，绝对无死角覆盖任何边缘卡片
-            boxes = [
-                ("海南岛板块", (0, int(h * 0.10), int(w * 0.38), int(h * 0.42))),
-                ("哈尔滨板块(含上下及雪国列车)", (int(w * 0.28), int(h * 0.10), int(w * 0.72), int(h * 0.62))),
-                ("上海板块(含右侧边缘)", (int(w * 0.60), int(h * 0.10), w, int(h * 0.56))),
-                ("大连板块", (0, int(h * 0.35), int(w * 0.38), int(h * 0.72))),
-                ("广州澳门板块(含底部全景覆盖)", (int(w * 0.28), int(h * 0.50), int(w * 0.72), h)),
-                ("重庆板块", (int(w * 0.60), int(h * 0.48), w, int(h * 0.72))),
-                ("张家界板块", (0, int(h * 0.64), int(w * 0.38), h)),
-                ("北疆南疆板块", (int(w * 0.60), int(h * 0.64), w, h))
+            # 💎 横向窄条重叠压线切片法：将海报横向切成 5 个互有重叠的窄条带（Strip），彻底消灭跳行和错位
+            strips = [
+                ("顶部横条带 (Top Strip)", (0, 0, w, int(h * 0.28))),
+                ("中上横条带 (Upper-Middle Strip)", (0, int(h * 0.20), w, int(h * 0.48))),
+                ("中部横条带 (Center Strip)", (0, int(h * 0.40), w, int(h * 0.68))),
+                ("中下横条带 (Lower-Middle Strip)", (0, int(h * 0.60), w, int(h * 0.88))),
+                ("底部横条带 (Bottom Strip)", (0, int(h * 0.78), w, h))
             ]
 
             raw_items = []
-            total_boxes = len(boxes)
-            for idx, (sec_name, box_coords) in enumerate(boxes):
-                status_box.markdown(f"🔬 正在进行价格显微镜精准扫描【{sec_name}】...")
-                progress_bar.progress((idx + 1) / total_boxes)
+            total_s = len(strips)
+            for idx, (strip_name, box_coords) in enumerate(strips):
+                status_box.markdown(f"📏 正在进行横向窄条压线扫描【{strip_name}】...")
+                progress_bar.progress((idx + 1) / total_s)
                 cropped_img = img.crop(box_coords)
-                sec_items = call_gemini_micro_price_agent(cropped_img, sec_name)
-                raw_items.extend(sec_items)
+                s_items = call_gemini_horizontal_strip_agent(cropped_img, strip_name)
+                raw_items.extend(s_items)
 
         progress_bar.progress(1.0)
         status_box.markdown("✨ 正在进行原子级日期炸开、去重与价格排序整理...")
@@ -485,7 +479,7 @@ if uploaded_file is not None:
                 st.session_state.private_tour_data = unique_combined
 
             trigger_play_on_done(len(unique_combined))
-            st.success(f"🎉 价格显微镜精准提取完成！当前【{work_mode}】共有 **{len(unique_combined)}** 个精准团期。")
+            st.success(f"🎉 横向窄条压线提取完成！当前【{work_mode}】共有 **{len(unique_combined)}** 个精准团期。")
             time.sleep(1.0)
             st.rerun()
         else:
