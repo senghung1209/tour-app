@@ -8,7 +8,7 @@ import base64
 import time
 import math
 import struct
-import requests
+import urllib.request
 from io import BytesIO
 from PIL import Image, ImageDraw, ImageFont
 import streamlit.components.v1 as components
@@ -128,6 +128,7 @@ OFFICIAL_HOLIDAYS = [
 
 RAW_KEY = st.secrets.get("GEMINI_API_KEY", "")
 GEMINI_API_KEY = str(RAW_KEY).strip() if RAW_KEY else ""
+
 PRIMARY_MODEL = "gemini-3.5-flash"
 BACKUP_MODEL = "gemini-3.1-flash-lite"
 
@@ -158,21 +159,6 @@ def evaluate_holiday_fit(departure_date_str, duration_days):
         pass
     return 'none', 0, ""
 
-def normalize_agency_name(raw_name, raw_code, raw_title, forced_agency):
-    if forced_agency:
-        return forced_agency
-    code_str = str(raw_code).strip().upper()
-    name_str = str(raw_name).strip().upper()
-    title_str = str(raw_title).strip().upper()
-
-    if code_str.isdigit() or "琦琦" in name_str or "QI" in name_str or "序号" in name_str:
-        return "琦琦旅游"
-    if "SP" in code_str or "豪吉" in name_str or "豪吉" in title_str:
-        return "豪吉旅游"
-    
-    clean = re.sub(r'\(.*?\)|（.*?）', '', str(raw_name)).strip()
-    return clean if clean else "豪吉旅游"
-
 def normalize_departure_location(raw_loc, raw_title):
     s = f"{raw_loc} {raw_title}".upper()
     if any(k in s for k in ["SIN", "新加坡", "CHANGI", "SCOOT", "TR"]):
@@ -188,14 +174,13 @@ def clean_destination_name(raw_dest):
     s = re.sub(r'\d+\s*(?:天|D|d|夜|晚|N|n)', '', s)
     return s.strip()
 
-def split_and_explode_dates(raw_agency, raw_dest, raw_code, raw_title, raw_loc, raw_dates_str, raw_price, forced_agency=""):
+def split_and_explode_dates(raw_agency, raw_dest, raw_code, raw_title, raw_loc, raw_dates_str, raw_price):
     days = extract_tour_days(raw_title)
     try:
         clean_price = int(re.sub(r'[^\d]', '', str(raw_price)))
     except Exception:
         clean_price = 0
 
-    norm_agency = normalize_agency_name(raw_agency, raw_code, raw_title, forced_agency)
     norm_loc = normalize_departure_location(raw_loc, raw_title)
     clean_dest = clean_destination_name(raw_dest)
 
@@ -207,7 +192,7 @@ def split_and_explode_dates(raw_agency, raw_dest, raw_code, raw_title, raw_loc, 
     for d_token in date_tokens:
         status, over_days, hol_name = evaluate_holiday_fit(d_token, days)
         exploded.append({
-            "agency": norm_agency,
+            "agency": raw_agency,
             "destination": clean_dest,
             "tour_code": str(raw_code or "-"),
             "title": str(raw_title or ""),
@@ -221,6 +206,7 @@ def split_and_explode_dates(raw_agency, raw_dest, raw_code, raw_title, raw_loc, 
         })
     return exploded
 
+# 🛡️ 终极防弹全文本解析器：哪怕大模型不用竖线，只要行里有团号、完整日期、价格，全部自动精准抓取！
 def parse_bulletproof_full_text(raw_text, default_agency="豪吉旅游"):
     items = []
     for line in raw_text.strip().splitlines():
@@ -232,14 +218,17 @@ def parse_bulletproof_full_text(raw_text, default_agency="豪吉旅游"):
         full_line_str = " ".join(parts) if parts else line
 
         try:
+            # 1. 提取价格（寻找3到5位数字）
             price_val = 2999
             price_matches = re.findall(r'\b\d{3,5}\b', full_line_str.replace(",", ""))
             if price_matches:
                 price_val = int(price_matches[-1])
 
+            # 2. 提取完整日期（如 31/12/26）
             date_matches = re.findall(r'\b\d{1,2}[/.-]\d{1,2}(?:[/.-]\d{2,4})?\b', full_line_str)
             dates_str = date_matches[0] if date_matches else "26/12/26"
 
+            # 3. 提取团号（寻找 SP 或 QIQI 开头的代码）
             tour_code = "SP-000"
             code_matches = re.findall(r'\b(?:SP|QIQI)[-]?\d{4,6}\b', full_line_str, re.IGNORECASE)
             if code_matches:
@@ -277,6 +266,7 @@ def parse_bulletproof_full_text(raw_text, default_agency="豪吉旅游"):
 
 def call_gemini_full_poster(img, agency_name, status_box):
     if not GEMINI_API_KEY:
+        st.error("❌ 未检测到 GEMINI_API_KEY！")
         return []
 
     status_box.markdown(f"🔍 正在进行【{agency_name}】整张海报高清全景无损扫描...")
@@ -299,230 +289,20 @@ def call_gemini_full_poster(img, agency_name, status_box):
         "generationConfig": {"temperature": 0.0, "maxOutputTokens": 8192}
     }
 
-    headers = {"Content-Type": "application/json", "x-goog-api-key": GEMINI_API_KEY}
+    data_json = json.dumps(payload).encode('utf-8')
+    headers = {"Content-Type": "application/json"}
 
     for model_name in [PRIMARY_MODEL, BACKUP_MODEL]:
         url = f"[https://generativelanguage.googleapis.com/v1beta/models/](https://generativelanguage.googleapis.com/v1beta/models/){model_name}:generateContent?key={GEMINI_API_KEY}"
         for attempt in range(3):
             try:
-                res = requests.post(url, headers=headers, json=payload, timeout=120)
-                if res.status_code == 200:
-                    res_json = res.json()
-                    if "candidates" in res_json and len(res_json["candidates"]) > 0:
-                        raw_text = res_json["candidates"][0]["content"]["parts"][0]["text"]
+                req = urllib.request.Request(url, data=data_json, headers=headers, method="POST")
+                with urllib.request.urlopen(req, timeout=120) as response:
+                    res_data = json.loads(response.read().decode('utf-8'))
+                    if "candidates" in res_data and len(res_data["candidates"]) > 0:
+                        raw_text = res_data["candidates"][0]["content"]["parts"][0]["text"]
                         items = parse_bulletproof_full_text(raw_text, default_agency=agency_name)
                         if items:
                             return items
                         else:
-                            # 🔴 核心透视：直接把大模型吐出的原始文本展示在界面上，让你看清究竟返回了什么！
-                            st.error(f"❌ 大模型返回了内容，但解析失败。原始内容：\n\n```text\n{raw_text}\n```")
-                            return []
-                    else:
-                        st.error(f"❌ API 返回结构异常: {res_json}")
-                else:
-                    st.error(f"❌ API 请求失败 (HTTP {res.status_code}): {res.text}")
-            except Exception as err:
-                st.error(f"❌ 请求异常: {str(err)}")
-            time.sleep(3)
-    return []
-
-@st.cache_resource
-def get_chinese_font(font_size=15):
-    font_paths = [
-        "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
-        "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
-        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
-        "wqy-microhei.ttc"
-    ]
-    for p in font_paths:
-        if os.path.exists(p):
-            try:
-                return ImageFont.truetype(p, font_size)
-            except Exception:
-                pass
-    return ImageFont.load_default()
-
-def generate_comparison_image(df):
-    w = 1020
-    rh = 42
-    hh = 75
-    h = hh + (len(df) + 1) * rh + 35
-    img = Image.new("RGB", (w, max(h, 220)), color=(255, 255, 255))
-    draw = ImageDraw.Draw(img)
-
-    f_head = get_chinese_font(20)
-    f_col = get_chinese_font(15)
-    f_body = get_chinese_font(14)
-    f_price = get_chinese_font(15)
-
-    draw.rectangle([0, 0, w, hh], fill=(30, 41, 59))
-    draw.text((30, 24), f"跨旅行社旅游团比价清单 (精选有效团期 {len(df)} 项)", fill=(255, 255, 255), font=f_head)
-
-    y = hh + 10
-    draw.rectangle([20, y, w - 20, y + 34], fill=(241, 245, 249))
-    cols = [("旅行社", 35), ("目的地", 160), ("团号", 250), ("起飞地", 360), ("出发日期", 500), ("团费价格", 620), ("行程路线", 740)]
-    for name, x in cols:
-        draw.text((x, y + 7), name, fill=(71, 85, 105), font=f_col)
-
-    y += 40
-    for idx, r in df.iterrows():
-        bg = (248, 250, 252) if idx % 2 == 0 else (255, 255, 255)
-        draw.rectangle([20, y, w - 20, y + rh - 2], fill=bg)
-
-        draw.text((35, y + 10), str(r['agency'])[:8], fill=(71, 85, 105), font=f_body)
-        draw.text((160, y + 10), str(r['destination'])[:6], fill=(15, 23, 42), font=f_body)
-        draw.text((250, y + 10), str(r['tour_code'])[:10], fill=(100, 116, 139), font=f_body)
-
-        loc_clean = str(r['departure_location']).replace("🇸🇬", "").replace("🇲🇾", "").strip()
-        draw.text((360, y + 10), loc_clean[:12], fill=(2, 132, 199), font=f_body)
-
-        draw.text((500, y + 10), str(r['departure_dates'])[:12], fill=(15, 23, 42), font=f_body)
-        draw.text((620, y + 9), str(r['price_text']), fill=(220, 38, 38), font=f_price)
-        draw.text((740, y + 10), str(r['title'])[:16], fill=(71, 85, 105), font=f_body)
-        y += rh
-
-    buf = BytesIO()
-    img.save(buf, format="PNG", quality=95)
-    return buf.getvalue()
-
-uploaded_file = st.file_uploader("📷 上传单张海报图片 (请一张一张上传)", type=["jpg", "jpeg", "png"])
-
-if uploaded_file is not None:
-    agency_choice = st.radio("请为这张海报选择对应的旅行社：", ["豪吉旅游", "琦琦旅游"], horizontal=True)
-
-    if st.button("🚀 启动整图全景高清无损扫描分析", type="primary", use_container_width=True):
-        newly_extracted = []
-        progress_bar = st.progress(0.0)
-        status_box = st.empty()
-
-        img = Image.open(BytesIO(uploaded_file.getvalue()))
-        if img.mode != 'RGB':
-            img = img.convert('RGB')
-
-        progress_bar.progress(0.5)
-        raw_items = call_gemini_full_poster(img, agency_choice, status_box)
-        progress_bar.progress(1.0)
-        status_box.markdown("✨ 正在进行去重、日期炸开与入库清洗...")
-
-        for item in raw_items:
-            rows = split_and_explode_dates(
-                agency_choice,
-                item.get("destination", "精选路线"),
-                item.get("tour_code", "-"),
-                item.get("title", ""),
-                item.get("departure_location", ""),
-                item.get("departure_dates", ""),
-                item.get("price", 0)
-            )
-            newly_extracted.extend(rows)
-
-        if newly_extracted:
-            combined = st.session_state.tour_data + newly_extracted
-            seen = set()
-            unique_combined = []
-            for item in combined:
-                marker = (item["agency"], item["tour_code"], item["departure_dates"], item["price_numeric"])
-                if marker not in seen:
-                    seen.add(marker)
-                    unique_combined.append(item)
-
-            st.session_state.tour_data = unique_combined
-            save_persisted_data(unique_combined)
-            trigger_play_on_done(len(st.session_state.tour_data))
-            st.success(f"🎉 成功为【{agency_choice}】全景提取 {len(newly_extracted)} 项！总库现有 **{len(st.session_state.tour_data)}** 项团期。")
-            time.sleep(1.0)
-            st.rerun()
-        else:
-            st.warning("⚠️ 未能从该图中解析出有效团期，请检查图片或重新点击。")
-
-if st.session_state.tour_data:
-    if st.button("🗑️ 清空总库全部数据 (永久重置)", use_container_width=True):
-        save_persisted_data([])
-        st.session_state.tour_data = []
-        st.rerun()
-
-    st.markdown("---")
-    df = pd.DataFrame(st.session_state.tour_data)
-    df['price_numeric'] = pd.to_numeric(df['price_numeric'], errors='coerce').fillna(0).astype(int)
-
-    with st.expander(f"🛠️ 快速数据校对面板 (当前总库共有 {len(df)} 项)", expanded=False):
-        edited_df = st.data_editor(df, num_rows="dynamic", use_container_width=True)
-        if not edited_df.equals(df):
-            st.session_state.tour_data = edited_df.to_dict('records')
-            save_persisted_data(st.session_state.tour_data)
-            st.rerun()
-
-    st.sidebar.header("🎛️ 筛选条件")
-    clean_agencies = sorted(list({str(a) for a in df['agency'] if pd.notna(a) and str(a).strip()}))
-    selected_agency = st.sidebar.selectbox("选择旅行社", ["全部"] + clean_agencies)
-
-    clean_dests = sorted(list({str(d) for d in df['destination'] if pd.notna(d) and str(d).strip()}))
-    selected_dest = st.sidebar.selectbox("选择目的地", ["全部"] + clean_dests)
-
-    loc_options = [
-        "全部",
-        "🇲🇾 马来西亚全部地区 (包含吉隆坡KUL / 新山JB)",
-        "🇲🇾 马来西亚起飞 (KUL)",
-        "🇲🇾 新山出发 (JB)",
-        "🇸🇬 新加坡起飞 (SIN)"
-    ]
-    selected_loc = st.sidebar.selectbox("选择起飞地点", loc_options)
-
-    selected_hol = st.sidebar.selectbox("🗓️ 学校假期筛选", ["全部日期", "🎒 包含学校假期 (含超出2天内)", "✨ 严格在学校假期内 (0超出)", "💼 仅平时非假期"])
-
-    filtered_df = df.copy()
-    if selected_agency != "全部":
-        filtered_df = filtered_df[filtered_df['agency'] == selected_agency]
-    if selected_dest != "全部":
-        filtered_df = filtered_df[filtered_df['destination'] == selected_dest]
-
-    if selected_loc == "🇲🇾 马来西亚全部地区 (包含吉隆坡KUL / 新山JB)":
-        filtered_df = filtered_df[filtered_df['departure_location'].str.contains("马来西亚|新山|KUL|JB", na=False)]
-    elif selected_loc == "🇲🇾 马来西亚起飞 (KUL)":
-        filtered_df = filtered_df[filtered_df['departure_location'].str.contains("KUL", na=False)]
-    elif selected_loc == "🇲🇾 新山出发 (JB)":
-        filtered_df = filtered_df[filtered_df['departure_location'].str.contains("JB|新山", na=False)]
-    elif selected_loc == "🇸🇬 新加坡起飞 (SIN)":
-        filtered_df = filtered_df[filtered_df['departure_location'].str.contains("SIN|新加坡", na=False)]
-
-    if selected_hol == "🎒 包含学校假期 (含超出2天内)":
-        filtered_df = filtered_df[filtered_df['holiday_status'].isin(['exact', 'slight_over'])]
-    elif selected_hol == "✨ 严格在学校假期内 (0超出)":
-        filtered_df = filtered_df[filtered_df['holiday_status'] == 'exact']
-    elif selected_hol == "💼 仅平时非假期":
-        filtered_df = filtered_df[filtered_df['holiday_status'] == 'none']
-
-    p_min = int(df['price_numeric'].min()) if not df.empty else 1000
-    p_max = int(df['price_numeric'].max()) if not df.empty else 9000
-    if p_min >= p_max:
-        p_max = p_min + 100
-    price_range = st.sidebar.slider("💰 团费预算范围 (RM)", min_value=p_min, max_value=p_max, value=(p_min, p_max), step=100)
-    filtered_df = filtered_df[(filtered_df['price_numeric'] >= price_range[0]) & (filtered_df['price_numeric'] <= price_range[1])]
-
-    st.markdown(f"### 符合条件的出发选项共 **{len(filtered_df)}** 个：")
-    col1, col2 = st.columns(2)
-    with col1:
-        st.download_button("📊 下载 CSV 比价清单", data=filtered_df.to_csv(index=False).encode('utf-8-sig'), file_name="智能比价清单.csv", mime="text/csv", use_container_width=True)
-    with col2:
-        st.download_button("🖼️ 下载高清长图 (.png)", data=generate_comparison_image(filtered_df), file_name="智能比价长图.png", mime="image/png", use_container_width=True)
-
-    st.dataframe(filtered_df[['agency', 'destination', 'tour_code', 'departure_location', 'departure_dates', 'price_text', 'title']], use_container_width=True)
-
-    st.markdown("#### 📋 行程比对卡片")
-    for _, row in filtered_df.iterrows():
-        with st.container(border=True):
-            c1, c2, c3 = st.columns([3, 2, 2])
-            with c1:
-                st.markdown(f"### 📍 **{row['destination']}** <small style='color:gray;'>({row['agency']})</small>", unsafe_allow_html=True)
-                st.write(f"**路线：** {row['title']}")
-                st.write(f"**团号：** `{row['tour_code']}`")
-            with c2:
-                st.markdown(f"🛫 **出发地：** `{row['departure_location']}`")
-                st.write(f"📅 **出发日期：** {row['departure_dates']}")
-                h_stat = row['holiday_status']
-                if h_stat == 'exact':
-                    st.success(f"🎒 完美在校假内 ({row['holiday_name']})")
-                elif h_stat == 'slight_over':
-                    st.warning(f"⚠️ 包含校假，超 {row['over_days']} 天 (需请假)")
-            with c3:
-                st.markdown(f"### 💰 **{row['price_text']}**")
+                            st.warning(f"⚠️ 大模型返回了内容，但未能匹配解析。原始内容片段：\n
