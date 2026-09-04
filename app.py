@@ -199,12 +199,20 @@ def split_and_explode_dates(raw_agency, raw_dest, raw_code, raw_title, raw_loc, 
     norm_loc = normalize_departure_location(raw_loc, raw_title)
     clean_dest = clean_destination_name(raw_dest)
 
-    date_tokens = re.findall(r'\b\d{1,2}[/.-]\d{1,2}(?:[/.-](\d{2,4}))?\b', str(raw_dates_str))
+    # 💎 核心精度优化：精准匹配形如 DD/MM 或 DD/MM/YY 的完整日期，绝对防止只匹配到年份
+    date_tokens = re.findall(r'\b\d{1,2}[/.-]\d{1,2}(?:[/.-]\d{2,4})?\b', str(raw_dates_str))
+    # 如果没抓到标准格式，尝试放宽但排除纯4位数年份
+    if not date_tokens:
+        tokens = re.findall(r'\b[\d/.-]+\b', str(raw_dates_str))
+        date_tokens = [t for t in tokens if len(t) >= 4 and not t.isdigit()]
     if not date_tokens:
         date_tokens = [str(raw_dates_str).strip()]
 
     exploded = []
     for d_token in date_tokens:
+        # 如果清洗后不小心成了纯年份，则跳过
+        if str(d_token).isdigit() and len(str(d_token)) == 4:
+            continue
         status, over_days, hol_name = evaluate_holiday_fit(d_token, days)
         exploded.append({
             "agency": norm_agency,
@@ -262,6 +270,7 @@ def call_gemini_vision_chunk(img_chunk, chunk_name, status_box, hint_text="", de
     绝对严厉规则：
     1. 纯文本逐行输出，竖线 | 分隔，严禁代码块标记：
     旅行社|目的地|团号|行程路线全称|起飞地|出发日期|纯数字价格
+    2. 出发日期必须包含完整的日和月（例如 31/12/26 或 23/10/26），绝不能只写年份！
     """
 
     payload = {
