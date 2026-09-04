@@ -1,4 +1,4 @@
-Import streamlit as st
+import streamlit as st
 import pandas as pd
 import datetime
 import re
@@ -8,7 +8,6 @@ import base64
 import time
 import math
 import struct
-import urllib.request
 import requests
 from io import BytesIO
 from PIL import Image, ImageDraw, ImageFont
@@ -129,6 +128,8 @@ OFFICIAL_HOLIDAYS = [
 
 RAW_KEY = st.secrets.get("GEMINI_API_KEY", "")
 GEMINI_API_KEY = str(RAW_KEY).strip() if RAW_KEY else ""
+
+# 🔒 严格使用你验证通过的 AI 模型与请求架构
 PRIMARY_MODEL = "gemini-3.5-flash"
 BACKUP_MODEL = "gemini-3.1-flash-lite"
 
@@ -159,21 +160,6 @@ def evaluate_holiday_fit(departure_date_str, duration_days):
         pass
     return 'none', 0, ""
 
-def normalize_agency_name(raw_name, raw_code, raw_title, forced_agency):
-    if forced_agency:
-        return forced_agency
-    code_str = str(raw_code).strip().upper()
-    name_str = str(raw_name).strip().upper()
-    title_str = str(raw_title).strip().upper()
-
-    if code_str.isdigit() or "琦琦" in name_str or "QI" in name_str or "序号" in name_str:
-        return "琦琦旅游"
-    if "SP" in code_str or "豪吉" in name_str or "豪吉" in title_str:
-        return "豪吉旅游"
-    
-    clean = re.sub(r'\(.*?\)|（.*?）', '', str(raw_name)).strip()
-    return clean if clean else "豪吉旅游"
-
 def normalize_departure_location(raw_loc, raw_title):
     s = f"{raw_loc} {raw_title}".upper()
     if any(k in s for k in ["SIN", "新加坡", "CHANGI", "SCOOT", "TR"]):
@@ -189,14 +175,13 @@ def clean_destination_name(raw_dest):
     s = re.sub(r'\d+\s*(?:天|D|d|夜|晚|N|n)', '', s)
     return s.strip()
 
-def split_and_explode_dates(raw_agency, raw_dest, raw_code, raw_title, raw_loc, raw_dates_str, raw_price, forced_agency=""):
+def split_and_explode_dates(raw_agency, raw_dest, raw_code, raw_title, raw_loc, raw_dates_str, raw_price):
     days = extract_tour_days(raw_title)
     try:
         clean_price = int(re.sub(r'[^\d]', '', str(raw_price)))
     except Exception:
         clean_price = 0
 
-    norm_agency = normalize_agency_name(raw_agency, raw_code, raw_title, forced_agency)
     norm_loc = normalize_departure_location(raw_loc, raw_title)
     clean_dest = clean_destination_name(raw_dest)
 
@@ -208,7 +193,7 @@ def split_and_explode_dates(raw_agency, raw_dest, raw_code, raw_title, raw_loc, 
     for d_token in date_tokens:
         status, over_days, hol_name = evaluate_holiday_fit(d_token, days)
         exploded.append({
-            "agency": norm_agency,
+            "agency": raw_agency,
             "destination": clean_dest,
             "tour_code": str(raw_code or "-"),
             "title": str(raw_title or ""),
@@ -226,24 +211,23 @@ def parse_compact_lines(raw_text, default_agency="豪吉旅游"):
     clean_lines = raw_text.strip().splitlines()
     items = []
     for line in clean_lines:
-        line = line.strip()
-        if not line or line.startswith("#") or line.startswith("`") or "旅行社|目的地" in line:
+        line = line.strip().replace("```", "").replace("`", "")
+        if not line or line.startswith("#") or "旅行社|目的地" in line:
             continue
-        parts = [p.strip() for p in line.split("|")]
-        if len(parts) >= 7:
+        parts = [p.strip() for p in line.split("|") if p.strip()]
+        if len(parts) >= 6:
             try:
-                price_val = int(re.sub(r'[^\d]', '', parts[6]))
+                price_val = int(re.sub(r'[^\d]', '', parts[5]))
             except Exception:
                 price_val = 0
 
-            cur_agency = parts[0] if parts[0] else default_agency
             items.append({
-                "agency": cur_agency,
-                "destination": parts[1] or "精选目的地",
-                "tour_code": parts[2] or "-",
-                "title": parts[3] or "",
-                "departure_location": parts[4] or "",
-                "departure_dates": parts[5] or "",
+                "agency": default_agency,
+                "destination": parts[0] or "精选目的地",
+                "tour_code": parts[1] or "-",
+                "title": parts[2] or "",
+                "departure_location": parts[3] or "",
+                "departure_dates": parts[4] or "",
                 "price": price_val
             })
     return items
@@ -262,7 +246,7 @@ def call_gemini_vision_chunk(img_chunk, chunk_name, status_box, hint_text="", de
 
     绝对严厉规则：
     1. 纯文本逐行输出，竖线 | 分隔，严禁代码块标记：
-    旅行社|目的地|团号|行程路线全称|起飞地|出发日期|纯数字价格
+    目的地|团号|行程路线全称|起飞地|出发日期|纯数字价格
     """
 
     payload = {
@@ -273,7 +257,7 @@ def call_gemini_vision_chunk(img_chunk, chunk_name, status_box, hint_text="", de
     headers = {"Content-Type": "application/json", "x-goog-api-key": GEMINI_API_KEY}
 
     for model_name in [PRIMARY_MODEL, BACKUP_MODEL]:
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={GEMINI_API_KEY}"
+        url = f"[https://generativelanguage.googleapis.com/v1beta/models/](https://generativelanguage.googleapis.com/v1beta/models/){model_name}:generateContent?key={GEMINI_API_KEY}"
         for attempt in range(2):
             try:
                 res = requests.post(url, headers=headers, json=payload, timeout=60)
@@ -348,14 +332,12 @@ def generate_comparison_image(df):
     img.save(buf, format="PNG", quality=95)
     return buf.getvalue()
 
-# 单张海报上传
 uploaded_file = st.file_uploader("📷 上传单张海报图片 (请一张一张上传)", type=["jpg", "jpeg", "png"])
 
 if uploaded_file is not None:
-    # 明确的手动选择框，让用户自己选择是豪吉还是琦琦
     agency_choice = st.radio("请为这张海报选择对应的旅行社：", ["豪吉旅游", "琦琦旅游"], horizontal=True)
 
-    if st.button("🚀 立即开始深度精准分析并入库", type="primary", use_container_width=True):
+    if st.button("🚀 立即开始独立通道精准分析并入库", type="primary", use_container_width=True):
         newly_extracted = []
         progress_bar = st.progress(0.0)
         status_box = st.empty()
@@ -366,11 +348,11 @@ if uploaded_file is not None:
         w, h = img.size
 
         if agency_choice == "琦琦旅游":
-            status_box.markdown("🔍 正在全幅扫描琦琦旅游超值优惠表格...")
+            status_box.markdown("🔍 正在全幅扫描【琦琦旅游】超值优惠表格...")
             progress_bar.progress(0.5)
             raw_items = call_gemini_vision_chunk(img, "琦琦旅游表格", status_box, "提取琦琦旅游 1 到 23 项超值优惠团", default_agency="琦琦旅游")
         else:
-            # 豪吉旅游采用三段式精细微距扫描，保证全量 61 项不漏项
+            # 豪吉旅游：三段式微距独立扫描，确保 61 个团期全量覆盖
             box_top = (0, 0, w, int(h * 0.38))
             box_mid = (0, int(h * 0.32), w, int(h * 0.70))
             box_bottom = (0, int(h * 0.62), w, h)
@@ -394,14 +376,13 @@ if uploaded_file is not None:
 
         for item in raw_items:
             rows = split_and_explode_dates(
-                item.get("agency", ""),
+                agency_choice,
                 item.get("destination", "精选路线"),
                 item.get("tour_code", "-"),
                 item.get("title", ""),
                 item.get("departure_location", ""),
                 item.get("departure_dates", ""),
-                item.get("price", 0),
-                forced_agency=agency_choice
+                item.get("price", 0)
             )
             newly_extracted.extend(rows)
 
@@ -418,7 +399,7 @@ if uploaded_file is not None:
             st.session_state.tour_data = unique_combined
             save_persisted_data(unique_combined)
             trigger_play_on_done(len(st.session_state.tour_data))
-            st.success(f"🎉 成功为【{agency_choice}】提取 {len(newly_extracted)} 项！总库现有 **{len(st.session_state.tour_data)}** 项团期。")
+            st.success(f"🎉 成功为【{agency_choice}】精准提取 {len(newly_extracted)} 项！总库现有 **{len(st.session_state.tour_data)}** 项团期。")
             time.sleep(1.0)
             st.rerun()
         else:
