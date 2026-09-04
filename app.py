@@ -188,8 +188,6 @@ def split_and_explode_dates(raw_agency, raw_dest, raw_code, raw_title, raw_loc, 
     norm_loc = normalize_departure_location(raw_loc, raw_title)
     clean_dest = clean_destination_name(raw_dest)
 
-    date_tokens = re.findall(r'\b\d{1,2}[/.-](\d{1,2})[/.-](\d{2,4})?\b|\b\d{1,2}[/.-]\d{1,2}\b', str(raw_dates_str))
-    # 采用最宽泛的日期Token匹配
     date_tokens = re.findall(r'\b\d{1,2}[/.-]\d{1,2}(?:[/.-]\d{2,4})?\b', str(raw_dates_str))
     if not date_tokens:
         date_tokens = [str(raw_dates_str).strip()]
@@ -304,7 +302,7 @@ def parse_qiqi_lines(raw_text):
                 continue
     return items
 
-def call_gemini_half_scan(img_chunk, side_name, hint_text):
+def call_gemini_section_scan(img_chunk, section_name):
     if not GEMINI_API_KEY:
         return []
 
@@ -313,13 +311,13 @@ def call_gemini_half_scan(img_chunk, side_name, hint_text):
     base64_data = base64.b64encode(buf.getvalue()).decode('utf-8')
 
     prompt = f"""
-    你是顶级旅游海报视觉专家。当前正在微距扫描豪吉海报的【{side_name}】半边区域。
-    提示: {hint_text}
+    你是顶级旅游海报视觉专家。当前正在专注分析【{section_name}】板块。
+    请全量提取该板块内的所有团号、所有出发日期和价格！
 
     严格规则：
     1. 逐行输出，竖线 | 分隔，严禁任何代码块标记：
     目的地 | 团号 | 行程路线全称 | 起飞地 | 完整出发日期 | 纯数字价格
-    2. 【绝不漏项】：必须将该半边区域内的所有团号（包括哈尔滨全系列、广州澳门、重庆等）全部抓完！
+    2. 多期团必须独立分行写！
     """
 
     payload = {
@@ -441,22 +439,30 @@ if uploaded_file is not None:
                     if raw_items:
                         break
         else:
-            # 💎 左右两半独立微距并行扫描：确保左半边（海南岛/哈尔滨全系列/大连/张家界）与右半边（上海/广州澳门/重庆/北疆南疆）各自独立拥有完整 Token 额度，绝对不截断
-            left_box = (0, 0, int(w * 0.58), h)
-            right_box = (int(w * 0.42), 0, w, h)
+            # 💎 省份微距逐个裁剪扫描（海南岛、哈尔滨、上海、大连、广州澳门、重庆、张家界、北疆南疆）
+            # 根据豪吉海报的实际坐标比例进行裁剪
+            boxes = [
+                ("海南岛板块", (0, int(h * 0.13), int(w * 0.35), int(h * 0.39))),
+                ("哈尔滨板块(含上下及雪国列车)", (int(w * 0.32), int(h * 0.13), int(w * 0.68), int(h * 0.58))),
+                ("上海板块(含右侧边缘)", (int(w * 0.65), int(h * 0.13), w, int(h * 0.53))),
+                ("大连板块", (0, int(h * 0.38), int(w * 0.35), int(h * 0.68))),
+                ("广州澳门板块", (int(w * 0.32), int(h * 0.53), int(w * 0.65), int(h * 0.78))),
+                ("重庆板块", (int(w * 0.65), int(h * 0.51), w, int(h * 0.68))),
+                ("张家界板块", (0, int(h * 0.67), int(w * 0.35), h)),
+                ("北疆南疆板块", (int(w * 0.65), int(h * 0.67), w, h))
+            ]
 
-            status_box.markdown("🔍 豪吉海报【左半边：海南岛 / 哈尔滨全系列 / 大连 / 张家界】...")
-            progress_bar.progress(0.3)
-            r_left = call_gemini_half_scan(img.crop(left_box), "左半边", "提取左侧所有板块，特别是哈尔滨所有团号 SP002145, SP002549, SP002392, SP002395, SP002393、大连、张家界、海南岛")
-
-            status_box.markdown("🔍 豪吉海报【右半边：上海 / 广州澳门 / 重庆 / 北疆南疆】...")
-            progress_bar.progress(0.7)
-            r_right = call_gemini_half_scan(img.crop(right_box), "右半边", "提取右侧所有板块，特别是广州澳门 SP002739, SP002738, SP002195, SP002691, SP002690、重庆 SP002459, SP002722、上海、北疆南疆")
-
-            raw_items = r_left + r_right
+            raw_items = []
+            total_boxes = len(boxes)
+            for idx, (sec_name, box_coords) in enumerate(boxes):
+                status_box.markdown(f"🔍 正在微距分析【{sec_name}】...")
+                progress_bar.progress((idx + 1) / total_boxes)
+                cropped_img = img.crop(box_coords)
+                sec_items = call_gemini_section_scan(cropped_img, sec_name)
+                raw_items.extend(sec_items)
 
         progress_bar.progress(1.0)
-        status_box.markdown("✨ 正在智能清洗与数据核对...")
+        status_box.markdown("✨ 正在智能清洗、日期炸开与全局排序...")
 
         for item in raw_items:
             rows = split_and_explode_dates(
@@ -486,7 +492,7 @@ if uploaded_file is not None:
             st.session_state.tour_data = unique_combined
             save_persisted_data(unique_combined)
             trigger_play_on_done(len(st.session_state.tour_data))
-            st.success(f"🎉 左右独立双半图并行分析完成！当前总库共有 **{len(st.session_state.tour_data)}** 个精准团期供妈妈挑选。")
+            st.success(f"🎉 省份逐个微距扫描完成！当前总库共有 **{len(st.session_state.tour_data)}** 个精准团期供妈妈挑选。")
             time.sleep(1.0)
             st.rerun()
         else:
