@@ -267,7 +267,8 @@ def call_gemini_vision_chunk(img_chunk, chunk_name, status_box, hint_text="", de
                         if items:
                             return items
                         else:
-                            st.warning(f"⚠️【{chunk_name}】大模型返回了内容，但未能匹配到 6 列格式。原始内容：\n{raw_text[:600]}")
+                            # 🔍 透视窗：直接把大模型返回的原话打印在页面上！
+                            st.error(f"🔴【{chunk_name}】大模型返回了以下原始文本，但未通过 6 列竖线解析：\n\n{raw_text}")
                             return []
             except urllib.error.HTTPError as e:
                 err_body = e.read().decode('utf-8', errors='ignore') if e.fp else ""
