@@ -210,21 +210,17 @@ def split_and_explode_dates(raw_agency, raw_dest, raw_code, raw_title, raw_loc, 
         })
     return exploded
 
-# 🛡️ 绝对防错的通用解析器：自动忽略表头，智能从任意行提取关键字段
-def parse_bulletproof_lines(raw_text, default_agency="豪吉旅游"):
+# 💎 豪吉海报专用高精度解析器
+def parse_haoji_lines(raw_text):
     items = []
     lines = raw_text.strip().splitlines()
     for line in lines:
         line = line.strip().replace("```text", "").replace("```", "").replace("`", "").strip()
-        if not line or line.startswith("#") or "团号(如" in line or "行程路线全称" in line or "序号|出发日期" in line or "目的地|团号" in line:
+        if not line or line.startswith("#") or "目的地|团号" in line:
             continue
         
         parts = [p.strip() for p in line.split("|") if p.strip()]
         full_line_str = " ".join(parts) if parts else line
-
-        # 过滤掉表头文字
-        if "序号" in full_line_str or "团费" in full_line_str or "无购物站" in full_line_str:
-            continue
 
         try:
             price_val = 2999
@@ -235,27 +231,19 @@ def parse_bulletproof_lines(raw_text, default_agency="豪吉旅游"):
                 price_val = 2999
 
             date_matches = re.findall(r'\b\d{1,2}[/.-]\d{1,2}(?:[/.-]\d{2,4})?\b', full_line_str)
-            dates_str = date_matches[0] if date_matches else "13/09/2026"
+            dates_str = date_matches[0] if date_matches else "26/12/26"
 
             tour_code = "SP-000"
-            code_matches = re.findall(r'\b(?:SP|QIQI)[-]?\d{4,6}\b', full_line_str, re.IGNORECASE)
+            code_matches = re.findall(r'\bSP[-]?\d{4,6}\b', full_line_str, re.IGNORECASE)
             if code_matches:
                 tour_code = code_matches[0].upper()
-            else:
-                # 如果是琦琦表格且没有SP团号，用序号代替
-                seq_matches = re.findall(r'\b\d{1,2}\b', parts[0]) if parts else []
-                if seq_matches and default_agency == "琦琦旅游":
-                    tour_code = f"QIQI-{seq_matches[0]}"
 
-            dest = parts[0] if len(parts) > 0 and not any(k in parts[0] for k in ["SP", "QIQI", "1", "2", "3", "4", "5", "6", "7", "8", "9"]) else "精选目的地"
-            if default_agency == "琦琦旅游" and len(parts) >= 4:
-                dest = parts[3] # 琦琦的第4列通常是行程亮点
-            
+            dest = parts[0] if len(parts) > 0 and not "SP" in parts[0].upper() else "精选目的地"
             title = parts[2] if len(parts) > 2 else (parts[1] if len(parts) > 1 else "精选路线")
             loc = parts[3] if len(parts) > 3 else "新加坡起飞"
 
             items.append({
-                "agency": default_agency,
+                "agency": "豪吉旅游",
                 "destination": clean_destination_name(dest),
                 "tour_code": tour_code,
                 "title": title,
@@ -265,6 +253,49 @@ def parse_bulletproof_lines(raw_text, default_agency="豪吉旅游"):
             })
         except Exception:
             continue
+    return items
+
+# 💎 琦琦旅游专用高精度表格解析器
+def parse_qiqi_lines(raw_text):
+    items = []
+    lines = raw_text.strip().splitlines()
+    for line in lines:
+        line = line.strip().replace("```text", "").replace("```", "").replace("`", "").strip()
+        if not line or line.startswith("#") or "序号" in line or "团费" in line:
+            continue
+        
+        parts = [p.strip() for p in line.split("|") if p.strip()]
+        if len(parts) >= 5:
+            try:
+                seq_no = re.sub(r'[^\d]', '', parts[0])
+                if not seq_no:
+                    continue
+                tour_code = f"QIQI-{seq_no}"
+
+                date_matches = re.findall(r'\b\d{1,2}[/.-]\d{1,2}(?:[/.-]\d{2,4})?\b', parts[1])
+                dates_str = date_matches[0] if date_matches else "13/09/2026"
+
+                title = parts[3] if len(parts) > 3 else "超值优惠团"
+                price_val = 2999
+                price_matches = re.findall(r'\b\d{3,5}\b', parts[5].replace(",", "")) if len(parts) > 5 else []
+                if price_matches:
+                    price_val = int(price_matches[0])
+                else:
+                    all_p = re.findall(r'\b\d{3,5}\b', " ".join(parts).replace(",", ""))
+                    if all_p:
+                        price_val = int(all_p[-1])
+
+                items.append({
+                    "agency": "琦琦旅游",
+                    "destination": clean_destination_name(title),
+                    "tour_code": tour_code,
+                    "title": title,
+                    "departure_location": "新加坡起飞 (SIN)",
+                    "departure_dates": dates_str,
+                    "price": price_val
+                })
+            except Exception:
+                continue
     return items
 
 def call_gemini_vision_chunk(img_chunk, chunk_name, status_box, hint_text="", default_agency="豪吉旅游"):
@@ -291,8 +322,10 @@ def call_gemini_vision_chunk(img_chunk, chunk_name, status_box, hint_text="", de
         提示: {hint_text}
 
         严格规则：
-        逐行输出，竖线 | 分隔，严禁代码块标记：
+        1. 每一行必须严格用竖线 | 分隔，严禁任何代码块标记：
         目的地 | 团号(如SP002301) | 行程路线全称 | 起飞地 | 完整出发日期(如31/12/26) | 纯数字价格(如1599)
+        2. 【多期独立铁律】：如果一个行程卡片包含多个不同的出发日期，绝不允许合并！必须为每一个出发日期单独独立写一行！确保海报上有多少个日期就输出多少行。
+        3. 绝不允许价格漏标或写成0。
         """
 
     payload = {
@@ -309,7 +342,10 @@ def call_gemini_vision_chunk(img_chunk, chunk_name, status_box, hint_text="", de
                 res = requests.post(url, headers=headers, json=payload, timeout=90)
                 if res.status_code == 200:
                     raw_text = res.json()["candidates"][0]["content"]["parts"][0]["text"]
-                    items = parse_bulletproof_lines(raw_text, default_agency=default_agency)
+                    if default_agency == "琦琦旅游":
+                        items = parse_qiqi_lines(raw_text)
+                    else:
+                        items = parse_haoji_lines(raw_text)
                     if items:
                         return items
                 if res.status_code == 503:
@@ -438,7 +474,7 @@ if uploaded_file is not None:
             unique_combined = []
             seen = set()
             for item in combined:
-                # 💎 严格按 团号 + 出发日期 + 价格 作为联合主键去重，确保重叠时绝对不产生冗余
+                # 💎 严格按 团号 + 出发日期 + 价格 作为联合主键去重
                 key = (item["agency"], item["tour_code"], item["departure_dates"], item["price_numeric"])
                 if key not in seen:
                     seen.add(key)
