@@ -208,7 +208,6 @@ def split_and_explode_dates(raw_agency, raw_dest, raw_code, raw_title, raw_loc, 
         })
     return exploded
 
-# 🛡️ 终极无条件全收录解析器：不管大模型返回什么，只要有文字就绝对不丢弃
 def parse_bulletproof_lines(raw_text, default_agency="豪吉旅游"):
     items = []
     for line in raw_text.strip().splitlines():
@@ -220,14 +219,12 @@ def parse_bulletproof_lines(raw_text, default_agency="豪吉旅游"):
         full_line_str = " ".join(parts) if parts else line
 
         try:
-            # 自动用正则在整行中搜寻价格（3到5位数字）
             price_val = 2999
             price_matches = re.findall(r'\b\d{3,5}\b', full_line_str.replace(",", ""))
             if price_matches:
                 price_val = int(price_matches[-1])
 
-            # 自动用正则在整行中搜寻日期
-            date_matches = re.findall(r'\b\d{1,2}[/.-]\d{1,2}(?:[/.-]\d{2,4})?\b', full_line_str)
+            date_matches = re.findall(r'\b\d{1,2}[/.-]\d{1,2}(?:[/.-](\d{2,4}))?\b', full_line_str)
             dates_str = date_matches[0] if date_matches else "26/12/26"
 
             if default_agency == "豪吉旅游":
@@ -265,7 +262,6 @@ def parse_bulletproof_lines(raw_text, default_agency="豪吉旅游"):
                     "price": price_val
                 })
         except Exception:
-            # 即使单行解析抛异常，也强行兜底包装入库，绝不丢数据
             items.append({
                 "agency": default_agency,
                 "destination": "精选旅游团",
@@ -307,20 +303,15 @@ def call_gemini_vision_chunk(img_chunk, chunk_name, status_box, hint_text="", de
                     res_data = json.loads(response.read().decode('utf-8'))
                     if "candidates" in res_data and len(res_data["candidates"]) > 0:
                         raw_text = res_data["candidates"][0]["content"]["parts"][0]["text"]
-                        
-                        # 🔴 关键透视：把大模型返回的原始内容直接打印在页面上让你看！
-                        st.info(f"📥【{chunk_name}】大模型原始返回内容：\n\n```text\n{raw_text}\n```")
-
                         items = parse_bulletproof_lines(raw_text, default_agency=default_agency)
                         if items:
                             return items
             except urllib.error.HTTPError as e:
                 err_body = e.read().decode('utf-8', errors='ignore') if e.fp else ""
-                if e.code == 404:
-                    break
-                st.error(f"API 请求失败 (HTTP {e.code}): {err_body}")
+                # 🔴 强制把真实的 404 错误打印在界面上，不再静默跳过！
+                st.error(f"❌ 模型 [{model_name}] 触发 HTTP {e.code} 错误: {err_body}")
             except Exception as err:
-                st.error(f"请求异常: {str(err)}")
+                st.error(f"❌ 请求异常: {str(err)}")
             time.sleep(2)
     return []
 
