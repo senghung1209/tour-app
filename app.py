@@ -9,7 +9,6 @@ import time
 import math
 import struct
 import urllib.request
-import requests
 from io import BytesIO
 from PIL import Image, ImageDraw, ImageFont
 import streamlit.components.v1 as components
@@ -255,40 +254,29 @@ def call_gemini_vision_chunk(img_chunk, chunk_name, status_box, hint_text="", de
         "generationConfig": {"temperature": 0.0, "maxOutputTokens": 8192}
     }
 
-    # 🔒 完美自适应鉴权：支持标准的 Authorization Bearer 令牌与 URL 密钥
-    if CLEAN_KEY.startswith("AIza"):
-        headers = {"Content-Type": "application/json"}
-    else:
-        headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {CLEAN_KEY}"
-        }
+    data_json = json.dumps(payload).encode('utf-8')
+    headers = {"Content-Type": "application/json"}
 
     for model_name in [PRIMARY_MODEL, BACKUP_MODEL]:
-        if CLEAN_KEY.startswith("AIza"):
-            url = f"[https://generativelanguage.googleapis.com/v1beta/models/](https://generativelanguage.googleapis.com/v1beta/models/){model_name}:generateContent?key={CLEAN_KEY}"
-        else:
-            url = f"[https://generativelanguage.googleapis.com/v1beta/models/](https://generativelanguage.googleapis.com/v1beta/models/){model_name}:generateContent"
-
+        url = f"[https://generativelanguage.googleapis.com/v1beta/models/](https://generativelanguage.googleapis.com/v1beta/models/){model_name}:generateContent?key={CLEAN_KEY}"
         for attempt in range(2):
             try:
-                res = requests.post(url, headers=headers, json=payload, timeout=60)
-                if res.status_code == 200:
-                    res_json = res.json()
-                    if "candidates" in res_json and len(res_json["candidates"]) > 0:
-                        raw_text = res_json["candidates"][0]["content"]["parts"][0]["text"]
+                req = urllib.request.Request(url, data=data_json, headers=headers, method="POST")
+                with urllib.request.urlopen(req, timeout=60) as response:
+                    res_data = json.loads(response.read().decode('utf-8'))
+                    if "candidates" in res_data and len(res_data["candidates"]) > 0:
+                        raw_text = res_data["candidates"][0]["content"]["parts"][0]["text"]
                         items = parse_compact_lines(raw_text, default_agency=default_agency)
                         if items:
                             return items
                         else:
                             st.warning(f"⚠️【{chunk_name}】大模型返回了内容，但未能匹配到 6 列格式。原始内容：\n```text\n{raw_text[:600]}\n```")
                             return []
-                    else:
-                        st.error(f"⚠️ API 返回结构异常: {res_json}")
-                else:
-                    st.error(f"❌ API 请求失败 (HTTP {res.status_code}): {res.text}")
+            except urllib.error.HTTPError as e:
+                err_detail = e.read().decode('utf-8') if e.fp else str(e)
+                st.error(f"API 请求失败 (HTTP {e.code}): {err_detail}")
             except Exception as err:
-                st.error(f"❌ 请求异常: {str(err)}")
+                st.error(f"请求异常: {str(err)}")
             time.sleep(2)
     return []
 
