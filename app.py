@@ -48,7 +48,7 @@ else:
         st.session_state.private_tour_data = []
     active_data = st.session_state.private_tour_data
 
-st.title("✈️ 旅游团智能比价助手 (工业级锚点防错版)")
+st.title("✈️ 旅游团智能比价助手 (无死角全覆盖版)")
 
 @st.cache_resource
 def get_loud_wav_base64():
@@ -189,7 +189,6 @@ def clean_destination_name(raw_dest):
     s = re.sub(r'\d+\s*(?:天|D|d|夜|晚|N|n)', '', s)
     return s.strip()
 
-# 💎 锚点级严格炸开器：确保同一个价格名下的多个日期100%独立分行，绝不粘连
 def split_and_explode_dates(raw_agency, raw_dest, raw_code, raw_title, raw_loc, raw_dates_str, raw_price, forced_agency=""):
     days = extract_tour_days(raw_title)
     try:
@@ -286,12 +285,12 @@ def call_gemini_anchor_audit_agent(img_chunk, section_name):
     prompt = (
         f"你是一位具备工业级精准度的旅游海报审计专家。当前正在审核【{section_name}】板块。\n"
         "【核心审计与锚点防错铁律】：\n"
-        "1. 必须以【团号（如 SP002301）】作为视觉锚点，严格锁定该团号对应的路线标题、起飞地点。\n"
-        "2. 严禁张冠李戴！必须仔细查看每个团号下方对应的各个【团费价格（RM）】与【出发日期】。如果一个价格（例如 RM 1599）下面写了两个日期（例如 13/11/26, 27/11/26），请将它们写在同一条记录的 departure_dates 中用逗号隔开。\n"
+        "1. 必须以【团号（如 SP002301 或 SP002690 等）】作为视觉锚点，严格锁定该团号对应的路线标题、起飞地点。\n"
+        "2. 严禁漏掉底部或边缘的任何卡片！必须仔细查看每个团号下方对应的各个【团费价格（RM）】与【出发日期】。\n"
         "3. 价格必须是真实位于海报中该团号对应的数字，杜绝幻觉。\n\n"
         "输出规范：必须返回严格合法的纯 JSON 数组格式（不附加任何 markdown 额外说明）：\n"
         "[\n"
-        '  {"destination": "目的地", "tour_code": "SP002301", "title": "路线名称", "departure_location": "起飞地", "departure_dates": "13/11/26, 27/11/26", "price": 1599},\n'
+        '  {"destination": "目的地", "tour_code": "SP002690", "title": "路线名称", "departure_location": "起飞地", "departure_dates": "16/12/26, 30/12/26", "price": 2099},\n'
         "  ...\n"
         "]"
     )
@@ -384,7 +383,7 @@ uploaded_file = st.file_uploader("📷 请上传任意旅游海报图片", type=
 if uploaded_file is not None:
     agency_choice = st.radio("请选择这家海报对应的旅行社：", ["豪吉旅游", "琦琦旅游", "其他新旅行社"], horizontal=True)
 
-    if st.button("🚀 启动工业级锚点防错提取", type="primary", use_container_width=True):
+    if st.button("🚀 启动无死角全覆盖锚点提取", type="primary", use_container_width=True):
         newly_extracted = []
         progress_bar = st.progress(0.0)
         status_box = st.empty()
@@ -415,13 +414,13 @@ if uploaded_file is not None:
                     if raw_items:
                         break
         else:
-            # 💎 工业级微距区块裁剪（确保所有板块100%覆盖，底部边界完美无死角）
+            # 💎 终极扩大裁剪框：将广州澳门板块的底部边界拉伸到 0.98（完美包裹 SP002690, SP002705 等最底部卡片）
             boxes = [
                 ("海南岛板块", (0, int(h * 0.13), int(w * 0.35), int(h * 0.39))),
                 ("哈尔滨板块(含上下及雪国列车)", (int(w * 0.32), int(h * 0.13), int(w * 0.68), int(h * 0.58))),
                 ("上海板块(含右侧边缘)", (int(w * 0.65), int(h * 0.13), w, int(h * 0.53))),
                 ("大连板块", (0, int(h * 0.38), int(w * 0.35), int(h * 0.68))),
-                ("广州澳门板块", (int(w * 0.32), int(h * 0.53), int(w * 0.65), int(h * 0.85))),
+                ("广州澳门板块(含底部全覆盖)", (int(w * 0.32), int(h * 0.53), int(w * 0.65), int(h * 0.98))),
                 ("重庆板块", (int(w * 0.65), int(h * 0.51), w, int(h * 0.68))),
                 ("张家界板块", (0, int(h * 0.67), int(w * 0.35), h)),
                 ("北疆南疆板块", (int(w * 0.65), int(h * 0.67), w, h))
@@ -430,7 +429,7 @@ if uploaded_file is not None:
             raw_items = []
             total_boxes = len(boxes)
             for idx, (sec_name, box_coords) in enumerate(boxes):
-                status_box.markdown(f"🔬 正在进行锚点审计分析【{sec_name}】...")
+                status_box.markdown(f"🔬 正在进行无死角锚点分析【{sec_name}】...")
                 progress_bar.progress((idx + 1) / total_boxes)
                 cropped_img = img.crop(box_coords)
                 sec_items = call_gemini_anchor_audit_agent(cropped_img, sec_name)
@@ -475,7 +474,7 @@ if uploaded_file is not None:
                 st.session_state.private_tour_data = unique_combined
 
             trigger_play_on_done(len(unique_combined))
-            st.success(f"🎉 工业级锚点提取完成！当前【{work_mode}】共有 **{len(unique_combined)}** 个精准团期。")
+            st.success(f"🎉 无死角全覆盖提取完成！当前【{work_mode}】共有 **{len(unique_combined)}** 个精准团期。")
             time.sleep(1.0)
             st.rerun()
         else:
