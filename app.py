@@ -48,7 +48,7 @@ else:
         st.session_state.private_tour_data = []
     active_data = st.session_state.private_tour_data
 
-st.title("✈️ 旅游团智能比价助手 (无死角全覆盖版)")
+st.title("✈️ 旅游团智能比价助手 (全景大范围无死角版)")
 
 @st.cache_resource
 def get_loud_wav_base64():
@@ -383,7 +383,7 @@ uploaded_file = st.file_uploader("📷 请上传任意旅游海报图片", type=
 if uploaded_file is not None:
     agency_choice = st.radio("请选择这家海报对应的旅行社：", ["豪吉旅游", "琦琦旅游", "其他新旅行社"], horizontal=True)
 
-    if st.button("🚀 启动无死角全覆盖锚点提取", type="primary", use_container_width=True):
+    if st.button("🚀 启动全景大范围无死角提取", type="primary", use_container_width=True):
         newly_extracted = []
         progress_bar = st.progress(0.0)
         status_box = st.empty()
@@ -414,22 +414,22 @@ if uploaded_file is not None:
                     if raw_items:
                         break
         else:
-            # 💎 终极扩大裁剪框：将广州澳门板块的底部边界拉伸到 0.98（完美包裹 SP002690, SP002705 等最底部卡片）
+            # 💎 终极全景大范围重叠裁剪框：四面八方全部向外扩展溢出，绝对无死角覆盖任何边缘卡片
             boxes = [
-                ("海南岛板块", (0, int(h * 0.13), int(w * 0.35), int(h * 0.39))),
-                ("哈尔滨板块(含上下及雪国列车)", (int(w * 0.32), int(h * 0.13), int(w * 0.68), int(h * 0.58))),
-                ("上海板块(含右侧边缘)", (int(w * 0.65), int(h * 0.13), w, int(h * 0.53))),
-                ("大连板块", (0, int(h * 0.38), int(w * 0.35), int(h * 0.68))),
-                ("广州澳门板块(含底部全覆盖)", (int(w * 0.32), int(h * 0.53), int(w * 0.65), int(h * 0.98))),
-                ("重庆板块", (int(w * 0.65), int(h * 0.51), w, int(h * 0.68))),
-                ("张家界板块", (0, int(h * 0.67), int(w * 0.35), h)),
-                ("北疆南疆板块", (int(w * 0.65), int(h * 0.67), w, h))
+                ("海南岛板块", (0, int(h * 0.10), int(w * 0.38), int(h * 0.42))),
+                ("哈尔滨板块(含上下及雪国列车)", (int(w * 0.28), int(h * 0.10), int(w * 0.72), int(h * 0.62))),
+                ("上海板块(含右侧边缘)", (int(w * 0.60), int(h * 0.10), w, int(h * 0.56))),
+                ("大连板块", (0, int(h * 0.35), int(w * 0.38), int(h * 0.72))),
+                ("广州澳门板块(含底部全景覆盖)", (int(w * 0.28), int(h * 0.50), int(w * 0.72), h)),
+                ("重庆板块", (int(w * 0.60), int(h * 0.48), w, int(h * 0.72))),
+                ("张家界板块", (0, int(h * 0.64), int(w * 0.38), h)),
+                ("北疆南疆板块", (int(w * 0.60), int(h * 0.64), w, h))
             ]
 
             raw_items = []
             total_boxes = len(boxes)
             for idx, (sec_name, box_coords) in enumerate(boxes):
-                status_box.markdown(f"🔬 正在进行无死角锚点分析【{sec_name}】...")
+                status_box.markdown(f"🔬 正在进行全景大范围扫描【{sec_name}】...")
                 progress_bar.progress((idx + 1) / total_boxes)
                 cropped_img = img.crop(box_coords)
                 sec_items = call_gemini_anchor_audit_agent(cropped_img, sec_name)
@@ -474,7 +474,7 @@ if uploaded_file is not None:
                 st.session_state.private_tour_data = unique_combined
 
             trigger_play_on_done(len(unique_combined))
-            st.success(f"🎉 无死角全覆盖提取完成！当前【{work_mode}】共有 **{len(unique_combined)}** 个精准团期。")
+            st.success(f"🎉 全景无死角提取完成！当前【{work_mode}】共有 **{len(unique_combined)}** 个精准团期。")
             time.sleep(1.0)
             st.rerun()
         else:
