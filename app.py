@@ -48,7 +48,7 @@ else:
         st.session_state.private_tour_data = []
     active_data = st.session_state.private_tour_data
 
-st.title("✈️ 旅游团智能比价助手 (全景大范围无死角版)")
+st.title("✈️ 旅游团智能比价助手 (全景大范围防错版)")
 
 @st.cache_resource
 def get_loud_wav_base64():
@@ -138,10 +138,17 @@ def evaluate_holiday_fit(departure_date_str, duration_days):
         return 'none', 0, ""
 
     d, mth, y = matches[0]
-    d, mth = int(d), int(mth)
+    try:
+        d, mth = int(d), int(mth)
+    except Exception:
+        return 'none', 0, ""
     
     if y:
-        y = int(y) + 2000 if int(y) < 100 else int(y)
+        try:
+            y_int = int(y)
+            y = y_int + 2000 if y_int < 100 else y_int
+        except Exception:
+            y = 2027 if mth in [1, 2] else 2026
     else:
         y = 2027 if mth in [1, 2] else 2026
 
@@ -209,12 +216,13 @@ def split_and_explode_dates(raw_agency, raw_dest, raw_code, raw_title, raw_loc, 
     exploded = []
     for d_token in date_tokens:
         parts_d = d_token.split('/') if '/' in d_token else (d_token.split('.') if '.' in d_token else d_token.split('-'))
-        if len(parts_d) == 2:
-            d_mth, d_day = parts_d[0], parts_d[1]
-            y_str = "27" if int(d_mth) in [1, 2] else "26"
-            full_d_token = f"{d_mth}/{d_day}/{y_str}"
-        elif len(parts_d) == 3:
-            full_d_token = d_token
+        if len(parts_d) >= 2:
+            try:
+                d_mth, d_day = int(parts_d[0]), int(parts_d[1])
+                y_str = "27" if d_mth in [1, 2] else "26"
+                full_d_token = f"{d_mth:02d}/{d_day:02d}/{y_str}"
+            except Exception:
+                full_d_token = f"{d_token}/26"
         else:
             full_d_token = f"{d_token}/26"
 
