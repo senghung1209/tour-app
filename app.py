@@ -188,7 +188,7 @@ def split_and_explode_dates(raw_agency, raw_dest, raw_code, raw_title, raw_loc, 
     norm_loc = normalize_departure_location(raw_loc, raw_title)
     clean_dest = clean_destination_name(raw_dest)
 
-    date_tokens = re.findall(r'\b\d{1,2}[/.-]\d{1,2}(?:[/.-]\d{2,4})?\b', str(raw_dates_str))
+    date_tokens = re.findall(r'\b\d{1,2}[/.-]\d{1,2}(?:[/.-](\d{2,4}))?\b', str(raw_dates_str))
     if not date_tokens:
         date_tokens = [str(raw_dates_str).strip()]
 
@@ -210,67 +210,51 @@ def split_and_explode_dates(raw_agency, raw_dest, raw_code, raw_title, raw_loc, 
         })
     return exploded
 
-def parse_full_poster_lines(raw_text, default_agency="豪吉旅游"):
+def parse_compact_lines(raw_text, default_agency="豪吉旅游"):
+    clean_lines = raw_text.strip().splitlines()
     items = []
-    lines = raw_text.strip().splitlines()
-    for line in lines:
+    for line in clean_lines:
         line = line.strip().replace("```text", "").replace("```", "").replace("`", "").strip()
-        if not line or line.startswith("#") or "目的地|团号" in line or "旅行社|目的地" in line:
+        if not line or line.startswith("#") or "旅行社|目的地" in line or "目的地|团号" in line:
             continue
-        
         parts = [p.strip() for p in line.split("|") if p.strip()]
-        full_line_str = " ".join(parts) if parts else line
-
-        try:
-            price_val = 2999
-            price_matches = re.findall(r'\b\d{3,5}\b', full_line_str.replace(",", ""))
-            if price_matches:
-                price_val = int(price_matches[-1])
+        if len(parts) >= 6:
+            try:
+                price_val = int(re.sub(r'[^\d]', '', parts[5]))
+            except Exception:
+                price_val = 2999
             if price_val == 0:
                 price_val = 2999
 
-            date_matches = re.findall(r'\b\d{1,2}[/.-]\d{1,2}(?:[/.-]\d{2,4})?\b', full_line_str)
-            dates_str = date_matches[0] if date_matches else "26/12/26"
-
-            tour_code = "SP-000"
-            code_matches = re.findall(r'\b(?:SP|QIQI)[-]?\d{4,6}\b', full_line_str, re.IGNORECASE)
-            if code_matches:
-                tour_code = code_matches[0].upper()
-
-            dest = parts[0] if len(parts) > 0 and not "SP" in parts[0].upper() else "精选目的地"
-            title = parts[2] if len(parts) > 2 else (parts[1] if len(parts) > 1 else "精选路线")
-            loc = parts[3] if len(parts) > 3 else "新加坡起飞"
-
+            cur_agency = parts[0] if parts[0] and not "SP" in parts[0].upper() else default_agency
             items.append({
-                "agency": default_agency,
-                "destination": clean_destination_name(dest),
-                "tour_code": tour_code,
-                "title": title,
-                "departure_location": loc,
-                "departure_dates": dates_str,
+                "agency": cur_agency,
+                "destination": parts[0] if not "SP" in parts[0].upper() else "精选目的地",
+                "tour_code": parts[1] if "SP" in parts[1].upper() or "QIQI" in parts[1].upper() else (parts[2] if len(parts) > 2 else "-"),
+                "title": parts[2] if len(parts) > 2 else "",
+                "departure_location": parts[3] if len(parts) > 3 else "",
+                "departure_dates": parts[4] if len(parts) > 4 else "",
                 "price": price_val
             })
-        except Exception:
-            continue
     return items
 
-def call_gemini_full_poster(img, agency_name, status_box):
+def call_gemini_vision_chunk(img_chunk, chunk_name, status_box, hint_text="", default_agency="豪吉旅游"):
     if not GEMINI_API_KEY:
         return []
 
-    status_box.markdown(f"🔍 正在对【{agency_name}】海报进行整张高清全景无损扫描...")
     buf = BytesIO()
-    img.save(buf, format="JPEG", quality=95)
+    img_chunk.save(buf, format="JPEG", quality=95)
     base64_data = base64.b64encode(buf.getvalue()).decode('utf-8')
 
     prompt = f"""
-    你是一个极其精准的旅游海报视觉数据提取专家。这是一张完整的【{agency_name}】旅游宣传海报，里面包含几十个不同的旅游团期和网格卡片。
-    请以绝对的上帝视角，全量、零漏项地提取出海报上的每一个旅游团期！
+    你是顶级旅游海报高精度视觉提取专家。当前正在以最高清晰度扫描豪吉海报的【{chunk_name}】区域。
+    任务：绝不遗漏该区域内的任何一个方块、任何一个团号、任何一个出发日期与价格！
+    核心提示: {hint_text}
 
-    绝对规则：
-    1. 逐行输出，严格使用竖线 | 分隔，绝不使用 markdown 代码块：
-    目的地 | 团号(如SP002301) | 完整行程路线名称 | 起飞地(如SIN/JB/KUL) | 完整出发日期(如31/12/26) | 纯数字价格(如1599)
-    2. 【多期独立铁律】：如果某个旅游团包含多个不同的出发日期或对应多个价格，绝对不允许合并，必须为每一个出发日期单独独立写一行！确保海报上有多少个出发日期就输出多少行。
+    绝对严厉规则：
+    1. 每一行必须严格用竖线 | 分隔，严禁任何代码块标记：
+    目的地 | 团号(如SP002301) | 行程路线全称 | 起飞地 | 完整出发日期(如31/12/26) | 纯数字价格(如1599)
+    2. 【多期独立铁律】：如果一个行程卡片包含多个不同的出发日期（例如哈尔滨底部 SP002395 包含 02/12, 04/12, 06/12, 16/12, 23/12 等），绝不允许合并！必须为每一个出发日期单独独立写一行！确保海报上有多少个日期就输出多少行。
     3. 绝不允许价格漏标或写成0。
     """
 
@@ -285,10 +269,10 @@ def call_gemini_full_poster(img, agency_name, status_box):
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={GEMINI_API_KEY}"
         for attempt in range(3):
             try:
-                res = requests.post(url, headers=headers, json=payload, timeout=120)
+                res = requests.post(url, headers=headers, json=payload, timeout=90)
                 if res.status_code == 200:
                     raw_text = res.json()["candidates"][0]["content"]["parts"][0]["text"]
-                    items = parse_full_poster_lines(raw_text, default_agency=agency_name)
+                    items = parse_compact_lines(raw_text, default_agency=default_agency)
                     if items:
                         return items
                 if res.status_code == 503:
@@ -370,9 +354,32 @@ if uploaded_file is not None:
         img = Image.open(BytesIO(uploaded_file.getvalue()))
         if img.mode != 'RGB':
             img = img.convert('RGB')
+        w, h = img.size
 
-        progress_bar.progress(0.5)
-        raw_items = call_gemini_full_poster(img, agency_choice, status_box)
+        if agency_choice == "琦琦旅游":
+            status_box.markdown("🔍 正在全幅扫描琦琦旅游超值优惠表格...")
+            progress_bar.progress(0.5)
+            raw_items = call_gemini_vision_chunk(img, "琦琦旅游表格", status_box, "提取琦琦旅游 1 到 23 项超值优惠团", default_agency="琦琦旅游")
+        else:
+            # 💎 经典稳健的三段式无缝重叠切片（0-40%, 35-80%, 75-100%），容量大、上下文完整、绝对不漏项
+            box_top = (0, 0, w, int(h * 0.40))
+            box_mid = (0, int(h * 0.35), w, int(h * 0.80))
+            box_bottom = (0, int(h * 0.75), w, h)
+
+            status_box.markdown("🔍 豪吉海报【第一段 (0%-40%)：海南岛/哈尔滨/上海】...")
+            progress_bar.progress(0.2)
+            r1 = call_gemini_vision_chunk(img.crop(box_top), "豪吉海报上段", status_box, "提取海南岛、哈尔滨、上海等全量路线", default_agency="豪吉旅游")
+
+            status_box.markdown("🔍 豪吉海报【第二段 (35%-80%)：大连/广州澳门/重庆】...")
+            progress_bar.progress(0.5)
+            r2 = call_gemini_vision_chunk(img.crop(box_mid), "豪吉海报中段", status_box, "提取大连、广州澳门、重庆等全量路线", default_agency="豪吉旅游")
+
+            status_box.markdown("🔍 豪吉海报【第三段 (75%-100%)：张家界/北疆/南疆】...")
+            progress_bar.progress(0.8)
+            r3 = call_gemini_vision_chunk(img.crop(box_bottom), "豪吉海报下段", status_box, "提取张家界、北疆、南疆等全量路线", default_agency="豪吉旅游")
+
+            raw_items = r1 + r2 + r3
+
         progress_bar.progress(1.0)
         status_box.markdown("✨ 正在智能清洗与数据核对...")
 
@@ -391,18 +398,19 @@ if uploaded_file is not None:
 
         if newly_extracted:
             combined = st.session_state.tour_data + newly_extracted
-            seen = set()
             unique_combined = []
+            seen = set()
             for item in combined:
-                marker = (item["agency"], item["tour_code"], item["departure_location"], item["departure_dates"], item["price_numeric"])
-                if marker not in seen:
-                    seen.add(marker)
+                # 💎 严格按 团号 + 出发日期 + 价格 作为联合主键去重，确保三段重叠时绝对不产生冗余，完美锁定总量
+                key = (item["tour_code"], item["departure_dates"], item["price_numeric"])
+                if key not in seen:
+                    seen.add(key)
                     unique_combined.append(item)
 
             st.session_state.tour_data = unique_combined
             save_persisted_data(unique_combined)
             trigger_play_on_done(len(st.session_state.tour_data))
-            st.success(f"🎉 成功提取 {len(newly_extracted)} 个团期！当前总库共有 **{len(st.session_state.tour_data)}** 个团期可供挑选。")
+            st.success(f"🎉 成功提取团期！当前总库共有 **{len(st.session_state.tour_data)}** 个精准团期供妈妈挑选。")
             time.sleep(1.0)
             st.rerun()
         else:
