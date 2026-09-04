@@ -8,6 +8,7 @@ import base64
 import time
 import math
 import struct
+import urllib.request
 import requests
 from io import BytesIO
 from PIL import Image, ImageDraw, ImageFont
@@ -127,9 +128,8 @@ OFFICIAL_HOLIDAYS = [
 ]
 
 RAW_KEY = st.secrets.get("GEMINI_API_KEY", "")
-GEMINI_API_KEY = str(RAW_KEY).strip() if RAW_KEY else ""
+CLEAN_KEY = re.sub(r'[\r\n\t\s\'\"\[\]]', '', str(RAW_KEY))
 
-# 🔒 严格锁定你指定的模型，绝不改动
 PRIMARY_MODEL = "gemini-3.5-flash"
 BACKUP_MODEL = "gemini-3.1-flash-lite"
 
@@ -185,7 +185,7 @@ def split_and_explode_dates(raw_agency, raw_dest, raw_code, raw_title, raw_loc, 
     norm_loc = normalize_departure_location(raw_loc, raw_title)
     clean_dest = clean_destination_name(raw_dest)
 
-    date_tokens = re.findall(r'\b\d{1,2}[/.-](\d{1,2})(?:[/.-](\d{2,4}))?\b', str(raw_dates_str))
+    date_tokens = re.findall(r'\b\d{1,2}[/.-]\d{1,2}(?:[/.-](\d{2,4}))?\b', str(raw_dates_str))
     if not date_tokens:
         date_tokens = [str(raw_dates_str).strip()]
 
@@ -233,7 +233,7 @@ def parse_compact_lines(raw_text, default_agency="豪吉旅游"):
     return items
 
 def call_gemini_vision_chunk(img_chunk, chunk_name, status_box, hint_text="", default_agency="豪吉旅游"):
-    if not GEMINI_API_KEY:
+    if not CLEAN_KEY:
         st.error("❌ 未检测到 GEMINI_API_KEY！")
         return []
 
@@ -255,10 +255,21 @@ def call_gemini_vision_chunk(img_chunk, chunk_name, status_box, hint_text="", de
         "generationConfig": {"temperature": 0.0, "maxOutputTokens": 8192}
     }
 
-    headers = {"Content-Type": "application/json", "x-goog-api-key": GEMINI_API_KEY}
+    # 🔒 完美自适应鉴权：支持标准的 Authorization Bearer 令牌与 URL 密钥
+    if CLEAN_KEY.startswith("AIza"):
+        headers = {"Content-Type": "application/json"}
+    else:
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {CLEAN_KEY}"
+        }
 
     for model_name in [PRIMARY_MODEL, BACKUP_MODEL]:
-        url = f"[https://generativelanguage.googleapis.com/v1beta/models/](https://generativelanguage.googleapis.com/v1beta/models/){model_name}:generateContent?key={GEMINI_API_KEY}"
+        if CLEAN_KEY.startswith("AIza"):
+            url = f"[https://generativelanguage.googleapis.com/v1beta/models/](https://generativelanguage.googleapis.com/v1beta/models/){model_name}:generateContent?key={CLEAN_KEY}"
+        else:
+            url = f"[https://generativelanguage.googleapis.com/v1beta/models/](https://generativelanguage.googleapis.com/v1beta/models/){model_name}:generateContent"
+
         for attempt in range(2):
             try:
                 res = requests.post(url, headers=headers, json=payload, timeout=60)
@@ -270,7 +281,6 @@ def call_gemini_vision_chunk(img_chunk, chunk_name, status_box, hint_text="", de
                         if items:
                             return items
                         else:
-                            # 🔍 透视窗：打印大模型返回的原话，让你看清为什么没解析出来
                             st.warning(f"⚠️【{chunk_name}】大模型返回了内容，但未能匹配到 6 列格式。原始内容：\n```text\n{raw_text[:600]}\n```")
                             return []
                     else:
