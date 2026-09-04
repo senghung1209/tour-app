@@ -188,7 +188,7 @@ def split_and_explode_dates(raw_agency, raw_dest, raw_code, raw_title, raw_loc, 
     norm_loc = normalize_departure_location(raw_loc, raw_title)
     clean_dest = clean_destination_name(raw_dest)
 
-    date_tokens = re.findall(r'\b\d{1,2}[/.-]\d{1,2}(?:[/.-](\d{2,4}))?\b', str(raw_dates_str))
+    date_tokens = re.findall(r'\b\d{1,2}[/.-]\d{1,2}(?:[/.-]\d{2,4})?\b', str(raw_dates_str))
     if not date_tokens:
         date_tokens = [str(raw_dates_str).strip()]
 
@@ -210,7 +210,7 @@ def split_and_explode_dates(raw_agency, raw_dest, raw_code, raw_title, raw_loc, 
         })
     return exploded
 
-# 💎 豪吉海报专用高精度解析器
+# 豪吉海报解析
 def parse_haoji_lines(raw_text):
     items = []
     lines = raw_text.strip().splitlines()
@@ -218,7 +218,6 @@ def parse_haoji_lines(raw_text):
         line = line.strip().replace("```text", "").replace("```", "").replace("`", "").strip()
         if not line or line.startswith("#") or "目的地|团号" in line:
             continue
-        
         parts = [p.strip() for p in line.split("|") if p.strip()]
         full_line_str = " ".join(parts) if parts else line
 
@@ -255,7 +254,7 @@ def parse_haoji_lines(raw_text):
             continue
     return items
 
-# 💎 琦琦旅游专用高精度表格解析器
+# 琦琦旅游专用表格解析（精准提取完整日期如 13/09/2026）
 def parse_qiqi_lines(raw_text):
     items = []
     lines = raw_text.strip().splitlines()
@@ -272,7 +271,10 @@ def parse_qiqi_lines(raw_text):
                     continue
                 tour_code = f"QIQI-{seq_no}"
 
-                date_matches = re.findall(r'\b\d{1,2}[/.-]\d{1,2}(?:[/.-]\d{2,4})?\b', parts[1])
+                # 严格匹配琦琦表格中的完整日期（如 13/09/2026）
+                date_matches = re.findall(r'\b\d{1,2}[/.-]\d{1,2}[/.-]\d{2,4}\b', line)
+                if not date_matches:
+                    date_matches = re.findall(r'\b\d{1,2}[/.-]\d{1,2}\b', line)
                 dates_str = date_matches[0] if date_matches else "13/09/2026"
 
                 title = parts[3] if len(parts) > 3 else "超值优惠团"
@@ -281,7 +283,7 @@ def parse_qiqi_lines(raw_text):
                 if price_matches:
                     price_val = int(price_matches[0])
                 else:
-                    all_p = re.findall(r'\b\d{3,5}\b', " ".join(parts).replace(",", ""))
+                    all_p = re.findall(r'\b\d{3,5}\b', line.replace(",", ""))
                     if all_p:
                         price_val = int(all_p[-1])
 
@@ -290,7 +292,7 @@ def parse_qiqi_lines(raw_text):
                     "destination": clean_destination_name(title),
                     "tour_code": tour_code,
                     "title": title,
-                    "departure_location": "新加坡起飞 (SIN)",
+                    "departure_location": parts[4] if len(parts) > 4 and "新加坡起飞" in parts[4] else "新加坡起飞 (SIN)",
                     "departure_dates": dates_str,
                     "price": price_val
                 })
@@ -309,11 +311,12 @@ def call_gemini_vision_chunk(img_chunk, chunk_name, status_box, hint_text="", de
     if default_agency == "琦琦旅游":
         prompt = f"""
         你是一个极其精准的旅游表格数据提取专家。这是一张【琦琦旅游 9-10月超值优惠旅行团】的完整表格，一共有 23 行（从序号 1 到 23）。
-        请全量提取这 23 行中的每一行数据，绝对不允许漏掉任何一行！
+        请全量、不漏项地提取这 23 行中的每一行数据！
 
         严格规则：
-        逐行输出，竖线 | 分隔，严禁代码块标记：
-        序号 | 出发日期(如13/09/2026) | 天数(如6天5夜) | 行程亮点 | 航空 | 团费RM
+        1. 逐行输出，竖线 | 分隔，严禁任何 markdown 代码块标记：
+        序号 | 出发日期(必须写完整，如13/09/2026) | 天数(如6天5夜) | 行程亮点 | 航空 | 团费RM
+        2. 绝不允许把出发日期简化只写年份！每一行必须带上完整的日、月、年。
         """
     else:
         prompt = f"""
@@ -322,10 +325,9 @@ def call_gemini_vision_chunk(img_chunk, chunk_name, status_box, hint_text="", de
         提示: {hint_text}
 
         严格规则：
-        1. 每一行必须严格用竖线 | 分隔，严禁任何代码块标记：
+        1. 每一行必须严格用竖线 | 分隔，严禁代码块标记：
         目的地 | 团号(如SP002301) | 行程路线全称 | 起飞地 | 完整出发日期(如31/12/26) | 纯数字价格(如1599)
-        2. 【多期独立铁律】：如果一个行程卡片包含多个不同的出发日期，绝不允许合并！必须为每一个出发日期单独独立写一行！确保海报上有多少个日期就输出多少行。
-        3. 绝不允许价格漏标或写成0。
+        2. 【多期独立铁律】：如果一个行程卡片包含多个不同的出发日期，绝不允许合并！必须为每一个出发日期单独独立写一行！
         """
 
     payload = {
