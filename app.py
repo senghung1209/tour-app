@@ -188,12 +188,19 @@ def split_and_explode_dates(raw_agency, raw_dest, raw_code, raw_title, raw_loc, 
     norm_loc = normalize_departure_location(raw_loc, raw_title)
     clean_dest = clean_destination_name(raw_dest)
 
-    date_tokens = re.findall(r'\b\d{1,2}[/.-]\d{1,2}(?:[/.-](\d{2,4}))?\b', str(raw_dates_str))
+    # 💎 强力日期提取：精确匹配 DD/MM/YY 或 DD/MM 格式
+    date_tokens = re.findall(r'\b\d{1,2}[/.-]\d{1,2}(?:[/.-]\d{2,4})?\b', str(raw_dates_str))
     if not date_tokens:
         date_tokens = [str(raw_dates_str).strip()]
 
     exploded = []
     for d_token in date_tokens:
+        # 补全年份后缀
+        if len(d_token.split('/')[-1]) == 2:
+            d_token = f"{d_token}"
+        elif len(d_token.split('/')) == 2:
+            d_token = f"{d_token}/26"
+
         status, over_days, hol_name = evaluate_holiday_fit(d_token, days)
         exploded.append({
             "agency": norm_agency,
@@ -210,7 +217,7 @@ def split_and_explode_dates(raw_agency, raw_dest, raw_code, raw_title, raw_loc, 
         })
     return exploded
 
-# 豪吉海报解析（增强版：确保哈尔滨下半部、雪国列车等所有边缘方块全量捕获）
+# 💎 豪吉海报专用精准解析器（强制捕获完整出发日期字段）
 def parse_haoji_lines(raw_text):
     items = []
     lines = raw_text.strip().splitlines()
@@ -229,8 +236,9 @@ def parse_haoji_lines(raw_text):
             if price_val == 0:
                 price_val = 2999
 
-            date_matches = re.findall(r'\b\d{1,2}[/.-]\d{1,2}(?:[/.-]\d{2,4})?\b', full_line_str)
-            dates_str = date_matches[0] if date_matches else "26/12/26"
+            # 严格提取完整的日期串（如 30/10/26, 11/11/26 等）
+            date_matches = re.findall(r'\b\d{1,2}[/.-]\d{1,2}(?:[/.-]\d{2,4})?\b', parts[4] if len(parts) > 4 else full_line_str)
+            dates_str = ", ".join(date_matches) if date_matches else "26/12/26"
 
             tour_code = "SP-000"
             code_matches = re.findall(r'\bSP[-]?\d{4,6}\b', full_line_str, re.IGNORECASE)
@@ -254,7 +262,6 @@ def parse_haoji_lines(raw_text):
             continue
     return items
 
-# 琦琦旅游表格解析
 def parse_qiqi_lines(raw_text):
     items = []
     lines = raw_text.strip().splitlines()
@@ -311,18 +318,18 @@ def call_gemini_vision_chunk(img_chunk, chunk_name, status_box, hint_text="", de
         prompt = f"""
         你是一个极其精准的旅游表格数据提取专家。这是一张【琦琦旅游 9-10月超值优惠旅行团】的完整表格，一共有 23 行（从序号 1 到 23）。
         请全量、不漏项地提取这 23 行中的每一行数据！
-        规则：序号 | 出发日期(如13/09/2026) | 天数 | 行程亮点 | 航空 | 团费RM
+        规则：序号 | 出发日期(必须写完整，如13/09/2026) | 天数 | 行程亮点 | 航空 | 团费RM
         """
     else:
         prompt = f"""
         你是顶级旅游海报高精度视觉提取专家。当前正在以超高重叠视窗扫描豪吉海报的【{chunk_name}】区域。
-        请全量提取该区域内的全部旅游团期信息（特别注意不要漏掉哈尔滨下半部的 SP002395 各种日期以及底部的雪国列车 SP002393）！
+        请全量提取该区域内的全部旅游团期信息（特别注意：每一行的所有出发日期必须全部原封不动提取出来，例如 30/10, 11/11, 20/11 或 04/12, 06/12 等绝不能漏掉）！
         提示: {hint_text}
 
         规则：
         1. 每一行必须严格用竖线 | 分隔，严禁代码块标记：
-        目的地 | 团号(如SP002301) | 行程路线全称 | 起飞地 | 完整出发日期(如31/12/26) | 纯数字价格(如1599)
-        2. 【多期独立铁律】：遇到多个出发日期绝不允许合并，必须为每一个日期独立写一行！
+        目的地 | 团号(如SP002301) | 行程路线全称 | 起飞地 | 完整出发日期(如30/10/26, 11/11/26) | 纯数字价格(如1899)
+        2. 【多期独立铁律】：如果一个行程卡片包含多个不同的出发日期，必须在出发日期栏用逗号隔开全部列出！
         """
 
     payload = {
@@ -431,20 +438,20 @@ if uploaded_file is not None:
             progress_bar.progress(0.5)
             raw_items = call_gemini_vision_chunk(img, "琦琦旅游表格", status_box, "提取琦琦旅游全部 23 行团期", default_agency="琦琦旅游")
         else:
-            # 💎 终极深度重叠三段式切片（0-45%, 30-85%, 65-100%），大幅加大重叠带，彻底根治哈尔滨下半部漏项
+            # 💎 终极深度重叠三段式切片（0-45%, 30-85%, 65-100%）
             box_top = (0, 0, w, int(h * 0.45))
             box_mid = (0, int(h * 0.30), w, int(h * 0.85))
             box_bottom = (0, int(h * 0.65), w, h)
 
-            status_box.markdown("🔍 豪吉海报【第一视窗 (0%-45%)：海南岛/哈尔滨上段/上海】...")
+            status_box.markdown("🔍 豪吉海报【第一视窗 (0%-45%)】...")
             progress_bar.progress(0.2)
             r1 = call_gemini_vision_chunk(img.crop(box_top), "豪吉海报上段", status_box, "提取上段全部路线", default_agency="豪吉旅游")
 
-            status_box.markdown("🔍 豪吉海报【第二视窗 (30%-85%)：哈尔滨下半部/大连/重庆】...")
+            status_box.markdown("🔍 豪吉海报【第二视窗 (30%-85%)】...")
             progress_bar.progress(0.5)
             r2 = call_gemini_vision_chunk(img.crop(box_mid), "豪吉海报中段", status_box, "提取中段及哈尔滨下半部", default_agency="豪吉旅游")
 
-            status_box.markdown("🔍 豪吉海报【第三视窗 (65%-100%)：张家界/北疆/南疆/雪国列车】...")
+            status_box.markdown("🔍 豪吉海报【第三视窗 (65%-100%)】...")
             progress_bar.progress(0.8)
             r3 = call_gemini_vision_chunk(img.crop(box_bottom), "豪吉海报下段", status_box, "提取下段及底部雪国列车", default_agency="豪吉旅游")
 
@@ -471,13 +478,11 @@ if uploaded_file is not None:
             unique_combined = []
             seen = set()
             for item in combined:
-                # 💎 严格按 机构 + 团号 + 出发日期 + 价格 作为联合主键去重
                 key = (item["agency"], item["tour_code"], item["departure_dates"], item["price_numeric"])
                 if key not in seen:
                     seen.add(key)
                     unique_combined.append(item)
 
-            # 💎 全局二次排序：按照 机构 -> 目的地 -> 出发日期 整洁排序
             unique_combined = sorted(unique_combined, key=lambda x: (x['agency'], x['destination'], x['departure_dates']))
 
             st.session_state.tour_data = unique_combined
