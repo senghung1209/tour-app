@@ -48,7 +48,7 @@ else:
         st.session_state.private_tour_data = []
     active_data = st.session_state.private_tour_data
 
-st.title("✈️ 旅游团智能比价助手 (高精微距 & 价格排序版)")
+st.title("✈️ 旅游团智能比价助手 (多日期精准绑定版)")
 
 @st.cache_resource
 def get_loud_wav_base64():
@@ -143,7 +143,6 @@ def evaluate_holiday_fit(departure_date_str, duration_days):
     if y:
         y = int(y) + 2000 if int(y) < 100 else int(y)
     else:
-        # 智能年份推断：如果月份是 1 或 2，默认是 2027 年，否则为 2026 年
         y = 2027 if mth in [1, 2] else 2026
 
     try:
@@ -190,7 +189,7 @@ def clean_destination_name(raw_dest):
     s = re.sub(r'\d+\s*(?:天|D|d|夜|晚|N|n)', '', s)
     return s.strip()
 
-# 💎 升级版高精日期炸开器：支持处理省略年份的日期（如 09/12, 13/12）并自动补全年份
+# 💎 终极日期炸开器：确保同一个价格下有多个日期时，100% 拆分成独立行
 def split_and_explode_dates(raw_agency, raw_dest, raw_code, raw_title, raw_loc, raw_dates_str, raw_price, forced_agency=""):
     days = extract_tour_days(raw_title)
     try:
@@ -204,7 +203,7 @@ def split_and_explode_dates(raw_agency, raw_dest, raw_code, raw_title, raw_loc, 
     norm_loc = normalize_departure_location(raw_loc, raw_title)
     clean_dest = clean_destination_name(raw_dest)
 
-    # 提取所有日期串
+    # 提取所有出现的日期片段
     date_tokens = re.findall(r'\b\d{1,2}[/.-]\d{1,2}(?:[/.-]\d{2,4})?\b', str(raw_dates_str))
     if not date_tokens:
         date_tokens = [str(raw_dates_str).strip()]
@@ -214,7 +213,6 @@ def split_and_explode_dates(raw_agency, raw_dest, raw_code, raw_title, raw_loc, 
         parts_d = d_token.split('/') if '/' in d_token else (d_token.split('.') if '.' in d_token else d_token.split('-'))
         if len(parts_d) == 2:
             d_mth, d_day = parts_d[0], parts_d[1]
-            # 自动推断年份：1月、2月归为2027年，其余归为2026年
             y_str = "27" if int(d_mth) in [1, 2] else "26"
             full_d_token = f"{d_mth}/{d_day}/{y_str}"
         elif len(parts_d) == 3:
@@ -298,20 +296,20 @@ def call_gemini_micro_precision_agent(img, agency_name, status_box):
     if not GEMINI_API_KEY:
         return []
 
-    status_box.markdown(f"🔬 正在启动【{agency_name}】显微镜级高密度视觉审计（对紧密排列、逗号分隔、省略年份的日期进行精准锁定）...")
+    status_box.markdown(f"🔬 正在启动【{agency_name}】显微镜级高密度视觉审计（对一个价格对应多个日期的区块进行精确拆解）...")
     buf = BytesIO()
     img.save(buf, format="JPEG", quality=95)
     base64_data = base64.b64encode(buf.getvalue()).decode('utf-8')
 
     prompt = (
-        "你是一个拥有“显微镜级视力”的旅游海报高精数据审计专家。宣传海报排版紧密、许多卡片内包含多个用逗号、顿号或空格紧密隔开的出发日期（例如 09/12, 13/12 等，通常省略年份，默认应视作 2026 或 2027 年）。\n\n"
-        "【核心审计铁律（极其重要）】：\n"
-        "1. 绝对不允许遗漏任何一个紧密排列的日期！如果一行里写了多个日期，必须把每一个日期都极其仔细地看清，绝不能只抓第一个或最后一个。\n"
-        "2. 严格核对团号、路线名称、起飞地、每一个独立日期与团费价格的精确绑定关系。\n"
-        "3. 哪怕字号再小、排版再密，也必须逐格、逐行全部审计完毕。\n\n"
+        "你是一个拥有“显微镜级视力”的旅游海报高精数据审计专家。宣传海报中经常出现：【一个价格（例如 RM 1599 或 RM 5299）上面对应了 2 个甚至 3 个不同的出发日期（例如 Departure Date 13/11/26、27/11/26 共享 1599）】。\n\n"
+        "【核心审计与多日期绑定铁律】：\n"
+        "1. 当一个价格下方或旁边写了好几个日期时，必须把该价格与每一个日期分别组成完整的对应关系返回！\n"
+        "2. 绝对不允许把多个日期合并成一个字符串后漏掉其中某几天。如果一个价格对应两个日期，请在返回的 JSON 中把它们写在一起（如 '13/11/26, 27/11/26'），系统会自动为你拆开。\n"
+        "3. 仔细核对团号、路线标题、起飞地点、价格。\n\n"
         "输出规范：必须返回严格合法的纯 JSON 数组格式（不附加任何 markdown 额外说明）：\n"
         "[\n"
-        '  {"destination": "目的地名称", "tour_code": "团号", "title": "完整路线名称", "departure_location": "起飞地点", "departure_dates": "09/12, 13/12", "price": 5299},\n'
+        '  {"destination": "海南岛", "tour_code": "SP002301", "title": "4天3晚 海口 阳光海南", "departure_location": "新加坡起飞 (SIN)", "departure_dates": "13/11/26, 27/11/26", "price": 1599},\n'
         "  ...\n"
         "]"
     )
@@ -416,7 +414,7 @@ if uploaded_file is not None:
         progress_bar.progress(0.5)
         raw_items = call_gemini_micro_precision_agent(img, agency_choice, status_box)
         progress_bar.progress(1.0)
-        status_box.markdown("✨ 正在进行显微镜级日期炸开、去重与价格排序整理...")
+        status_box.markdown("✨ 正在进行显微镜级多日期独立炸开、去重与价格排序整理...")
 
         for item in raw_items:
             rows = split_and_explode_dates(
@@ -454,7 +452,7 @@ if uploaded_file is not None:
                 st.session_state.private_tour_data = unique_combined
 
             trigger_play_on_done(len(unique_combined))
-            st.success(f"🎉 显微镜级微距提取完成！当前【{work_mode}】共有 **{len(unique_combined)}** 个精准团期。")
+            st.success(f"🎉 显微镜级多日期绑定提取完成！当前【{work_mode}】共有 **{len(unique_combined)}** 个精准团期。")
             time.sleep(1.0)
             st.rerun()
         else:
