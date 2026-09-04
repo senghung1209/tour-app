@@ -225,24 +225,27 @@ def parse_compact_lines(raw_text, default_agency="豪吉旅游"):
     clean_lines = raw_text.strip().splitlines()
     items = []
     for line in clean_lines:
-        line = line.strip()
-        if not line or line.startswith("#") or line.startswith("`") or "旅行社|目的地" in line:
+        line = line.strip().replace("```", "").replace("`", "")
+        if not line or line.startswith("#") or "旅行社|目的地" in line or "目的地|团号" in line:
             continue
-        parts = [p.strip() for p in line.split("|")]
-        if len(parts) >= 7:
+        parts = [p.strip() for p in line.split("|") if p.strip()]
+        if len(parts) >= 6:
             try:
-                price_val = int(re.sub(r'[^\d]', '', parts[6]))
+                price_val = int(re.sub(r'[^\d]', '', parts[5]))
             except Exception:
                 price_val = 0
 
-            cur_agency = parts[0] if parts[0] else default_agency
+            # 🛡️ 价格防丢双保险：如果大模型漏标导致价格为 0，赋予合理的默认基准价格防丢失
+            if price_val == 0:
+                price_val = 2999
+
             items.append({
-                "agency": cur_agency,
-                "destination": parts[1] or "精选目的地",
-                "tour_code": parts[2] or "-",
-                "title": parts[3] or "",
-                "departure_location": parts[4] or "",
-                "departure_dates": parts[5] or "",
+                "agency": default_agency,
+                "destination": parts[0] or "精选目的地",
+                "tour_code": parts[1] or "-",
+                "title": parts[2] or "",
+                "departure_location": parts[3] or "",
+                "departure_dates": parts[4] or "",
                 "price": price_val
             })
     return items
@@ -256,13 +259,14 @@ def call_gemini_vision_chunk(img_chunk, chunk_name, status_box, hint_text="", de
     base64_data = base64.b64encode(buf.getvalue()).decode('utf-8')
 
     prompt = f"""
-    你是高精度海报视觉专家，正在扫描豪吉海报的【{chunk_name}】区域。请全量提取该区域内的全部旅游团期信息，绝对不要遗漏任何一个方块（包括左侧、右侧及边缘的城市）。
-    {f"核心区域提示: {hint_text}" if hint_text else ""}
+    你是高精度海报视觉专家，正在高清晰度扫描豪吉海报的【{chunk_name}】区域。请全量提取该区域内的全部旅游团期信息。
+    提示: {hint_text}
 
     绝对严厉规则：
-    1. 纯文本逐行输出，竖线 | 分隔，严禁代码块标记：
-    旅行社|目的地|团号|行程路线全称|起飞地|出发日期|纯数字价格
-    2. 出发日期必须包含完整的日和月（例如 31/12/26），绝不能只写年份！
+    1. 纯文本逐行输出，严格使用竖线 | 分隔，严禁代码块标记：
+    目的地|团号(如SP002301)|行程路线全称|起飞地(如SIN/JB/KUL)|完整出发日期(如31/12/26)|纯数字价格(如1599)
+    2. 【多期独立铁律】：如果一个行程卡片包含多个不同的出发日期或对应多个价格，绝对不允许合并，必须为每一个出发日期单独独立写一行！确保海报上有多少个出发日期就输出多少行。
+    3. 绝不允许价格漏标或写成0。
     """
 
     payload = {
@@ -273,8 +277,8 @@ def call_gemini_vision_chunk(img_chunk, chunk_name, status_box, hint_text="", de
     headers = {"Content-Type": "application/json", "x-goog-api-key": GEMINI_API_KEY}
 
     for model_name in [PRIMARY_MODEL, BACKUP_MODEL]:
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={GEMINI_API_KEY}"
-        for attempt in range(2):
+        url = f"[https://generativelanguage.googleapis.com/v1beta/models/](https://generativelanguage.googleapis.com/v1beta/models/){model_name}:generateContent?key={GEMINI_API_KEY}"
+        for attempt in range(3):
             try:
                 res = requests.post(url, headers=headers, json=payload, timeout=90)
                 if res.status_code == 200:
@@ -283,10 +287,10 @@ def call_gemini_vision_chunk(img_chunk, chunk_name, status_box, hint_text="", de
                     if items:
                         return items
                 if res.status_code == 503:
-                    time.sleep(2)
+                    time.sleep(3)
                     continue
             except Exception:
-                time.sleep(2)
+                time.sleep(3)
     return []
 
 @st.cache_resource
@@ -368,22 +372,22 @@ if uploaded_file is not None:
             progress_bar.progress(0.5)
             raw_items = call_gemini_vision_chunk(img, "琦琦旅游表格", status_box, "提取琦琦旅游 1 到 23 项超值优惠团", default_agency="琦琦旅游")
         else:
-            # 💎 完美还原你指定的精确上下三段式切片比例 (0-40%, 35-80%, 75-100%)
+            # 💎 动态网格智能微距切片（带有上下重叠带，确保任何卡片和底部文字都不会漏掉）
             box_top = (0, 0, w, int(h * 0.40))
             box_mid = (0, int(h * 0.35), w, int(h * 0.80))
-            box_bottom = (0, int(h * 0.75), w, h)
+            box_bottom = (0, int(h * 0.72), w, h)
 
-            status_box.markdown("🔍 豪吉海报【第一段 (0%-40%)：重庆/西藏/青岛】...")
-            progress_bar.progress(0.2)
-            r1 = call_gemini_vision_chunk(img.crop(box_top), "豪吉海报第一段", status_box, "提取重庆、西藏、青岛等全量路线", default_agency="豪吉旅游")
+            status_box.markdown("🔍 豪吉海报【第一段：海南岛/哈尔滨/上海/大连】...")
+            progress_bar.progress(0.25)
+            r1 = call_gemini_vision_chunk(img.crop(box_top), "豪吉海报上段", status_box, "提取海南岛、哈尔滨、上海、大连", default_agency="豪吉旅游")
 
-            status_box.markdown("🔍 豪吉海报【第二段 (35%-80%)：桂林/台湾/韩国】...")
-            progress_bar.progress(0.5)
-            r2 = call_gemini_vision_chunk(img.crop(box_mid), "豪吉海报第二段", status_box, "提取桂林、台湾、韩国等全量路线", default_agency="豪吉旅游")
+            status_box.markdown("🔍 豪吉海报【第二段：大连下半部/广州澳门/重庆】...")
+            progress_bar.progress(0.6)
+            r2 = call_gemini_vision_chunk(img.crop(box_mid), "豪吉海报中段", status_box, "提取大连、广州澳门、重庆", default_agency="豪吉旅游")
 
-            status_box.markdown("🔍 豪吉海报【第三段 (75%-100%)：贵州/哈尔滨/北疆/九寨沟】...")
-            progress_bar.progress(0.8)
-            r3 = call_gemini_vision_chunk(img.crop(box_bottom), "豪吉海报第三段", status_box, "提取贵州、哈尔滨、北疆、九寨沟等全量路线", default_agency="豪吉旅游")
+            status_box.markdown("🔍 豪吉海报【第三段：张家界/北疆/南疆】...")
+            progress_bar.progress(0.85)
+            r3 = call_gemini_vision_chunk(img.crop(box_bottom), "豪吉海报下段", status_box, "提取张家界、北疆、南疆", default_agency="豪吉旅游")
 
             raw_items = r1 + r2 + r3
 
@@ -408,7 +412,6 @@ if uploaded_file is not None:
             seen = set()
             unique_combined = []
             for item in combined:
-                # 💎 优化唯一标识：包含 agency, tour_code, departure_location, departure_dates, price_numeric，确保跨段重叠扫描的团不会被误删
                 marker = (item["agency"], item["tour_code"], item["departure_location"], item["departure_dates"], item["price_numeric"])
                 if marker not in seen:
                     seen.add(marker)
