@@ -131,8 +131,9 @@ if isinstance(RAW_KEY, list):
     RAW_KEY = RAW_KEY[0] if RAW_KEY else ""
 CLEAN_KEY = str(RAW_KEY).replace("[", "").replace("]", "").replace("'", "").replace('"', "").strip()
 
-PRIMARY_MODEL = "gemini-3.5-flash"
-BACKUP_MODEL = "gemini-3.1-flash-lite"
+# 🔒 修正为 Google 官方真正支持的稳定视觉模型名称
+PRIMARY_MODEL = "gemini-1.5-flash"
+BACKUP_MODEL = "gemini-1.5-pro"
 
 def extract_tour_days(title_str):
     m = re.search(r'(\d+)\s*(?:天|D|d)', str(title_str))
@@ -224,7 +225,7 @@ def parse_bulletproof_lines(raw_text, default_agency="豪吉旅游"):
             if price_matches:
                 price_val = int(price_matches[-1])
 
-            date_matches = re.findall(r'\b\d{1,2}[/.-]\d{1,2}(?:[/.-](\d{2,4}))?\b', full_line_str)
+            date_matches = re.findall(r'\b\d{1,2}[/.-]\d{1,2}(?:[/.-]\d{2,4})?\b', full_line_str)
             dates_str = date_matches[0] if date_matches else "26/12/26"
 
             if default_agency == "豪吉旅游":
@@ -308,7 +309,6 @@ def call_gemini_vision_chunk(img_chunk, chunk_name, status_box, hint_text="", de
                             return items
             except urllib.error.HTTPError as e:
                 err_body = e.read().decode('utf-8', errors='ignore') if e.fp else ""
-                # 🔴 强制把真实的 404 错误打印在界面上，不再静默跳过！
                 st.error(f"❌ 模型 [{model_name}] 触发 HTTP {e.code} 错误: {err_body}")
             except Exception as err:
                 st.error(f"❌ 请求异常: {str(err)}")
