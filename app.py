@@ -263,7 +263,7 @@ def call_gemini_vision_chunk(img_chunk, chunk_name, status_box, hint_text="", de
     base64_data = base64.b64encode(buf.getvalue()).decode('utf-8')
 
     prompt = f"""
-    你是高精度海报视觉专家，正在扫描豪吉海报的【{chunk_name}】视窗。请全量提取该视窗内的全部旅游团期信息。
+    你是高精度海报视觉专家，正在扫描豪吉海报的【{chunk_name}】区域。请全量提取该区域内的全部旅游团期信息。
     提示: {hint_text}
 
     严厉规则：
@@ -375,34 +375,24 @@ if uploaded_file is not None:
             progress_bar.progress(0.5)
             raw_items = call_gemini_vision_chunk(img, "琦琦旅游表格", status_box, "提取琦琦旅游 1 到 23 项超值优惠团", default_agency="琦琦旅游")
         else:
-            # 💎 完美五段式无缝重叠微距扫描（0-25%, 20-45%, 40-65%, 60-85%, 80-100%）
-            box_1 = (0, 0, w, int(h * 0.25))
-            box_2 = (0, int(h * 0.20), w, int(h * 0.45))
-            box_3 = (0, int(h * 0.40), w, int(h * 0.65))
-            box_4 = (0, int(h * 0.60), w, int(h * 0.85))
-            box_5 = (0, int(h * 0.80), w, h)
+            # 💎 经典稳健的三段式无缝重叠切片（0-40%, 35-80%, 75-100%），容量大、上下文完整、绝对不漏项
+            box_top = (0, 0, w, int(h * 0.40))
+            box_mid = (0, int(h * 0.35), w, int(h * 0.80))
+            box_bottom = (0, int(h * 0.75), w, h)
 
-            status_box.markdown("🔍 豪吉海报【第 1/5 视窗 (0%-25%)】...")
-            progress_bar.progress(0.15)
-            r1 = call_gemini_vision_chunk(img.crop(box_1), "第一视窗", status_box, "提取顶部海南岛与哈尔滨上段", default_agency="豪吉旅游")
+            status_box.markdown("🔍 豪吉海报【第一段 (0%-40%)：海南岛/哈尔滨/上海】...")
+            progress_bar.progress(0.2)
+            r1 = call_gemini_vision_chunk(img.crop(box_top), "豪吉海报上段", status_box, "提取海南岛、哈尔滨、上海等全量路线", default_agency="豪吉旅游")
 
-            status_box.markdown("🔍 豪吉海报【第 2/5 视窗 (20%-45%)】...")
-            progress_bar.progress(0.35)
-            r2 = call_gemini_vision_chunk(img.crop(box_2), "第二视窗", status_box, "提取哈尔滨下段与上海", default_agency="豪吉旅游")
+            status_box.markdown("🔍 豪吉海报【第二段 (35%-80%)：大连/广州澳门/重庆】...")
+            progress_bar.progress(0.5)
+            r2 = call_gemini_vision_chunk(img.crop(box_mid), "豪吉海报中段", status_box, "提取大连、广州澳门、重庆等全量路线", default_agency="豪吉旅游")
 
-            status_box.markdown("🔍 豪吉海报【第 3/5 视窗 (40%-65%)】...")
-            progress_bar.progress(0.55)
-            r3 = call_gemini_vision_chunk(img.crop(box_3), "第三视窗", status_box, "提取大连与广州澳门", default_agency="豪吉旅游")
+            status_box.markdown("🔍 豪吉海报【第三段 (75%-100%)：张家界/北疆/南疆】...")
+            progress_bar.progress(0.8)
+            r3 = call_gemini_vision_chunk(img.crop(box_bottom), "豪吉海报下段", status_box, "提取张家界、北疆、南疆等全量路线", default_agency="豪吉旅游")
 
-            status_box.markdown("🔍 豪吉海报【第 4/5 视窗 (60%-85%)】...")
-            progress_bar.progress(0.75)
-            r4 = call_gemini_vision_chunk(img.crop(box_4), "第四视窗", status_box, "提取重庆、张家界与北疆", default_agency="豪吉旅游")
-
-            status_box.markdown("🔍 豪吉海报【第 5/5 视窗 (80%-100%)】...")
-            progress_bar.progress(0.9)
-            r5 = call_gemini_vision_chunk(img.crop(box_5), "第五视窗", status_box, "提取南疆及底部边缘路线", default_agency="豪吉旅游")
-
-            raw_items = r1 + r2 + r3 + r4 + r5
+            raw_items = r1 + r2 + r3
 
         progress_bar.progress(1.0)
         status_box.markdown("✨ 正在智能清洗与数据核对...")
@@ -425,7 +415,7 @@ if uploaded_file is not None:
             unique_combined = []
             seen = set()
             for item in combined:
-                # 💎 严格按 团号 + 出发日期 + 价格 作为联合主键去重，确保多窗口重叠时绝对不产生冗余，完美锁定总量
+                # 💎 严格按 团号 + 出发日期 + 价格 作为联合主键去重，确保三段重叠时绝对不产生冗余，完美锁定总量
                 key = (item["tour_code"], item["departure_dates"], item["price_numeric"])
                 if key not in seen:
                     seen.add(key)
