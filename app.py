@@ -48,7 +48,7 @@ else:
         st.session_state.private_tour_data = []
     active_data = st.session_state.private_tour_data
 
-st.title("✈️ 旅游团智能比价助手 (妈妈专用·豪吉极致防错版)")
+st.title("✈️ 旅游团智能比价助手 (妈妈专用·板块化人类视觉追踪版)")
 
 @st.cache_resource
 def get_loud_wav_base64():
@@ -323,28 +323,28 @@ def parse_json_response(raw_text, default_agency="豪吉旅游"):
         pass
     return items
 
-def call_gemini_ultra_haoji_agent(img_chunk, box_name):
+def call_gemini_cluster_agent(img_chunk, cluster_name):
     if not GEMINI_API_KEY:
         return []
 
-    # 💎 图像增强：提升对比度和锐度，让排版复杂的数字和斜体价格清晰可见
+    # 💎 图像极度锐化与对比度拉伸，确保北京、上海、哈尔滨等每个板块的字清晰可辨
     enhancer = ImageEnhance.Contrast(img_chunk)
-    img_chunk = enhancer.enhance(1.3)
+    img_chunk = enhancer.enhance(1.4)
     enhancer_sharp = ImageEnhance.Sharpness(img_chunk)
-    img_chunk = enhancer_sharp.enhance(1.5)
+    img_chunk = enhancer_sharp.enhance(1.6)
 
     buf = BytesIO()
     img_chunk.save(buf, format="JPEG", quality=95)
     base64_data = base64.b64encode(buf.getvalue()).decode('utf-8')
 
     prompt = (
-        f"你是一位具备最高视觉精度的旅游海报数据解构专家。当前正在深度扫描【{box_name}】板块。\n"
-        "【豪吉海报全方位防错与位置适配铁律】：\n"
-        "1. 豪吉海报的价格排版极度灵活：有些价格在出发日期的【正下方】，有些在日期的【正右侧】。你必须同时兼顾下方和右侧的邻近数字。\n"
-        "2. 每一个团号（如 SP 开头）对应的日期与价格必须 100% 对应，严禁错位。\n"
+        f"你是一位像人类专家一样仔细的旅游海报审计员。现在你正专注于观察【{cluster_name}】这一个独立板块/目的地聚落。\n"
+        "【人类聚落式审阅铁律】：\n"
+        "1. 就像人眼看北京、看上海、看哈尔滨一样，请把这个板块里所有的团号、路线、起飞地、每一个出发日期、以及对应的团费（RM）全部找出来。\n"
+        "2. 价格无论在日期的下方还是右侧，必须百分之百精确对应。\n"
         "3. 输出规范：必须返回严格合法的纯 JSON 数组格式（不附加任何 markdown 额外说明）：\n"
         "[\n"
-        '  {"destination": "目的地", "tour_code": "SP002580", "title": "7天6夜 南京 江南水乡奇谭", "departure_location": "新加坡起飞 (SIN)", "departure_dates": "17/12/26", "price": 2999},\n'
+        '  {"destination": "北京", "tour_code": "SP002579", "title": "7天6夜 天津 北京京津奇遇记", "departure_location": "新加坡起飞 (SIN)", "departure_dates": "21/11/26", "price": 3299},\n'
         "  ...\n"
         "]"
     )
@@ -437,7 +437,7 @@ uploaded_file = st.file_uploader("📷 请上传任意旅游海报图片", type=
 if uploaded_file is not None:
     agency_choice = st.radio("请选择这家海报对应的旅行社：", ["豪吉旅游", "琦琦旅游", "其他新旅行社"], horizontal=True)
 
-    if st.button("🚀 启动妈妈专用高精一键提取", type="primary", use_container_width=True):
+    if st.button("🚀 启动妈妈专用·板块化智能一键提取", type="primary", use_container_width=True):
         newly_extracted = []
         progress_bar = st.progress(0.0)
         status_box = st.empty()
@@ -468,27 +468,24 @@ if uploaded_file is not None:
                     if raw_items:
                         break
         else:
-            # 💎 豪吉海报：采用 3x3 极致宫格 + 图像锐化增强扫描
-            boxes = [
-                ("左上区块", (0, int(h * 0.10), int(w * 0.35), int(h * 0.45))),
-                ("中上区块", (int(w * 0.32), int(h * 0.10), int(w * 0.68), int(h * 0.45))),
-                ("右上区块", (int(w * 0.65), int(h * 0.10), w, int(h * 0.45))),
-                ("左中区块", (0, int(h * 0.42), int(w * 0.35), int(h * 0.72))),
-                ("中中区块", (int(w * 0.32), int(h * 0.42), int(w * 0.68), int(h * 0.72))),
-                ("右中区块", (int(w * 0.65), int(h * 0.42), w, int(h * 0.72))),
-                ("左下区块", (0, int(h * 0.69), int(w * 0.35), h)),
-                ("中下区块", (int(w * 0.32), int(h * 0.69), int(w * 0.68), h)),
-                ("右下区块", (int(w * 0.65), int(h * 0.69), w, h))
+            # 💎 豪吉海报：采用 6 大智能目的地聚落板块（模拟人类逐个板块仔细看的习惯，无死角全覆盖）
+            clusters = [
+                ("左上聚落 (海南/日本板块)", (0, int(h * 0.10), int(w * 0.35), int(h * 0.50))),
+                ("中上聚落 (北京/上海板块)", (int(w * 0.32), int(h * 0.10), int(w * 0.68), int(h * 0.50))),
+                ("右上聚落 (张家界/江西板块)", (int(w * 0.65), int(h * 0.10), w, int(h * 0.50))),
+                ("左下聚落 (大连/西安/河内板块)", (0, int(h * 0.48), int(w * 0.35), h)),
+                ("中下聚落 (广州澳门/云南板块)", (int(w * 0.32), int(h * 0.48), int(w * 0.68), h)),
+                ("右下聚落 (重庆/江西/南疆板块)", (int(w * 0.65), int(h * 0.48), w, h))
             ]
 
             raw_items = []
-            total_boxes = len(boxes)
-            for idx, (box_name, box_coords) in enumerate(boxes):
-                status_box.markdown(f"🔬 正在进行画质增强与高精扫描【{box_name}】...")
-                progress_bar.progress((idx + 1) / total_boxes)
+            total_c = len(clusters)
+            for idx, (cluster_name, box_coords) in enumerate(clusters):
+                status_box.markdown(f"👀 正在像人类一样逐个板块仔细审阅【{cluster_name}】...")
+                progress_bar.progress((idx + 1) / total_c)
                 cropped_img = img.crop(box_coords)
-                box_items = call_gemini_ultra_haoji_agent(cropped_img, box_name)
-                raw_items.extend(box_items)
+                cluster_items = call_gemini_cluster_agent(cropped_img, cluster_name)
+                raw_items.extend(cluster_items)
 
         progress_bar.progress(1.0)
         status_box.markdown("✨ 正在进行原子级日期炸开、去重与【绝对价格从低到高】严格升序排序...")
@@ -530,7 +527,7 @@ if uploaded_file is not None:
                 st.session_state.private_tour_data = unique_combined
 
             trigger_play_on_done(len(unique_combined))
-            st.success(f"🎉 提取完成！当前【{work_mode}】共有 **{len(unique_combined)}** 个精准团期（已按价格从低到高排好）。")
+            st.success(f"🎉 板块化提取完成！当前【{work_mode}】共有 **{len(unique_combined)}** 个精准团期（已按价格从低到高排好）。")
             time.sleep(1.0)
             st.rerun()
         else:
