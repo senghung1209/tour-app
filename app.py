@@ -48,7 +48,7 @@ else:
         st.session_state.private_tour_data = []
     active_data = st.session_state.private_tour_data
 
-st.title("✈️ 旅游团智能比价助手 (全向空间方位精准版)")
+st.title("✈️ 旅游团智能比价助手 (工业级绝对升序 & 豪吉深度强化版)")
 
 @st.cache_resource
 def get_loud_wav_base64():
@@ -323,7 +323,7 @@ def parse_json_response(raw_text, default_agency="豪吉旅游"):
         pass
     return items
 
-def call_gemini_omni_direction_agent(img_chunk, box_name):
+def call_gemini_strict_matrix_agent(img_chunk, box_name):
     if not GEMINI_API_KEY:
         return []
 
@@ -332,11 +332,11 @@ def call_gemini_omni_direction_agent(img_chunk, box_name):
     base64_data = base64.b64encode(buf.getvalue()).decode('utf-8')
 
     prompt = (
-        f"你是一位具备顶级视觉空间审计能力的旅游海报专家。当前正在审核【{box_name}】板块。\n"
-        "【全向方位绑定铁律——价格无论在下方还是在右侧】：\n"
-        "1. 在豪吉海报中，价格（RM）的排版位置有两种：有些卡片的价格在日期的【正下方】，有些卡片的价格在日期的【右侧】。\n"
-        "2. 你必须运用空间临近原则：仔细观察每个出发日期紧挨着的方向（无论是下方还是右侧），找出属于它的那个精确 RM 金额，绝对不允许张冠李戴！\n"
-        "3. 必须全量提取该板块内的所有团号、完整路线标题、起飞地点、日期与价格。\n\n"
+        f"你是一位具备航天级精度的旅游海报数据提取专家。当前正在处理【{box_name}】板块。\n"
+        "【豪吉海报全方位结构化提取铁律】：\n"
+        "1. 豪吉海报卡片排版多变：有些价格在日期的【正下方】，有些在日期的【右侧】。你必须使用视觉交叉定位，绝对不能错配。\n"
+        "2. 每个团号（如 SP002580）下方的所有日期与价格必须一一对应。\n"
+        "3. 提取出的价格数字（price字段）必须是纯整数（如 2999、3299），严禁包含 RM 或其他字符。\n\n"
         "输出规范：必须返回严格合法的纯 JSON 数组格式（不附加任何 markdown 额外说明）：\n"
         "[\n"
         '  {"destination": "上海", "tour_code": "SP002580", "title": "7天6夜 南京 江南水乡奇谭", "departure_location": "新加坡起飞 (SIN)", "departure_dates": "17/12/26", "price": 2999},\n'
@@ -432,7 +432,7 @@ uploaded_file = st.file_uploader("📷 请上传任意旅游海报图片", type=
 if uploaded_file is not None:
     agency_choice = st.radio("请选择这家海报对应的旅行社：", ["豪吉旅游", "琦琦旅游", "其他新旅行社"], horizontal=True)
 
-    if st.button("🚀 启动全向方位智能精准提取", type="primary", use_container_width=True):
+    if st.button("🚀 启动工业级高精提取与升序排序", type="primary", use_container_width=True):
         newly_extracted = []
         progress_bar = st.progress(0.0)
         status_box = st.empty()
@@ -463,30 +463,30 @@ if uploaded_file is not None:
                     if raw_items:
                         break
         else:
-            # 💎 豪吉海报：采用 3x3 独立方块宫格全向扫描（完美兼容下方价格与右侧价格布局）
+            # 💎 豪吉海报：采用 3x3 宫格精细分区块扫描（完美兼容下方价格与右侧价格布局）
             boxes = [
-                ("左上区块 (海南/日本等)", (0, int(h * 0.10), int(w * 0.35), int(h * 0.45))),
-                ("中上区块 (北京/上海等)", (int(w * 0.32), int(h * 0.10), int(w * 0.68), int(h * 0.45))),
-                ("右上区块 (张家界/江西等)", (int(w * 0.65), int(h * 0.10), w, int(h * 0.45))),
-                ("左中区块 (大连/西安等)", (0, int(h * 0.42), int(w * 0.35), int(h * 0.72))),
-                ("中中区块 (广州澳门等)", (int(w * 0.32), int(h * 0.42), int(w * 0.68), int(h * 0.72))),
-                ("右中区块 (重庆/江西等)", (int(w * 0.65), int(h * 0.42), w, int(h * 0.72))),
-                ("左下区块 (河内等)", (0, int(h * 0.69), int(w * 0.35), h)),
-                ("中下区块 (云南等)", (int(w * 0.32), int(h * 0.69), int(w * 0.68), h)),
-                ("右下区块 (南疆等)", (int(w * 0.65), int(h * 0.69), w, h))
+                ("左上区块", (0, int(h * 0.10), int(w * 0.35), int(h * 0.45))),
+                ("中上区块", (int(w * 0.32), int(h * 0.10), int(w * 0.68), int(h * 0.45))),
+                ("右上区块", (int(w * 0.65), int(h * 0.10), w, int(h * 0.45))),
+                ("左中区块", (0, int(h * 0.42), int(w * 0.35), int(h * 0.72))),
+                ("中中区块", (int(w * 0.32), int(h * 0.42), int(w * 0.68), int(h * 0.72))),
+                ("右中区块", (int(w * 0.65), int(h * 0.42), w, int(h * 0.72))),
+                ("左下区块", (0, int(h * 0.69), int(w * 0.35), h)),
+                ("中下区块", (int(w * 0.32), int(h * 0.69), int(w * 0.68), h)),
+                ("右下区块", (int(w * 0.65), int(h * 0.69), w, h))
             ]
 
             raw_items = []
             total_boxes = len(boxes)
             for idx, (box_name, box_coords) in enumerate(boxes):
-                status_box.markdown(f"🔬 正在全向方位高精扫描【{box_name}】...")
+                status_box.markdown(f"🔬 正在高精扫描【{box_name}】...")
                 progress_bar.progress((idx + 1) / total_boxes)
                 cropped_img = img.crop(box_coords)
-                box_items = call_gemini_omni_direction_agent(cropped_img, box_name)
+                box_items = call_gemini_strict_matrix_agent(cropped_img, box_name)
                 raw_items.extend(box_items)
 
         progress_bar.progress(1.0)
-        status_box.markdown("✨ 正在进行原子级日期炸开、去重与【绝对价格从低到高】排序整理...")
+        status_box.markdown("✨ 正在进行原子级日期炸开、去重与【绝对价格从低到高】严格升序排序...")
 
         for item in raw_items:
             rows = split_and_explode_dates(
@@ -515,6 +515,7 @@ if uploaded_file is not None:
                     seen.add(key)
                     unique_combined.append(item)
 
+            # 💎 强制全局按 目的地 + 价格从低到高 + 出发日期 严格升序排序
             unique_combined = sorted(unique_combined, key=lambda x: (x['destination'], x['price_numeric'], x['departure_dates']))
 
             if work_mode == "🌐 公共共享模式 (多人实时同步)":
@@ -524,7 +525,7 @@ if uploaded_file is not None:
                 st.session_state.private_tour_data = unique_combined
 
             trigger_play_on_done(len(unique_combined))
-            st.success(f"🎉 全向方位智能提取与价格排序完成！当前【{work_mode}】共有 **{len(unique_combined)}** 个精准团期。")
+            st.success(f"🎉 工业级提取与升序排序完成！当前【{work_mode}】共有 **{len(unique_combined)}** 个精准团期。")
             time.sleep(1.0)
             st.rerun()
         else:
@@ -545,6 +546,7 @@ if current_display_data:
     df = pd.DataFrame(current_display_data)
     df['price_numeric'] = pd.to_numeric(df['price_numeric'], errors='coerce').fillna(0).astype(int)
 
+    # 💎 前端展示时强制按 目的地、团费价格从低到高（主键）、出发日期进行严格升序排列
     df = df.sort_values(by=['destination', 'price_numeric', 'departure_dates'], ascending=[True, True, True])
 
     st.sidebar.header("🎛️ 高级筛选面板")
@@ -594,6 +596,7 @@ if current_display_data:
     price_range = st.sidebar.slider("💰 团费预算范围 (RM)", min_value=p_min, max_value=p_max, value=(p_min, p_max), step=100)
     filtered_df = filtered_df[(filtered_df['price_numeric'] >= price_range[0]) & (filtered_df['price_numeric'] <= price_range[1])]
 
+    # 再次确保筛选后的结果绝对按价格升序
     filtered_df = filtered_df.sort_values(by=['destination', 'price_numeric', 'departure_dates'], ascending=[True, True, True])
 
     st.markdown(f"### 符合条件的出发选项共 **{len(filtered_df)}** 个（已按团费价格从低到高精细排序）：")
