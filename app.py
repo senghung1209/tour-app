@@ -36,9 +36,21 @@ def save_persisted_data(data):
     except Exception as e:
         st.error(f"本地保存失败: {e}")
 
-st.session_state.tour_data = load_persisted_data()
+# 🎛️ 侧边栏模式选择 (必须在顶层初始化)
+st.sidebar.header("📌 系统工作模式")
+work_mode = st.sidebar.radio("请选择空间类型", ["🌐 公共共享模式 (多人实时同步)", "👤 独立个人模式 (私有独立沙盒)"])
 
-st.title("✈️ 旅游团智能比价助手")
+# 初始化数据容器
+if work_mode == "🌐 公共共享模式 (多人实时同步)":
+    if "shared_tour_data" not in st.session_state:
+        st.session_state.shared_tour_data = load_persisted_data()
+    active_data = st.session_state.shared_tour_data
+else:
+    if "private_tour_data" not in st.session_state:
+        st.session_state.private_tour_data = []
+    active_data = st.session_state.private_tour_data
+
+st.title("✈️ 旅游团智能比价助手 (双模式高精AI版)")
 
 @st.cache_resource
 def get_loud_wav_base64():
@@ -188,7 +200,6 @@ def split_and_explode_dates(raw_agency, raw_dest, raw_code, raw_title, raw_loc, 
     norm_loc = normalize_departure_location(raw_loc, raw_title)
     clean_dest = clean_destination_name(raw_dest)
 
-    date_tokens = re.findall(r'\b\d{1,2}[/.-](\d{1,2})(?:[/.-](\d{2,4}))?\b|\b\d{1,2}[/.-]\d{1,2}\b', str(raw_dates_str))
     date_tokens = re.findall(r'\b\d{1,2}[/.-]\d{1,2}(?:[/.-]\d{2,4})?\b', str(raw_dates_str))
     if not date_tokens:
         date_tokens = [str(raw_dates_str).strip()]
@@ -272,25 +283,25 @@ def parse_json_response(raw_text, default_agency="豪吉旅游"):
                 })
     return items
 
-def call_gemini_universal_agent(img, agency_name, status_box):
+def call_gemini_human_expert_agent(img, agency_name, status_box):
     if not GEMINI_API_KEY:
         return []
 
-    status_box.markdown(f"🤖 正在启动【{agency_name}】通用视觉智能代理（AI 自适应网格板块解析）...")
+    status_box.markdown(f"🤖 正在启动【{agency_name}】人类专家级视觉微距扫描（模拟肉眼沉浸式逐格遍历）...")
     buf = BytesIO()
     img.save(buf, format="JPEG", quality=95)
     base64_data = base64.b64encode(buf.getvalue()).decode('utf-8')
 
     prompt = f"""
-    你是一个世界顶级的视觉 AI 智能代理，能够自主分析任意排版的旅游海报。
-    这是一张【{agency_name}】的宣传海报。
+    你是一位顶级的旅游海报排版审计专家。这张【{agency_name}】宣传海报包含多个目的地促销板块。
+    请完全模拟人类专家的视线，采用【逐格扫描、由上至下、从左向右】的动线：
+    1. 锁定每个独立行程卡片边界。
+    2. 严格核对团号（如SP开头或编号）、行程天数与全称、出发起飞点、所有出发日期与团费价格的对应关系。
+    3. 如果一个团卡片内有多个出发日期和价格，必须将其逐个独立展开，严禁遗漏边缘小字（如哈尔滨下半部或右侧边缘板块）。
 
-    请按从左到右、由上到下的自然顺序逐个清点，提取出每一个团的：目的地、团号、完整行程名称、起飞地、出发日期、纯数字价格。
-    如果一个团有多个出发日期或价格，必须拆分为多条独立记录。
-
-    严格规则：必须以纯 JSON 格式返回（不要加任何 markdown 额外包裹说明，直接返回合法 JSON 数组）：
+    严格输出规范：必须返回严格的合法的 JSON 数组格式（不附加任何多余 markdown 描述）：
     [
-      {{"destination": "哈尔滨", "tour_code": "SP002395", "title": "5天4晚雪国童话", "departure_location": "新加坡起飞 (SIN)", "departure_dates": "02/12/26", "price": 5299}},
+      {{"destination": "目的地名称", "tour_code": "团号", "title": "完整路线名称", "departure_location": "起飞地点", "departure_dates": "DD/MM/YY", "price": 2999}},
       ...
     ]
     """
@@ -383,7 +394,7 @@ uploaded_file = st.file_uploader("📷 请上传任意旅游海报图片", type=
 if uploaded_file is not None:
     agency_choice = st.radio("请选择这家海报对应的旅行社：", ["豪吉旅游", "琦琦旅游", "其他新旅行社"], horizontal=True)
 
-    if st.button("🚀 启动 AI 通用代理全自动提取", type="primary", use_container_width=True):
+    if st.button("🚀 启动 AI 高精智能代理提取", type="primary", use_container_width=True):
         newly_extracted = []
         progress_bar = st.progress(0.0)
         status_box = st.empty()
@@ -393,9 +404,9 @@ if uploaded_file is not None:
             img = img.convert('RGB')
 
         progress_bar.progress(0.5)
-        raw_items = call_gemini_universal_agent(img, agency_choice, status_box)
+        raw_items = call_gemini_human_expert_agent(img, agency_choice, status_box)
         progress_bar.progress(1.0)
-        status_box.markdown("✨ 正在进行全局去重、日期炸开与智能核对...")
+        status_box.markdown("✨ 正在进行全局去重、假期核对与清单生成...")
 
         for item in raw_items:
             rows = split_and_explode_dates(
@@ -411,7 +422,11 @@ if uploaded_file is not None:
             newly_extracted.extend(rows)
 
         if newly_extracted:
-            combined = st.session_state.tour_data + newly_extracted
+            if work_mode == "🌐 公共共享模式 (多人实时同步)":
+                combined = st.session_state.shared_tour_data + newly_extracted
+            else:
+                combined = st.session_state.private_tour_data + newly_extracted
+
             unique_combined = []
             seen = set()
             for item in combined:
@@ -422,23 +437,33 @@ if uploaded_file is not None:
 
             unique_combined = sorted(unique_combined, key=lambda x: (x['agency'], x['destination'], x['departure_dates']))
 
-            st.session_state.tour_data = unique_combined
-            save_persisted_data(unique_combined)
-            trigger_play_on_done(len(st.session_state.tour_data))
-            st.success(f"🎉 通用代理智能提取完成！当前总库共有 **{len(st.session_state.tour_data)}** 个精准团期供选择。")
+            if work_mode == "🌐 公共共享模式 (多人实时同步)":
+                st.session_state.shared_tour_data = unique_combined
+                save_persisted_data(unique_combined)
+            else:
+                st.session_state.private_tour_data = unique_combined
+
+            trigger_play_on_done(len(unique_combined))
+            st.success(f"🎉 智能高精提取完成！当前【{work_mode}】共有 **{len(unique_combined)}** 个精准团期。")
             time.sleep(1.0)
             st.rerun()
         else:
             st.warning("⚠️ 未能从该图中解析出有效团期，请检查图片或重新点击。")
 
-if st.session_state.tour_data:
-    if st.button("🗑️ 清空所有已保存数据 (重新开始)", use_container_width=True):
-        save_persisted_data([])
-        st.session_state.tour_data = []
+# 根据当前工作模式获取渲染数据源
+current_display_data = st.session_state.shared_tour_data if work_mode == "🌐 公共共享模式 (多人实时同步)" else st.session_state.private_tour_data
+
+if current_display_data:
+    if st.button(f"🗑️ 清空当前【{work_mode}】的数据", use_container_width=True):
+        if work_mode == "🌐 公共共享模式 (多人实时同步)":
+            save_persisted_data([])
+            st.session_state.shared_tour_data = []
+        else:
+            st.session_state.private_tour_data = []
         st.rerun()
 
     st.markdown("---")
-    df = pd.DataFrame(st.session_state.tour_data)
+    df = pd.DataFrame(current_display_data)
     df['price_numeric'] = pd.to_numeric(df['price_numeric'], errors='coerce').fillna(0).astype(int)
 
     st.sidebar.header("🎛️ 高级筛选面板")
