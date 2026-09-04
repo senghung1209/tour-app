@@ -314,13 +314,16 @@ def call_gemini_full_poster(img, agency_name, status_box):
                         if items:
                             return items
                         else:
-                            st.warning("⚠️ 大模型返回了内容，但未能匹配解析。")
+                            # 🔴 核心透视：直接把大模型吐出的原始文本展示在界面上，让你看清究竟返回了什么！
+                            st.error(f"❌ 大模型返回了内容，但解析失败。原始内容：\n\n```text\n{raw_text}\n```")
                             return []
-                if res.status_code == 503:
-                    time.sleep(3)
-                    continue
-            except Exception:
-                time.sleep(3)
+                    else:
+                        st.error(f"❌ API 返回结构异常: {res_json}")
+                else:
+                    st.error(f"❌ API 请求失败 (HTTP {res.status_code}): {res.text}")
+            except Exception as err:
+                st.error(f"❌ 请求异常: {str(err)}")
+            time.sleep(3)
     return []
 
 @st.cache_resource
