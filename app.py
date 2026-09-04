@@ -199,18 +199,12 @@ def split_and_explode_dates(raw_agency, raw_dest, raw_code, raw_title, raw_loc, 
     norm_loc = normalize_departure_location(raw_loc, raw_title)
     clean_dest = clean_destination_name(raw_dest)
 
-    # 💎 核心精度优化：精准匹配形如 DD/MM 或 DD/MM/YY 的完整日期，绝对防止只匹配到年份
     date_tokens = re.findall(r'\b\d{1,2}[/.-]\d{1,2}(?:[/.-]\d{2,4})?\b', str(raw_dates_str))
-    # 如果没抓到标准格式，尝试放宽但排除纯4位数年份
-    if not date_tokens:
-        tokens = re.findall(r'\b[\d/.-]+\b', str(raw_dates_str))
-        date_tokens = [t for t in tokens if len(t) >= 4 and not t.isdigit()]
     if not date_tokens:
         date_tokens = [str(raw_dates_str).strip()]
 
     exploded = []
     for d_token in date_tokens:
-        # 如果清洗后不小心成了纯年份，则跳过
         if str(d_token).isdigit() and len(str(d_token)) == 4:
             continue
         status, over_days, hol_name = evaluate_holiday_fit(d_token, days)
@@ -264,7 +258,7 @@ def call_gemini_vision_chunk(img_chunk, chunk_name, status_box, hint_text="", de
     base64_data = base64.b64encode(buf.getvalue()).decode('utf-8')
 
     prompt = f"""
-    你是高精度海报视觉专家，正在扫描海报的【{chunk_name}】区域。请全量提取全部旅游团期信息。
+    你是高精度海报视觉专家，正在扫描豪吉海报的【{chunk_name}】区域。请全量提取全部旅游团期信息。
     {f"核心区域提示: {hint_text}" if hint_text else ""}
 
     绝对严厉规则：
@@ -376,23 +370,39 @@ if uploaded_file is not None:
             progress_bar.progress(0.5)
             raw_items = call_gemini_vision_chunk(img, "琦琦旅游表格", status_box, "提取琦琦旅游 1 到 23 项超值优惠团", default_agency="琦琦旅游")
         else:
-            box_top = (0, 0, w, int(h * 0.38))
-            box_mid = (0, int(h * 0.32), w, int(h * 0.70))
-            box_bottom = (0, int(h * 0.62), w, h)
+            # 💎 核心优化：采用左右双列 + 上中下微距网格（共6个无缝重叠区块），确保青岛、台湾、北疆等右侧方块绝不漏掉
+            box_1 = (0, 0, int(w * 0.55), int(h * 0.38))             # 左上：重庆/西藏
+            box_2 = (int(w * 0.45), 0, w, int(h * 0.38))             # 右上：青岛/台湾
+            box_3 = (0, int(h * 0.32), int(w * 0.55), int(h * 0.70)) # 中左：贵州/桂林
+            box_4 = (int(w * 0.45), int(h * 0.32), w, int(h * 0.70)) # 中右：韩国/哈尔滨
+            box_5 = (0, int(h * 0.62), int(w * 0.55), h)             # 左下：北疆
+            box_6 = (int(w * 0.45), int(h * 0.62), w, h)             # 右下：九寨沟
 
-            status_box.markdown("🔍 豪吉海报【第一段：重庆/西藏/青岛】...")
-            progress_bar.progress(0.2)
-            r1 = call_gemini_vision_chunk(img.crop(box_top), "豪吉海报第一段", status_box, "提取重庆、西藏、青岛", default_agency="豪吉旅游")
+            status_box.markdown("🔍 豪吉【1/6区域：重庆与西藏】...")
+            progress_bar.progress(0.15)
+            r1 = call_gemini_vision_chunk(img.crop(box_1), "左上区域", status_box, "提取重庆、西藏", default_agency="豪吉旅游")
 
-            status_box.markdown("🔍 豪吉海报【第二段：桂林/台湾/韩国】...")
+            status_box.markdown("🔍 豪吉【2/6区域：青岛与台湾】...")
+            progress_bar.progress(0.3)
+            r2 = call_gemini_vision_chunk(img.crop(box_2), "右上区域", status_box, "提取青岛、台湾", default_agency="豪吉旅游")
+
+            status_box.markdown("🔍 豪吉【3/6区域：贵州与桂林】...")
             progress_bar.progress(0.5)
-            r2 = call_gemini_vision_chunk(img.crop(box_mid), "豪吉海报第二段", status_box, "提取桂林、台湾、韩国", default_agency="豪吉旅游")
+            r3 = call_gemini_vision_chunk(img.crop(box_3), "中左区域", status_box, "提取贵州、桂林", default_agency="豪吉旅游")
 
-            status_box.markdown("🔍 豪吉海报【第三段：贵州/哈尔滨/北疆/九寨沟】...")
-            progress_bar.progress(0.8)
-            r3 = call_gemini_vision_chunk(img.crop(box_bottom), "豪吉海报第三段", status_box, "提取贵州、哈尔滨、北疆、九寨沟", default_agency="豪吉旅游")
+            status_box.markdown("🔍 豪吉【4/6区域：韩国与哈尔滨】...")
+            progress_bar.progress(0.7)
+            r4 = call_gemini_vision_chunk(img.crop(box_4), "中右区域", status_box, "提取韩国、哈尔滨", default_agency="豪吉旅游")
 
-            raw_items = r1 + r2 + r3
+            status_box.markdown("🔍 豪吉【5/6区域：北疆】...")
+            progress_bar.progress(0.85)
+            r5 = call_gemini_vision_chunk(img.crop(box_5), "左下区域", status_box, "提取北疆", default_agency="豪吉旅游")
+
+            status_box.markdown("🔍 豪吉【6/6区域：九寨沟】...")
+            progress_bar.progress(0.95)
+            r6 = call_gemini_vision_chunk(img.crop(box_6), "右下区域", status_box, "提取九寨沟", default_agency="豪吉旅游")
+
+            raw_items = r1 + r2 + r3 + r4 + r5 + r6
 
         progress_bar.progress(1.0)
         status_box.markdown("✨ 正在清洗并追加到总库...")
