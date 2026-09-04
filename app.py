@@ -131,9 +131,9 @@ if isinstance(RAW_KEY, list):
     RAW_KEY = RAW_KEY[0] if RAW_KEY else ""
 CLEAN_KEY = str(RAW_KEY).replace("[", "").replace("]", "").replace("'", "").replace('"', "").strip()
 
-# 🔒 修正为当前官方正式稳定的主力视觉模型
-PRIMARY_MODEL = "gemini-2.5-flash"
-BACKUP_MODEL = "gemini-2.5-flash-lite"
+# 🔒 统一更新为当前稳定的官方标准模型
+PRIMARY_MODEL = "gemini-3.7-flash"
+BACKUP_MODEL = "gemini-3.5-flash-lite"
 
 def extract_tour_days(title_str):
     m = re.search(r'(\d+)\s*(?:天|D|d)', str(title_str))
@@ -506,4 +506,36 @@ if st.session_state.tour_data:
         filtered_df = filtered_df[filtered_df['holiday_status'] == 'none']
 
     p_min = int(df['price_numeric'].min()) if not df.empty else 1000
-    p_max = int(df['price_numeric'].max()) if not df.empty else 90
+    p_max = int(df['price_numeric'].max()) if not df.empty else 9000
+    if p_min >= p_max:
+        p_max = p_min + 100
+    price_range = st.sidebar.slider("💰 团费预算范围 (RM)", min_value=p_min, max_value=p_max, value=(p_min, p_max), step=100)
+    filtered_df = filtered_df[(filtered_df['price_numeric'] >= price_range[0]) & (filtered_df['price_numeric'] <= price_range[1])]
+
+    st.markdown(f"### 符合条件的出发选项共 **{len(filtered_df)}** 个：")
+    col1, col2 = st.columns(2)
+    with col1:
+        st.download_button("📊 下载 CSV 比价清单", data=filtered_df.to_csv(index=False).encode('utf-8-sig'), file_name="智能比价清单.csv", mime="text/csv", use_container_width=True)
+    with col2:
+        st.download_button("🖼️ 下载高清长图 (.png)", data=generate_comparison_image(filtered_df), file_name="智能比价长图.png", mime="image/png", use_container_width=True)
+
+    st.dataframe(filtered_df[['agency', 'destination', 'tour_code', 'departure_location', 'departure_dates', 'price_text', 'title']], use_container_width=True)
+
+    st.markdown("#### 📋 行程比对卡片")
+    for _, row in filtered_df.iterrows():
+        with st.container(border=True):
+            c1, c2, c3 = st.columns([3, 2, 2])
+            with c1:
+                st.markdown(f"### 📍 **{row['destination']}** <small style='color:gray;'>({row['agency']})</small>", unsafe_allow_html=True)
+                st.write(f"**路线：** {row['title']}")
+                st.write(f"**团号：** `{row['tour_code']}`")
+            with c2:
+                st.markdown(f"🛫 **出发地：** `{row['departure_location']}`")
+                st.write(f"📅 **出发日期：** {row['departure_dates']}")
+                h_stat = row['holiday_status']
+                if h_stat == 'exact':
+                    st.success(f"🎒 完美在校假内 ({row['holiday_name']})")
+                elif h_stat == 'slight_over':
+                    st.warning(f"⚠️ 包含校假，超 {row['over_days']} 天 (需请假)")
+            with c3:
+                st.markdown(f"### 💰 **{row['price_text']}**")
