@@ -301,6 +301,7 @@ def call_gemini_vision_chunk(img_chunk, chunk_name, status_box, hint_text="", de
     else:
         prompt = f"""
         你是顶级旅游海报视觉专家。当前正在扫描豪吉海报的【{chunk_name}】区域。
+        特别注意：必须完整提取该区域内的所有团期，绝不能漏掉中间或底部的任何团号（如 SP002395 哈尔滨下半部、SP002393 雪国列车等）！
         提示: {hint_text}
 
         严格规则：
@@ -416,22 +417,22 @@ if uploaded_file is not None:
             progress_bar.progress(0.5)
             raw_items = call_gemini_vision_chunk(img, "琦琦旅游表格", status_box, "提取琦琦旅游全部 23 行团期", default_agency="琦琦旅游")
         else:
-            # 💎 经典稳健的三段式无缝重叠切片（0-40%, 35-80%, 75-100%）
-            box_top = (0, 0, w, int(h * 0.40))
-            box_mid = (0, int(h * 0.35), w, int(h * 0.80))
-            box_bottom = (0, int(h * 0.75), w, h)
+            # 💎 终极无缝重叠三段式切片（大幅加宽中段与上段、下段的重叠区，确保哈尔滨下半部 SP002395 和雪国列车 SP002393 绝对不被切断）
+            box_top = (0, 0, w, int(h * 0.48))
+            box_mid = (0, int(h * 0.28), w, int(h * 0.82))
+            box_bottom = (0, int(h * 0.62), w, h)
 
-            status_box.markdown("🔍 豪吉海报【第一段 (0%-40%)：海南岛/哈尔滨/上海】...")
+            status_box.markdown("🔍 豪吉海报【第一视窗 (0%-48%)】...")
             progress_bar.progress(0.2)
-            r1 = call_gemini_vision_chunk(img.crop(box_top), "豪吉海报上段", status_box, "提取海南岛、哈尔滨、上海等全量路线", default_agency="豪吉旅游")
+            r1 = call_gemini_vision_chunk(img.crop(box_top), "豪吉海报上段", status_box, "提取海南岛、哈尔滨上段、上海", default_agency="豪吉旅游")
 
-            status_box.markdown("🔍 豪吉海报【第二段 (35%-80%)：大连/广州澳门/重庆】...")
+            status_box.markdown("🔍 豪吉海报【第二视窗 (28%-82%)：含哈尔滨下半部】...")
             progress_bar.progress(0.5)
-            r2 = call_gemini_vision_chunk(img.crop(box_mid), "豪吉海报中段", status_box, "提取大连、广州澳门、重庆等全量路线", default_agency="豪吉旅游")
+            r2 = call_gemini_vision_chunk(img.crop(box_mid), "豪吉海报中段", status_box, "提取哈尔滨下半部 SP002395、大连、广州澳门、重庆", default_agency="豪吉旅游")
 
-            status_box.markdown("🔍 豪吉海报【第三段 (75%-100%)：张家界/北疆/南疆】...")
+            status_box.markdown("🔍 豪吉海报【第三视窗 (62%-100%)：含雪国列车】...")
             progress_bar.progress(0.8)
-            r3 = call_gemini_vision_chunk(img.crop(box_bottom), "豪吉海报下段", status_box, "提取张家界、北疆、南疆等全量路线", default_agency="豪吉旅游")
+            r3 = call_gemini_vision_chunk(img.crop(box_bottom), "豪吉海报下段", status_box, "提取张家界、雪国列车 SP002393、北疆、南疆", default_agency="豪吉旅游")
 
             raw_items = r1 + r2 + r3
 
