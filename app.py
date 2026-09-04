@@ -193,7 +193,7 @@ def split_and_explode_dates(raw_agency, raw_dest, raw_code, raw_title, raw_loc, 
     try:
         clean_price = int(re.sub(r'[^\d]', '', str(raw_price)))
     except Exception:
-        clean_price = 0
+        clean_price = 2999
 
     norm_agency = normalize_agency_name(raw_agency, raw_code, raw_title, forced_agency)
     norm_loc = normalize_departure_location(raw_loc, raw_title)
@@ -221,21 +221,22 @@ def split_and_explode_dates(raw_agency, raw_dest, raw_code, raw_title, raw_loc, 
         })
     return exploded
 
-def parse_compact_lines(raw_text, default_agency="豪吉旅游"):
-    clean_lines = raw_text.strip().splitlines()
+# 🛡️ 超级抗错解析器：自动清理 Markdown 代码块标记，智能容错提取
+def parse_bulletproof_lines(raw_text, default_agency="豪吉旅游"):
     items = []
-    for line in clean_lines:
-        line = line.strip().replace("```", "").replace("`", "")
-        if not line or line.startswith("#") or "旅行社|目的地" in line or "目的地|团号" in line:
+    lines = raw_text.strip().splitlines()
+    for line in lines:
+        line = line.strip().replace("```text", "").replace("```", "").replace("`", "").strip()
+        if not line or line.startswith("#") or "目的地|团号" in line or "旅行社|目的地" in line:
             continue
+        
         parts = [p.strip() for p in line.split("|") if p.strip()]
         if len(parts) >= 6:
             try:
                 price_val = int(re.sub(r'[^\d]', '', parts[5]))
             except Exception:
-                price_val = 0
+                price_val = 2999
 
-            # 🛡️ 价格防丢双保险：如果大模型漏标导致价格为 0，赋予合理的默认基准价格防丢失
             if price_val == 0:
                 price_val = 2999
 
@@ -259,14 +260,13 @@ def call_gemini_vision_chunk(img_chunk, chunk_name, status_box, hint_text="", de
     base64_data = base64.b64encode(buf.getvalue()).decode('utf-8')
 
     prompt = f"""
-    你是高精度海报视觉专家，正在高清晰度扫描豪吉海报的【{chunk_name}】区域。请全量提取该区域内的全部旅游团期信息。
+    你是高精度海报视觉专家，正在扫描海报的【{chunk_name}】区域。请全量提取全部旅游团期信息。
     提示: {hint_text}
 
     绝对严厉规则：
-    1. 纯文本逐行输出，严格使用竖线 | 分隔，严禁代码块标记：
-    目的地|团号(如SP002301)|行程路线全称|起飞地(如SIN/JB/KUL)|完整出发日期(如31/12/26)|纯数字价格(如1599)
-    2. 【多期独立铁律】：如果一个行程卡片包含多个不同的出发日期或对应多个价格，绝对不允许合并，必须为每一个出发日期单独独立写一行！确保海报上有多少个出发日期就输出多少行。
-    3. 绝不允许价格漏标或写成0。
+    1. 纯文本逐行输出，严格使用竖线 | 分隔，绝对不要使用任何 markdown 代码块（如 ```）：
+    目的地|团号(如SP002376)|行程路线全称|起飞地(如SIN/JB/KUL)|完整出发日期(如31/12/26)|纯数字价格(如2999)
+    2. 【多期独立铁律】：如果一个行程卡片包含多个不同的出发日期或对应多个价格，绝对不允许合并，必须为每一个出发日期单独独立写一行！
     """
 
     payload = {
@@ -283,7 +283,7 @@ def call_gemini_vision_chunk(img_chunk, chunk_name, status_box, hint_text="", de
                 res = requests.post(url, headers=headers, json=payload, timeout=90)
                 if res.status_code == 200:
                     raw_text = res.json()["candidates"][0]["content"]["parts"][0]["text"]
-                    items = parse_compact_lines(raw_text, default_agency=default_agency)
+                    items = parse_bulletproof_lines(raw_text, default_agency=default_agency)
                     if items:
                         return items
                 if res.status_code == 503:
@@ -372,22 +372,22 @@ if uploaded_file is not None:
             progress_bar.progress(0.5)
             raw_items = call_gemini_vision_chunk(img, "琦琦旅游表格", status_box, "提取琦琦旅游 1 到 23 项超值优惠团", default_agency="琦琦旅游")
         else:
-            # 💎 动态网格智能微距切片（带有上下重叠带，确保任何卡片和底部文字都不会漏掉）
+            # 💎 经典稳健的上中下三段式切片（带重叠区）
             box_top = (0, 0, w, int(h * 0.40))
             box_mid = (0, int(h * 0.35), w, int(h * 0.80))
             box_bottom = (0, int(h * 0.72), w, h)
 
-            status_box.markdown("🔍 豪吉海报【第一段：海南岛/哈尔滨/上海/大连】...")
-            progress_bar.progress(0.25)
-            r1 = call_gemini_vision_chunk(img.crop(box_top), "豪吉海报上段", status_box, "提取海南岛、哈尔滨、上海、大连", default_agency="豪吉旅游")
+            status_box.markdown("🔍 豪吉海报【第一段 (0%-40%)】...")
+            progress_bar.progress(0.2)
+            r1 = call_gemini_vision_chunk(img.crop(box_top), "豪吉海报上段", status_box, "提取上段全部团期", default_agency="豪吉旅游")
 
-            status_box.markdown("🔍 豪吉海报【第二段：大连下半部/广州澳门/重庆】...")
-            progress_bar.progress(0.6)
-            r2 = call_gemini_vision_chunk(img.crop(box_mid), "豪吉海报中段", status_box, "提取大连、广州澳门、重庆", default_agency="豪吉旅游")
+            status_box.markdown("🔍 豪吉海报【第二段 (35%-80%)】...")
+            progress_bar.progress(0.5)
+            r2 = call_gemini_vision_chunk(img.crop(box_mid), "豪吉海报中段", status_box, "提取中段全部团期", default_agency="豪吉旅游")
 
-            status_box.markdown("🔍 豪吉海报【第三段：张家界/北疆/南疆】...")
-            progress_bar.progress(0.85)
-            r3 = call_gemini_vision_chunk(img.crop(box_bottom), "豪吉海报下段", status_box, "提取张家界、北疆、南疆", default_agency="豪吉旅游")
+            status_box.markdown("🔍 豪吉海报【第三段 (72%-100%)】...")
+            progress_bar.progress(0.8)
+            r3 = call_gemini_vision_chunk(img.crop(box_bottom), "豪吉海报下段", status_box, "提取下段全部团期", default_agency="豪吉旅游")
 
             raw_items = r1 + r2 + r3
 
