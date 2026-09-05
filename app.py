@@ -203,8 +203,7 @@ def normalize_departure_location(raw_loc, raw_title, agency="豪吉旅游"):
 def clean_destination_name(raw_dest):
     s = str(raw_dest or "精选路线")
     s = re.sub(r'^(?:SIN|JB|KL|KUL|SUBANG)\s*[-–—]\s*', '', s, flags=re.IGNORECASE)
-    s = re.sub(r'\d+\s*(?:天|D|d)\s*(?:\d+\s*(?:夜|晚|N|n))?', '', s)
-    s = re.sub(r'\d+\s*(?:天|D|d|夜|晚|N|n)', '', s)
+    # 保留具体地名，不盲目切除天数，确保卡片能展示完整标题
     return s.strip()
 
 def split_and_explode_dates(raw_agency, raw_dest, raw_code, raw_title, raw_loc, raw_dates_str, raw_price, shopping_status="纯玩无购物团", forced_agency=""):
@@ -275,19 +274,23 @@ def parse_qiqi_lines(raw_text, poster_is_pure_non_shopping=False):
                 date_matches = re.findall(r'\b(\d{1,2}[/.-]\d{1,2}[/.-]\d{2,4})\b', line)
                 dates_str = date_matches[0] if date_matches else "13/09/2026"
 
-                title = parts[3] if len(parts) > 3 else "超值优惠团"
-                
-                # 💎 琦琦购物属性精准判定逻辑
+                # 💎 完美保留几天几夜与行程亮点作为标题
+                raw_days_str = parts[2] if len(parts) > 2 else ""
+                raw_highlight = parts[3] if len(parts) > 3 else "超值优惠团"
+                if raw_days_str and not any(k in raw_highlight for k in ["天", "D", "d"]):
+                    title = f"{raw_days_str} {raw_highlight}"
+                else:
+                    title = raw_highlight
+
+                # 💎 严格对齐购物判定规则
                 col_shop = parts[5] if len(parts) > 5 else ""
                 col_shop_upper = col_shop.upper()
-                
+
                 if poster_is_pure_non_shopping:
                     shopping_stat = "纯玩无购物团"
                 elif col_shop == "" or col_shop == "-" or col_shop_upper in ["无", "NONE", "N/A"]:
-                    # 空白、横线、或明确无内容的代表含购物团
                     shopping_stat = "含购物团"
                 else:
-                    # 有字、有绿标、有具体文字说明的代表纯玩无购物团
                     shopping_stat = "纯玩无购物团"
 
                 price_val = 2999
@@ -505,7 +508,6 @@ if uploaded_files:
                 img.save(buf, format="JPEG", quality=95)
                 base64_data = base64.b64encode(buf.getvalue()).decode('utf-8')
                 
-                # 💎 检查海报整体是否声明“全程无购物”
                 check_prompt = "请用一句话回答：这张海报标题、底部或角落是否写着‘全程无购物’、‘无购物站’或整张海报都是无购物？只回答‘是’或‘否’。"
                 check_payload = {
                     "contents": [{"parts": [{"text": check_prompt}, {"inline_data": {"mime_type": "image/jpeg", "data": base64_data}}]}],
@@ -525,7 +527,7 @@ if uploaded_files:
                     except Exception:
                         time.sleep(1)
 
-                prompt = "请提取琦琦旅游表格。格式：序号 | 出发日期 (完整包含真实的日/月/年如DD/MM/YYYY) | 天数 | 行程亮点 | 航空 | 购物站栏(有字/绿标填具体内容，空白或横线填'-') | 团费RM"
+                prompt = "请提取琦琦旅游表格。格式：序号 | 出发日期 (完整包含真实的日/月/年如DD/MM/YYYY) | 天数(如7天6夜) | 行程亮点 | 航空 | 购物站栏(有字/绿标填具体内容，空白或横线填'-') | 团费RM"
                 payload = {
                     "contents": [{"parts": [{"text": prompt}, {"inline_data": {"mime_type": "image/jpeg", "data": base64_data}}]}],
                     "generationConfig": {"temperature": 0.0, "maxOutputTokens": 16384}
@@ -655,7 +657,7 @@ if current_display_data:
     if selected_dest != "全部":
         filtered_df = filtered_df[filtered_df['destination'] == selected_dest]
 
-    if selected_loc == "🇲🇾 马来西亚全部地区 (包含吉隆坡KUL / 新山JB / 梳邦)":
+    if selected_loc == "🇲🇾 马来西亚全部地区 (包含吉隆坡KUL / New山JB / 梳邦)":
         filtered_df = filtered_df[filtered_df['departure_location'].str.contains("马来西亚|新山|梳邦|KUL|JB", na=False)]
     elif selected_loc == "🇲🇾 马来西亚起飞 (KUL)":
         filtered_df = filtered_df[filtered_df['departure_location'].str.contains("KUL|马来西亚", na=False)]
