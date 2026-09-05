@@ -48,7 +48,7 @@ else:
         st.session_state.private_tour_data = []
     active_data = st.session_state.private_tour_data
 
-st.title("✈️ 旅游团智能比价助手 (多图批量 & 智能购物识别版)")
+st.title("✈️ 旅游团智能比价助手 (购物属性精准鉴别版)")
 
 @st.cache_resource
 def get_loud_wav_base64():
@@ -185,15 +185,13 @@ def normalize_departure_location(raw_loc, raw_title, agency="豪吉旅游"):
     s = f"{raw_loc} {raw_title}".upper()
     if any(k in s for k in ["SIN", "新加坡", "CHANGI", "SCOOT", "TR"]):
         return "🇸🇬 新加坡起飞 (SIN)"
-    if any(k in s for k in ["JB", "新山"]):
-        return "🇲🇾 新山出发 (JB)"
-    if agency == "琦琦旅游":
-        return "🇲🇾 马来西亚起飞 (KUL)"
+    if any(k in s for k in ["JB", "新山", "SUBANG", "梳邦"]):
+        return "🇲🇾 新山/梳邦起飞 (JB)"
     return "🇲🇾 马来西亚起飞 (KUL)"
 
 def clean_destination_name(raw_dest):
     s = str(raw_dest or "精选路线")
-    s = re.sub(r'^(?:SIN|JB|KL|KUL)\s*[-–—]\s*', '', s, flags=re.IGNORECASE)
+    s = re.sub(r'^(?:SIN|JB|KL|KUL|SUBANG)\s*[-–—]\s*', '', s, flags=re.IGNORECASE)
     s = re.sub(r'\d+\s*(?:天|D|d)\s*(?:\d+\s*(?:夜|晚|N|n))?', '', s)
     s = re.sub(r'\d+\s*(?:天|D|d|夜|晚|N|n)', '', s)
     return s.strip()
@@ -265,15 +263,18 @@ def parse_qiqi_lines(raw_text):
 
                 title = parts[3] if len(parts) > 3 else "超值优惠团"
                 
-                # 💎 智能文本识别购物属性：检测是否包含无购物、纯玩字眼
+                # 💎 琦琦购物属性精准判定：若“无购物站”列（parts[5] 或整行）包含无购物字眼则为纯玩，否则为空白即为含购物
+                col_shop = parts[5] if len(parts) > 5 else ""
                 line_upper = line.upper()
-                if any(k in line_upper for k in ["无购物", "纯玩", "无购物站"]):
+                if "无购物" in col_shop or "无购物" in line or "纯玩" in line:
                     shopping_stat = "纯玩无购物团"
-                else:
+                elif col_shop == "" or col_shop == "-" or len(col_shop) < 2:
                     shopping_stat = "含购物团"
+                else:
+                    shopping_stat = "纯玩无购物团"
 
                 price_val = 2999
-                price_matches = re.findall(r'\b\d{3,5}\b', parts[5].replace(",", "")) if len(parts) > 5 else []
+                price_matches = re.findall(r'\b\d{3,5}\b', parts[-1].replace(",", "")) if len(parts) > 0 else []
                 if price_matches:
                     price_val = int(price_matches[0])
                 else:
@@ -445,7 +446,6 @@ def generate_comparison_image(df):
     img.save(buf, format="PNG", quality=95)
     return buf.getvalue()
 
-# 💎 允许一次性上传多张图片（支持批量队列处理）
 uploaded_files = st.file_uploader("📷 请上传旅游海报图片（支持一次性选择多张图片批量处理）", type=["jpg", "jpeg", "png"], accept_multiple_files=True)
 
 if uploaded_files:
@@ -470,7 +470,7 @@ if uploaded_files:
                 buf = BytesIO()
                 img.save(buf, format="JPEG", quality=95)
                 base64_data = base64.b64encode(buf.getvalue()).decode('utf-8')
-                prompt = "请提取琦琦旅游表格。格式：序号 | 出发日期 | 天数 | 行程亮点 | 航空 | 团费RM"
+                prompt = "请提取琦琦旅游表格。格式：序号 | 出发日期 | 天数 | 行程亮点 | 航空 | 无购物站 | 团费RM"
                 payload = {
                     "contents": [{"parts": [{"text": prompt}, {"inline_data": {"mime_type": "image/jpeg", "data": base64_data}}]}],
                     "generationConfig": {"temperature": 0.0, "maxOutputTokens": 16384}
@@ -485,7 +485,6 @@ if uploaded_files:
                         if raw_items:
                             break
             else:
-                # 💎 豪吉海报：采用 6 大无缝大重叠聚落区块扫描
                 clusters = [
                     ("左上聚落", (0, 0, int(w * 0.42), int(h * 0.55))),
                     ("中上聚落", (int(w * 0.25), 0, int(w * 0.75), int(h * 0.55))),
@@ -573,16 +572,15 @@ if current_display_data:
 
     loc_options = [
         "全部",
-        "🇲🇾 马来西亚全部地区 (包含吉隆坡KUL / 新山JB)",
+        "🇲🇾 马来西亚全部地区 (包含吉隆坡KUL / 新山JB / 梳邦)",
         "🇲🇾 马来西亚起飞 (KUL)",
-        "🇲🇾 新山出发 (JB)",
+        "🇲🇾 新山/梳邦出发 (JB)",
         "🇸🇬 新加坡起飞 (SIN)"
     ]
     selected_loc = st.sidebar.selectbox("选择起飞地点", loc_options)
 
     selected_hol = st.sidebar.selectbox("🗓️ 学校假期筛选", ["全部日期", "🎒 包含学校假期 (含超出2天内)", "✨ 严格在学校假期内 (0超出)", "💼 仅平时非假期"])
 
-    # 🛒 新增：购物属性筛选
     selected_shop = st.sidebar.selectbox("🛒 购物属性筛选", ["全部团", "✨ 仅看纯玩无购物团", "🛍️ 仅看含购物团"])
 
     filtered_df = df.copy()
@@ -591,12 +589,12 @@ if current_display_data:
     if selected_dest != "全部":
         filtered_df = filtered_df[filtered_df['destination'] == selected_dest]
 
-    if selected_loc == "🇲🇾 马来西亚全部地区 (包含吉隆坡KUL / 新山JB)":
-        filtered_df = filtered_df[filtered_df['departure_location'].str.contains("马来西亚|新山|KUL|JB", na=False)]
+    if selected_loc == "🇲🇾 马来西亚全部地区 (包含吉隆坡KUL / 新山JB / 梳邦)":
+        filtered_df = filtered_df[filtered_df['departure_location'].str.contains("马来西亚|新山|梳邦|KUL|JB", na=False)]
     elif selected_loc == "🇲🇾 马来西亚起飞 (KUL)":
         filtered_df = filtered_df[filtered_df['departure_location'].str.contains("KUL|马来西亚", na=False)]
-    elif selected_loc == "🇲🇾 新山出发 (JB)":
-        filtered_df = filtered_df[filtered_df['departure_location'].str.contains("JB|新山", na=False)]
+    elif selected_loc == "🇲🇾 新山/梳邦出发 (JB)":
+        filtered_df = filtered_df[filtered_df['departure_location'].str.contains("JB|新山|梳邦", na=False)]
     elif selected_loc == "🇸🇬 新加坡起飞 (SIN)":
         filtered_df = filtered_df[filtered_df['departure_location'].str.contains("SIN|新加坡", na=False)]
 
