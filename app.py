@@ -473,7 +473,7 @@ with col_up_2:
 
 with col_up_1:
     uploaded_files = st.file_uploader(
-        "📷 请上传旅游海报图片（支持一次性选择多张图片批量处理）", 
+        "📷 请上传旅游海报图片（建议每次分批上传 5-8 张，体验更顺畅）", 
         type=["jpg", "jpeg", "png"], 
         accept_multiple_files=True,
         key=f"uploader_{st.session_state.file_uploader_key}"
@@ -497,6 +497,7 @@ if uploaded_files:
                 img = img.convert('RGB')
             w, h = img.size
 
+            raw_items = []
             if agency_choice == "琦琦旅游":
                 buf = BytesIO()
                 img.save(buf, format="JPEG", quality=95)
@@ -526,19 +527,26 @@ if uploaded_files:
                     "contents": [{"parts": [{"text": prompt}, {"inline_data": {"mime_type": "image/jpeg", "data": base64_data}}]}],
                     "generationConfig": {"temperature": 0.0, "maxOutputTokens": 16384}
                 }
-                raw_items = []
+                
+                # 💎 琦琦旅游全面接入多 Key 轮询与重试
                 for _ in range(len(API_KEYS)):
                     cur_key = get_next_api_key()
                     headers = {"Content-Type": "application/json", "x-goog-api-key": cur_key}
-                    url = f"https://generativelanguage.googleapis.com/v1beta/models/{PRIMARY_MODEL}:generateContent?key={cur_key}"
-                    try:
-                        res = requests.post(url, headers=headers, json=payload, timeout=90)
-                        if res.status_code == 200:
-                            raw_items = parse_qiqi_lines(res.json()["candidates"][0]["content"]["parts"][0]["text"], poster_is_pure_non_shopping=poster_is_pure)
-                            if raw_items:
-                                break
-                    except Exception:
-                        time.sleep(1)
+                    for model_name in [PRIMARY_MODEL, BACKUP_MODEL]:
+                        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={cur_key}"
+                        try:
+                            res = requests.post(url, headers=headers, json=payload, timeout=90)
+                            if res.status_code == 200:
+                                parsed = parse_qiqi_lines(res.json()["candidates"][0]["content"]["parts"][0]["text"], poster_is_pure_non_shopping=poster_is_pure)
+                                if parsed:
+                                    raw_items = parsed
+                                    break
+                            if res.status_code in [429, 503]:
+                                time.sleep(1.5)
+                        except Exception:
+                            time.sleep(1.5)
+                    if raw_items:
+                        break
             else:
                 clusters = [
                     ("左上聚落", (0, 0, int(w * 0.42), int(h * 0.55))),
@@ -549,7 +557,6 @@ if uploaded_files:
                     ("右下聚落", (int(w * 0.58), int(h * 0.42), w, h))
                 ]
 
-                raw_items = []
                 for cluster_name, box_coords in clusters:
                     cropped_img = img.crop(box_coords)
                     cluster_items = call_gemini_cluster_agent(cropped_img, cluster_name)
@@ -569,7 +576,7 @@ if uploaded_files:
                 )
                 newly_extracted.extend(rows)
 
-            time.sleep(1.0)
+            time.sleep(1.2)
 
         progress_bar.progress(1.0)
         status_box.markdown("✨ 正在进行全局去重与【绝对价格从低到高】严格升序排序...")
@@ -601,7 +608,7 @@ if uploaded_files:
             time.sleep(1.0)
             st.rerun()
         else:
-            st.warning("⚠️ 未能从上传的图片中解析出有效团期，请检查图片或重新点击。")
+            st.warning("⚠️ 未能从上传的图片中解析出有效团期，请检查图片或分批重新上传。")
 
 current_display_data = st.session_state.shared_tour_data if work_mode == "🌐 公共共享模式 (多人实时同步)" else st.session_state.private_tour_data
 
