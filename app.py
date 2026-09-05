@@ -48,7 +48,7 @@ else:
         st.session_state.private_tour_data = []
     active_data = st.session_state.private_tour_data
 
-st.title("✈️ 旅游团智能比价助手 (购物属性三铁律版)")
+st.title("✈️ 旅游团智能比价助手 (智能重试与失败隔离版)")
 
 @st.cache_resource
 def get_loud_wav_base64():
@@ -239,7 +239,7 @@ def split_and_explode_dates(raw_agency, raw_dest, raw_code, raw_title, raw_loc, 
         })
     return exploded
 
-def parse_qiqi_lines(raw_text, poster_is_pure_non_shopping=False):
+def parse_qiqi_lines(raw_text):
     items = []
     lines = raw_text.strip().splitlines()
     for line in lines:
@@ -259,14 +259,16 @@ def parse_qiqi_lines(raw_text, poster_is_pure_non_shopping=False):
 
                 title = parts[3] if len(parts) > 3 else "超值优惠团"
                 
-                # 💎 铁律应用：
-                # 1. 如果海报整体写有“全程无购物”，则全部为纯玩无购物团
-                # 2. 否则看专属列（parts[5]）：有字且含“无购物”=纯玩；空白或只有“-”=含购物团
+                # 💎 三铁律精准判定：
+                # 1. 检查专属列（parts[5]）或整行：有字且含无购物 = 纯玩
+                # 2. 空白或只有“-” = 含购物团
                 col_shop = parts[5] if len(parts) > 5 else ""
-                if poster_is_pure_non_shopping:
-                    shopping_stat = "纯玩无购物团"
-                elif "无购物" in col_shop or "纯玩" in col_shop:
-                    shopping_stat = "纯玩无购物团"
+                line_upper = line.upper()
+                if "全程无购物" in line_upper or "无购物站" in line_upper or "无购物" in col_shop or "纯玩" in col_shop:
+                    if "含购物" in line or "购物店" in line:
+                        shopping_stat = "含购物团"
+                    else:
+                        shopping_stat = "纯玩无购物团"
                 elif col_shop == "" or col_shop == "-" or len(col_shop) < 2:
                     shopping_stat = "含购物团"
                 else:
@@ -379,10 +381,10 @@ def call_gemini_cluster_agent(img_chunk, cluster_name):
                     if items:
                         return items
                 if res.status_code == 503:
-                    time.sleep(3)
+                    time.sleep(2)
                     continue
             except Exception:
-                time.sleep(3)
+                time.sleep(2)
     return []
 
 @st.cache_resource
@@ -467,84 +469,82 @@ if uploaded_files:
 
     if st.button("🚀 启动批量无缝全量一键提取", type="primary", use_container_width=True):
         newly_extracted = []
+        failed_files = [] # 记录解析失败的文件名和对象
         progress_bar = st.progress(0.0)
         status_box = st.empty()
 
         total_files = len(uploaded_files)
         for f_idx, uploaded_file in enumerate(uploaded_files):
-            status_box.markdown(f"📦 正在处理第 **{f_idx + 1} / {total_files}** 张海报 ({uploaded_file.name})...")
+            status_box.markdown(f"📦 正在高压稳定处理第 **{f_idx + 1} / {total_files}** 张海报 ({uploaded_file.name})...")
             progress_bar.progress((f_idx) / total_files)
 
-            img = Image.open(BytesIO(uploaded_file.getvalue()))
-            if img.mode != 'RGB':
-                img = img.convert('RGB')
-            w, h = img.size
-
-            if agency_choice == "琦琦旅游":
-                buf = BytesIO()
-                img.save(buf, format="JPEG", quality=95)
-                base64_data = base64.b64encode(buf.getvalue()).decode('utf-8')
-                
-                # 💎 步骤 1：智能检测海报是否带有“全程无购物”标语
-                check_prompt = "请用一句话回答：这张海报标题、底部或角落是否写着‘全程无购物站’或‘无购物’？只回答‘是’或‘否’。"
-                check_payload = {
-                    "contents": [{"parts": [{"text": check_prompt}, {"inline_data": {"mime_type": "image/jpeg", "data": base64_data}}]}],
-                    "generationConfig": {"temperature": 0.0, "maxOutputTokens": 50}
-                }
-                headers = {"Content-Type": "application/json", "x-goog-api-key": GEMINI_API_KEY}
-                poster_is_pure = False
+            success_flag = False
+            # 💎 智能重试机制：单张图片最多尝试 3 次
+            for attempt in range(3):
                 try:
-                    chk_res = requests.post(f"https://generativelanguage.googleapis.com/v1beta/models/{PRIMARY_MODEL}:generateContent?key={GEMINI_API_KEY}", headers=headers, json=check_payload, timeout=30)
-                    if chk_res.status_code == 200:
-                        ans = chk_res.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
-                        if "是" in ans:
-                            poster_is_pure = True
+                    img = Image.open(BytesIO(uploaded_file.getvalue()))
+                    if img.mode != 'RGB':
+                        img = img.convert('RGB')
+                    w, h = img.size
+
+                    if agency_choice == "琦琦旅游":
+                        buf = BytesIO()
+                        img.save(buf, format="JPEG", quality=95)
+                        base64_data = base64.b64encode(buf.getvalue()).decode('utf-8')
+                        prompt = "请提取琦琦旅游表格。格式：序号 | 出发日期 (完整包含真实的日/月/年如DD/MM/YYYY) | 天数 | 行程亮点 | 航空 | 无购物站 | 团费RM"
+                        payload = {
+                            "contents": [{"parts": [{"text": prompt}, {"inline_data": {"mime_type": "image/jpeg", "data": base64_data}}]}],
+                            "generationConfig": {"temperature": 0.0, "maxOutputTokens": 16384}
+                        }
+                        headers = {"Content-Type": "application/json", "x-goog-api-key": GEMINI_API_KEY}
+                        raw_items = []
+                        for model_name in [PRIMARY_MODEL, BACKUP_MODEL]:
+                            url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={GEMINI_API_KEY}"
+                            res = requests.post(url, headers=headers, json=payload, timeout=90)
+                            if res.status_code == 200:
+                                raw_items = parse_qiqi_lines(res.json()["candidates"][0]["content"]["parts"][0]["text"])
+                                if raw_items:
+                                    break
+                    else:
+                        clusters = [
+                            ("左上聚落", (0, 0, int(w * 0.42), int(h * 0.55))),
+                            ("中上聚落", (int(w * 0.25), 0, int(w * 0.75), int(h * 0.55))),
+                            ("右上聚落", (int(w * 0.58), 0, w, int(h * 0.55))),
+                            ("左下聚落", (0, int(h * 0.42), int(w * 0.42), h)),
+                            ("中下聚落", (int(w * 0.25), int(h * 0.42), int(w * 0.75), h)),
+                            ("右下聚落", (int(w * 0.58), int(h * 0.42), w, h))
+                        ]
+
+                        raw_items = []
+                        for cluster_name, box_coords in clusters:
+                            cropped_img = img.crop(box_coords)
+                            cluster_items = call_gemini_cluster_agent(cropped_img, cluster_name)
+                            raw_items.extend(cluster_items)
+
+                    if raw_items:
+                        for item in raw_items:
+                            rows = split_and_explode_dates(
+                                item.get("agency", agency_choice),
+                                item.get("destination", "精选路线"),
+                                item.get("tour_code", "-"),
+                                item.get("title", ""),
+                                item.get("departure_location", ""),
+                                item.get("departure_dates", ""),
+                                item.get("price", 2999),
+                                shopping_status=item.get("shopping_status", "纯玩无购物团"),
+                                forced_agency=agency_choice
+                            )
+                            newly_extracted.extend(rows)
+                        success_flag = True
+                        break # 成功则跳出重试循环
                 except Exception:
-                    pass
+                    time.sleep(1) # 重试前短暂等待
+            
+            if not success_flag:
+                # 记录彻底失败的图片
+                failed_files.append(uploaded_file.name)
 
-                # 💎 步骤 2：提取表格详细行
-                prompt = "请提取琦琦旅游表格。格式：序号 | 出发日期 (完整包含真实的日/月/年如DD/MM/YYYY) | 天数 | 行程亮点 | 航空 | 无购物站 | 团费RM"
-                payload = {
-                    "contents": [{"parts": [{"text": prompt}, {"inline_data": {"mime_type": "image/jpeg", "data": base64_data}}]}],
-                    "generationConfig": {"temperature": 0.0, "maxOutputTokens": 16384}
-                }
-                raw_items = []
-                for model_name in [PRIMARY_MODEL, BACKUP_MODEL]:
-                    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={GEMINI_API_KEY}"
-                    res = requests.post(url, headers=headers, json=payload, timeout=90)
-                    if res.status_code == 200:
-                        raw_items = parse_qiqi_lines(res.json()["candidates"][0]["content"]["parts"][0]["text"], poster_is_pure_non_shopping=poster_is_pure)
-                        if raw_items:
-                            break
-            else:
-                clusters = [
-                    ("左上聚落", (0, 0, int(w * 0.42), int(h * 0.55))),
-                    ("中上聚落", (int(w * 0.25), 0, int(w * 0.75), int(h * 0.55))),
-                    ("右上聚落", (int(w * 0.58), 0, w, int(h * 0.55))),
-                    ("左下聚落", (0, int(h * 0.42), int(w * 0.42), h)),
-                    ("中下聚落", (int(w * 0.25), int(h * 0.42), int(w * 0.75), h)),
-                    ("右下聚落", (int(w * 0.58), int(h * 0.42), w, h))
-                ]
-
-                raw_items = []
-                for cluster_name, box_coords in clusters:
-                    cropped_img = img.crop(box_coords)
-                    cluster_items = call_gemini_cluster_agent(cropped_img, cluster_name)
-                    raw_items.extend(cluster_items)
-
-            for item in raw_items:
-                rows = split_and_explode_dates(
-                    item.get("agency", agency_choice),
-                    item.get("destination", "精选路线"),
-                    item.get("tour_code", "-"),
-                    item.get("title", ""),
-                    item.get("departure_location", ""),
-                    item.get("departure_dates", ""),
-                    item.get("price", 2999),
-                    shopping_status=item.get("shopping_status", "纯玩无购物团"),
-                    forced_agency=agency_choice
-                )
-                newly_extracted.extend(rows)
+            time.sleep(0.3) # 速率缓冲
 
         progress_bar.progress(1.0)
         status_box.markdown("✨ 正在进行全局去重与【绝对价格从低到高】严格升序排序...")
@@ -573,10 +573,18 @@ if uploaded_files:
 
             trigger_play_on_done(len(unique_combined))
             st.success(f"🎉 批量提取完成！当前【{work_mode}】共有 **{len(unique_combined)}** 个精准团期（已按价格从低到高排好）。")
+            
+            # 💎 失败隔离提醒：明确列出哪几张失败了
+            if failed_files:
+                st.warning(f"⚠️ 共有 **{len(failed_files)}** 张海报因网络或清晰度问题解析未成功，具体文件如下：\n" + "".join([f"\n- `{fname}`" for fname in failed_files]) + "\n\n💡 建议检查这几张图片的清晰度后，单独选中它们重新上传提取即可！")
+
             time.sleep(1.0)
             st.rerun()
         else:
-            st.warning("⚠️ 未能从上传的图片中解析出有效团期，请检查图片或重新点击。")
+            if failed_files:
+                st.error(f"❌ 所有海报解析均未成功。以下是出错的文件：\n" + "".join([f"\n- `{fname}`" for fname in failed_files]))
+            else:
+                st.warning("⚠️ 未能从上传的图片中解析出有效团期，请检查图片或重新点击。")
 
 current_display_data = st.session_state.shared_tour_data if work_mode == "🌐 公共共享模式 (多人实时同步)" else st.session_state.private_tour_data
 
