@@ -48,7 +48,7 @@ else:
         st.session_state.private_tour_data = []
     active_data = st.session_state.private_tour_data
 
-st.title("✈️ 旅游团智能比价助手 (购物属性三铁律版)")
+st.title("✈️ 旅游团智能比价助手 (购物属性绝对精准鉴别版)")
 
 @st.cache_resource
 def get_loud_wav_base64():
@@ -239,7 +239,7 @@ def split_and_explode_dates(raw_agency, raw_dest, raw_code, raw_title, raw_loc, 
         })
     return exploded
 
-def parse_qiqi_lines(raw_text, poster_is_pure_non_shopping=False):
+def parse_qiqi_lines(raw_text):
     items = []
     lines = raw_text.strip().splitlines()
     for line in lines:
@@ -259,13 +259,9 @@ def parse_qiqi_lines(raw_text, poster_is_pure_non_shopping=False):
 
                 title = parts[3] if len(parts) > 3 else "超值优惠团"
                 
-                # 💎 铁律应用：
-                # 1. 如果海报整体写有“全程无购物”，则全部为纯玩无购物团
-                # 2. 否则看专属列（parts[5]）：有字且含“无购物”=纯玩；空白或只有“-”=含购物团
+                # 💎 严谨判定：只检查专属列（parts[5]）。有字且含无购物则为纯玩；如果空白或只有“-”，则为含购物团
                 col_shop = parts[5] if len(parts) > 5 else ""
-                if poster_is_pure_non_shopping:
-                    shopping_stat = "纯玩无购物团"
-                elif "无购物" in col_shop or "纯玩" in col_shop:
+                if "无购物" in col_shop or "纯玩" in col_shop:
                     shopping_stat = "纯玩无购物团"
                 elif col_shop == "" or col_shop == "-" or len(col_shop) < 2:
                     shopping_stat = "含购物团"
@@ -484,36 +480,18 @@ if uploaded_files:
                 buf = BytesIO()
                 img.save(buf, format="JPEG", quality=95)
                 base64_data = base64.b64encode(buf.getvalue()).decode('utf-8')
-                
-                # 💎 步骤 1：智能检测海报是否带有“全程无购物”标语
-                check_prompt = "请用一句话回答：这张海报标题、底部或角落是否写着‘全程无购物站’或‘无购物’？只回答‘是’或‘否’。"
-                check_payload = {
-                    "contents": [{"parts": [{"text": check_prompt}, {"inline_data": {"mime_type": "image/jpeg", "data": base64_data}}]}],
-                    "generationConfig": {"temperature": 0.0, "maxOutputTokens": 50}
-                }
-                headers = {"Content-Type": "application/json", "x-goog-api-key": GEMINI_API_KEY}
-                poster_is_pure = False
-                try:
-                    chk_res = requests.post(f"https://generativelanguage.googleapis.com/v1beta/models/{PRIMARY_MODEL}:generateContent?key={GEMINI_API_KEY}", headers=headers, json=check_payload, timeout=30)
-                    if chk_res.status_code == 200:
-                        ans = chk_res.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
-                        if "是" in ans:
-                            poster_is_pure = True
-                except Exception:
-                    pass
-
-                # 💎 步骤 2：提取表格详细行
                 prompt = "请提取琦琦旅游表格。格式：序号 | 出发日期 (完整包含真实的日/月/年如DD/MM/YYYY) | 天数 | 行程亮点 | 航空 | 无购物站 | 团费RM"
                 payload = {
                     "contents": [{"parts": [{"text": prompt}, {"inline_data": {"mime_type": "image/jpeg", "data": base64_data}}]}],
                     "generationConfig": {"temperature": 0.0, "maxOutputTokens": 16384}
                 }
+                headers = {"Content-Type": "application/json", "x-goog-api-key": GEMINI_API_KEY}
                 raw_items = []
                 for model_name in [PRIMARY_MODEL, BACKUP_MODEL]:
                     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={GEMINI_API_KEY}"
                     res = requests.post(url, headers=headers, json=payload, timeout=90)
                     if res.status_code == 200:
-                        raw_items = parse_qiqi_lines(res.json()["candidates"][0]["content"]["parts"][0]["text"], poster_is_pure_non_shopping=poster_is_pure)
+                        raw_items = parse_qiqi_lines(res.json()["candidates"][0]["content"]["parts"][0]["text"])
                         if raw_items:
                             break
             else:
