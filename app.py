@@ -48,7 +48,7 @@ else:
         st.session_state.private_tour_data = []
     active_data = st.session_state.private_tour_data
 
-st.title("✈️ 旅游团智能比价助手 (购物属性精准鉴别版)")
+st.title("✈️ 旅游团智能比价助手 (真实日期精准解析版)")
 
 @st.cache_resource
 def get_loud_wav_base64():
@@ -133,24 +133,17 @@ def extract_tour_days(title_str):
     return int(m.group(1)) if m else 7
 
 def evaluate_holiday_fit(departure_date_str, duration_days):
-    matches = re.findall(r'(\d{1,2})[/.-](\d{1,2})(?:[/.-](\d{2,4}))?', str(departure_date_str))
+    matches = re.findall(r'(\d{1,2})[/.-](\d{1,2})[/.-](\d{2,4})', str(departure_date_str))
     if not matches:
         return 'none', 0, ""
 
     d, mth, y = matches[0]
     try:
-        d, mth = int(d), int(mth)
+        d, mth, y = int(d), int(mth), int(y)
+        if y < 100:
+            y += 2000
     except Exception:
         return 'none', 0, ""
-    
-    if y:
-        try:
-            y_int = int(y)
-            y = y_int + 2000 if y_int < 100 else y_int
-        except Exception:
-            y = 2027 if mth in [1, 2] else 2026
-    else:
-        y = 2027 if mth in [1, 2] else 2026
 
     try:
         dep_date = datetime.date(y, mth, d)
@@ -209,22 +202,33 @@ def split_and_explode_dates(raw_agency, raw_dest, raw_code, raw_title, raw_loc, 
     norm_loc = normalize_departure_location(raw_loc, raw_title, agency=norm_agency)
     clean_dest = clean_destination_name(raw_dest)
 
-    date_tokens = re.findall(r'\b\d{1,2}[/.-]\d{1,2}(?:[/.-](\d{2,4}))?\b', str(raw_dates_str))
-    if not date_tokens:
+    # 💎 智能真实日期解析：支持 DD/MM/YYYY 或 DD/MM/YY 格式
+    date_matches = re.findall(r'(\d{1,2})[/.-](\d{1,2})[/.-](\d{2,4})', str(raw_dates_str))
+    if date_matches:
+        date_tokens = [f"{d}/{m}/{y}" for d, m, y in date_matches]
+    else:
         date_tokens = [str(raw_dates_str).strip()]
 
     exploded = []
     for d_token in date_tokens:
-        parts_d = d_token.split('/') if '/' in d_token else (d_token.split('.') if '.' in d_token else d_token.split('-'))
-        if len(parts_d) >= 2:
+        parts_d = re.split('[/.-]', d_token)
+        if len(parts_d) >= 3:
             try:
-                d_mth, d_day = int(parts_d[0]), int(parts_d[1])
-                y_str = "27" if d_mth in [1, 2] else "26"
-                full_d_token = f"{d_mth:02d}/{d_day:02d}/{y_str}"
+                d_val, m_val, y_val = int(parts_d[0]), int(parts_d[1]), int(parts_d[2])
+                if y_val < 100:
+                    y_val += 2000
+                full_d_token = f"{d_val:02d}/{m_val:02d}/{y_val}"
             except Exception:
-                full_d_token = f"{d_token}/26"
+                full_d_token = str(d_token)
+        elif len(parts_d) == 2:
+            try:
+                d_val, m_val = int(parts_d[0]), int(parts_d[1])
+                y_val = 2027 if m_val in [1, 2, 3, 4, 5] else 2026
+                full_d_token = f"{d_val:02d}/{m_val:02d}/{y_val}"
+            except Exception:
+                full_d_token = f"{d_token}/2026"
         else:
-            full_d_token = f"{d_token}/26"
+            full_d_token = str(d_token)
 
         status, over_days, hol_name = evaluate_holiday_fit(full_d_token, days)
         exploded.append({
@@ -258,14 +262,13 @@ def parse_qiqi_lines(raw_text):
                     continue
                 tour_code = f"QIQI-{seq_no}"
 
-                date_matches = re.findall(r'\b\d{1,2}[/.-]\d{1,2}(?:[/.-](\d{2,4}))?\b', line)
-                dates_str = date_matches[0] if date_matches else "13/09/26"
+                # 💎 提取真实的完整日期（如 13/09/2026 或 15/04/2027）
+                date_matches = re.findall(r'\b(\d{1,2}[/.-]\d{1,2}[/.-]\d{2,4})\b', line)
+                dates_str = date_matches[0] if date_matches else "13/09/2026"
 
                 title = parts[3] if len(parts) > 3 else "超值优惠团"
                 
-                # 💎 琦琦购物属性精准判定：若“无购物站”列（parts[5] 或整行）包含无购物字眼则为纯玩，否则为空白即为含购物
                 col_shop = parts[5] if len(parts) > 5 else ""
-                line_upper = line.upper()
                 if "无购物" in col_shop or "无购物" in line or "纯玩" in line:
                     shopping_stat = "纯玩无购物团"
                 elif col_shop == "" or col_shop == "-" or len(col_shop) < 2:
@@ -354,11 +357,10 @@ def call_gemini_cluster_agent(img_chunk, cluster_name):
     prompt = (
         f"你是一位拥有顶级视觉审计能力的旅游海报专家。当前正在审核【{cluster_name}】板块。\n"
         "【绝对完美提取铁律】：\n"
-        "1. 请把该板块里所有的团号、路线、起飞地、每一个出发日期、以及对应的团费（RM）100%全量提取出来，绝对不准遗漏任何一个卡片或数字！\n"
-        "2. 价格无论印在日期的下方还是右侧，必须进行双向空间锁定，绝对禁止错配。\n"
-        "3. 输出规范：必须返回严格合法的纯 JSON 数组格式（不附加任何 markdown 额外说明）：\n"
+        "1. 请把该板块里所有的团号、路线、起飞地、每一个出发日期（必须完整包含真实年份，如 DD/MM/YYYY）、以及对应的团费（RM）100%全量提取出来！\n"
+        "2. 输出规范：必须返回严格合法的纯 JSON 数组格式（不附加任何 markdown 额外说明）：\n"
         "[\n"
-        '  {"destination": "北京", "tour_code": "SP002579", "title": "7天6夜 天津 北京京津奇遇记", "departure_location": "新加坡起飞 (SIN)", "departure_dates": "21/11/26", "price": 3299, "shopping_status": "纯玩无购物团"},\n'
+        '  {"destination": "北京", "tour_code": "SP002579", "title": "7天6夜 天津 北京京津奇遇记", "departure_location": "新加坡起飞 (SIN)", "departure_dates": "21/11/2026", "price": 3299, "shopping_status": "纯玩无购物团"},\n'
         "  ...\n"
         "]"
     )
@@ -470,7 +472,7 @@ if uploaded_files:
                 buf = BytesIO()
                 img.save(buf, format="JPEG", quality=95)
                 base64_data = base64.b64encode(buf.getvalue()).decode('utf-8')
-                prompt = "请提取琦琦旅游表格。格式：序号 | 出发日期 | 天数 | 行程亮点 | 航空 | 无购物站 | 团费RM"
+                prompt = "请提取琦琦旅游表格。格式：序号 | 出发日期 (包含完整年份如DD/MM/YYYY) | 天数 | 行程亮点 | 航空 | 无购物站 | 团费RM"
                 payload = {
                     "contents": [{"parts": [{"text": prompt}, {"inline_data": {"mime_type": "image/jpeg", "data": base64_data}}]}],
                     "generationConfig": {"temperature": 0.0, "maxOutputTokens": 16384}
