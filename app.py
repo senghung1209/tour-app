@@ -48,7 +48,7 @@ else:
         st.session_state.private_tour_data = []
     active_data = st.session_state.private_tour_data
 
-st.title("✈️ 旅游团智能比价助手 (智能重试与失败隔离版)")
+st.title("✈️ 旅游团智能比价助手 (管道符完美对齐版)")
 
 @st.cache_resource
 def get_loud_wav_base64():
@@ -244,8 +244,15 @@ def parse_qiqi_lines(raw_text):
     lines = raw_text.strip().splitlines()
     for line in lines:
         line = line.strip().replace("```text", "").replace("```", "").replace("`", "").strip()
-        if not line or line.startswith("#") or "序号" in line or "团费" in line:
+        if not line or line.startswith("#") or "序号" in line or "团费" in line or "---" in line:
             continue
+        
+        # 💎 完美剥离 Markdown 表格前后的管道符 |
+        if line.startswith("|"):
+            line = line[1:]
+        if line.endswith("|"):
+            line = line[:-1]
+            
         parts = [p.strip() for p in line.split("|") if p.strip()]
         if len(parts) >= 5:
             try:
@@ -254,13 +261,13 @@ def parse_qiqi_lines(raw_text):
                     continue
                 tour_code = f"QIQI-{seq_no}"
 
-                date_matches = re.findall(r'\b(\d{1,2}[/.-]\d{1,2}[/.-]\d{2,4})\b', line)
-                dates_str = date_matches[0] if date_matches else "13/09/2026"
+                date_matches = re.findall(r'\b(\d{1,2}[/.-]\d{1,2}[/.-](\d{2,4}))\b', line)
+                dates_str = date_matches[0][0] if date_matches else "13/09/2026"
 
                 title = parts[3] if len(parts) > 3 else "超值优惠团"
                 
-                # 💎 三铁律精准判定：
-                # 1. 检查专属列（parts[5]）或整行：有字且含无购物 = 纯玩
+                # 💎 严格执行三铁律：
+                # 1. 专属列（parts[5]）有字且含无购物 = 纯玩
                 # 2. 空白或只有“-” = 含购物团
                 col_shop = parts[5] if len(parts) > 5 else ""
                 line_upper = line.upper()
@@ -469,7 +476,7 @@ if uploaded_files:
 
     if st.button("🚀 启动批量无缝全量一键提取", type="primary", use_container_width=True):
         newly_extracted = []
-        failed_files = [] # 记录解析失败的文件名和对象
+        failed_files = []
         progress_bar = st.progress(0.0)
         status_box = st.empty()
 
@@ -479,7 +486,6 @@ if uploaded_files:
             progress_bar.progress((f_idx) / total_files)
 
             success_flag = False
-            # 💎 智能重试机制：单张图片最多尝试 3 次
             for attempt in range(3):
                 try:
                     img = Image.open(BytesIO(uploaded_file.getvalue()))
@@ -536,15 +542,14 @@ if uploaded_files:
                             )
                             newly_extracted.extend(rows)
                         success_flag = True
-                        break # 成功则跳出重试循环
+                        break
                 except Exception:
-                    time.sleep(1) # 重试前短暂等待
+                    time.sleep(1)
             
             if not success_flag:
-                # 记录彻底失败的图片
                 failed_files.append(uploaded_file.name)
 
-            time.sleep(0.3) # 速率缓冲
+            time.sleep(0.3)
 
         progress_bar.progress(1.0)
         status_box.markdown("✨ 正在进行全局去重与【绝对价格从低到高】严格升序排序...")
@@ -574,15 +579,14 @@ if uploaded_files:
             trigger_play_on_done(len(unique_combined))
             st.success(f"🎉 批量提取完成！当前【{work_mode}】共有 **{len(unique_combined)}** 个精准团期（已按价格从低到高排好）。")
             
-            # 💎 失败隔离提醒：明确列出哪几张失败了
             if failed_files:
-                st.warning(f"⚠️ 共有 **{len(failed_files)}** 张海报因网络或清晰度问题解析未成功，具体文件如下：\n" + "".join([f"\n- `{fname}`" for fname in failed_files]) + "\n\n💡 建议检查这几张图片的清晰度后，单独选中它们重新上传提取即可！")
+                st.warning(f"⚠️ 共有 **{len(failed_files)}** 张海报解析未成功：\n" + "".join([f"\n- `{fname}`" for fname in failed_files]))
 
             time.sleep(1.0)
             st.rerun()
         else:
             if failed_files:
-                st.error(f"❌ 所有海报解析均未成功。以下是出错的文件：\n" + "".join([f"\n- `{fname}`" for fname in failed_files]))
+                st.error(f"❌ 所有海报解析均未成功。出错文件：\n" + "".join([f"\n- `{fname}`" for fname in failed_files]))
             else:
                 st.warning("⚠️ 未能从上传的图片中解析出有效团期，请检查图片或重新点击。")
 
