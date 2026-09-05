@@ -48,7 +48,7 @@ else:
         st.session_state.private_tour_data = []
     active_data = st.session_state.private_tour_data
 
-st.title("✈️ 旅游团智能比价助手 (真实日期精准解析版)")
+st.title("✈️ 旅游团智能比价助手 (一键清空照片 & 真实日期完整版)")
 
 @st.cache_resource
 def get_loud_wav_base64():
@@ -202,7 +202,6 @@ def split_and_explode_dates(raw_agency, raw_dest, raw_code, raw_title, raw_loc, 
     norm_loc = normalize_departure_location(raw_loc, raw_title, agency=norm_agency)
     clean_dest = clean_destination_name(raw_dest)
 
-    # 💎 智能真实日期解析：支持 DD/MM/YYYY 或 DD/MM/YY 格式
     date_matches = re.findall(r'(\d{1,2})[/.-](\d{1,2})[/.-](\d{2,4})', str(raw_dates_str))
     if date_matches:
         date_tokens = [f"{d}/{m}/{y}" for d, m, y in date_matches]
@@ -220,13 +219,6 @@ def split_and_explode_dates(raw_agency, raw_dest, raw_code, raw_title, raw_loc, 
                 full_d_token = f"{d_val:02d}/{m_val:02d}/{y_val}"
             except Exception:
                 full_d_token = str(d_token)
-        elif len(parts_d) == 2:
-            try:
-                d_val, m_val = int(parts_d[0]), int(parts_d[1])
-                y_val = 2027 if m_val in [1, 2, 3, 4, 5] else 2026
-                full_d_token = f"{d_val:02d}/{m_val:02d}/{y_val}"
-            except Exception:
-                full_d_token = f"{d_token}/2026"
         else:
             full_d_token = str(d_token)
 
@@ -262,7 +254,7 @@ def parse_qiqi_lines(raw_text):
                     continue
                 tour_code = f"QIQI-{seq_no}"
 
-                # 💎 提取真实的完整日期（如 13/09/2026 或 15/04/2027）
+                # 💎 直接完整提取海报中的真实日期（如 13/11/2026 或 08/03/2027）
                 date_matches = re.findall(r'\b(\d{1,2}[/.-]\d{1,2}[/.-]\d{2,4})\b', line)
                 dates_str = date_matches[0] if date_matches else "13/09/2026"
 
@@ -448,7 +440,24 @@ def generate_comparison_image(df):
     img.save(buf, format="PNG", quality=95)
     return buf.getvalue()
 
-uploaded_files = st.file_uploader("📷 请上传旅游海报图片（支持一次性选择多张图片批量处理）", type=["jpg", "jpeg", "png"], accept_multiple_files=True)
+# 💎 独立的“一键清空上传照片”状态键
+if "file_uploader_key" not in st.session_state:
+    st.session_state.file_uploader_key = 0
+
+col_up_1, col_up_2 = st.columns([4, 1])
+with col_up_2:
+    st.markdown("<br>", unsafe_allow_html=True)
+    if st.button("🗑️ 一键清除所有照片", use_container_width=True):
+        st.session_state.file_uploader_key += 1
+        st.rerun()
+
+with col_up_1:
+    uploaded_files = st.file_uploader(
+        "📷 请上传旅游海报图片（支持一次性选择多张图片批量处理）", 
+        type=["jpg", "jpeg", "png"], 
+        accept_multiple_files=True,
+        key=f"uploader_{st.session_state.file_uploader_key}"
+    )
 
 if uploaded_files:
     agency_choice = st.radio("请选择这些海报对应的旅行社：", ["豪吉旅游", "琦琦旅游", "其他新旅行社"], horizontal=True)
@@ -472,7 +481,7 @@ if uploaded_files:
                 buf = BytesIO()
                 img.save(buf, format="JPEG", quality=95)
                 base64_data = base64.b64encode(buf.getvalue()).decode('utf-8')
-                prompt = "请提取琦琦旅游表格。格式：序号 | 出发日期 (包含完整年份如DD/MM/YYYY) | 天数 | 行程亮点 | 航空 | 无购物站 | 团费RM"
+                prompt = "请提取琦琦旅游表格。格式：序号 | 出发日期 (完整包含真实的日/月/年如DD/MM/YYYY) | 天数 | 行程亮点 | 航空 | 无购物站 | 团费RM"
                 payload = {
                     "contents": [{"parts": [{"text": prompt}, {"inline_data": {"mime_type": "image/jpeg", "data": base64_data}}]}],
                     "generationConfig": {"temperature": 0.0, "maxOutputTokens": 16384}
@@ -551,7 +560,7 @@ if uploaded_files:
 current_display_data = st.session_state.shared_tour_data if work_mode == "🌐 公共共享模式 (多人实时同步)" else st.session_state.private_tour_data
 
 if current_display_data:
-    if st.button(f"🗑️ 清空当前【{work_mode}】的数据", use_container_width=True):
+    if st.button(f"🗑️ 清空当前【{work_mode}】的数据库记录", use_container_width=True):
         if work_mode == "🌐 公共共享模式 (多人实时同步)":
             save_persisted_data([])
             st.session_state.shared_tour_data = []
