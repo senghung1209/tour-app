@@ -123,7 +123,6 @@ OFFICIAL_HOLIDAYS = [
     (datetime.date(2027, 1, 23), datetime.date(2027, 2, 16), "2027 农历新年与跨年假期")
 ]
 
-# 💎 动态从 Streamlit Secrets 安全加载所有以 GEMINI_API_KEY 开头的密钥
 API_KEYS = []
 try:
     for k, v in st.secrets.items():
@@ -278,14 +277,17 @@ def parse_qiqi_lines(raw_text, poster_is_pure_non_shopping=False):
 
                 title = parts[3] if len(parts) > 3 else "超值优惠团"
                 
+                # 💎 琦琦购物属性精准判定逻辑
                 col_shop = parts[5] if len(parts) > 5 else ""
+                col_shop_upper = col_shop.upper()
+                
                 if poster_is_pure_non_shopping:
                     shopping_stat = "纯玩无购物团"
-                elif "无购物" in col_shop or "纯玩" in col_shop:
-                    shopping_stat = "纯玩无购物团"
-                elif col_shop == "" or col_shop == "-" or len(col_shop) < 2:
+                elif col_shop == "" or col_shop == "-" or col_shop_upper in ["无", "NONE", "N/A"]:
+                    # 空白、横线、或明确无内容的代表含购物团
                     shopping_stat = "含购物团"
                 else:
+                    # 有字、有绿标、有具体文字说明的代表纯玩无购物团
                     shopping_stat = "纯玩无购物团"
 
                 price_val = 2999
@@ -503,7 +505,8 @@ if uploaded_files:
                 img.save(buf, format="JPEG", quality=95)
                 base64_data = base64.b64encode(buf.getvalue()).decode('utf-8')
                 
-                check_prompt = "请用一句话回答：这张海报标题、底部或角落是否写着‘全程无购物站’或‘无购物’？只回答‘是’或‘否’。"
+                # 💎 检查海报整体是否声明“全程无购物”
+                check_prompt = "请用一句话回答：这张海报标题、底部或角落是否写着‘全程无购物’、‘无购物站’或整张海报都是无购物？只回答‘是’或‘否’。"
                 check_payload = {
                     "contents": [{"parts": [{"text": check_prompt}, {"inline_data": {"mime_type": "image/jpeg", "data": base64_data}}]}],
                     "generationConfig": {"temperature": 0.0, "maxOutputTokens": 50}
@@ -522,13 +525,12 @@ if uploaded_files:
                     except Exception:
                         time.sleep(1)
 
-                prompt = "请提取琦琦旅游表格。格式：序号 | 出发日期 (完整包含真实的日/月/年如DD/MM/YYYY) | 天数 | 行程亮点 | 航空 | 无购物站 | 团费RM"
+                prompt = "请提取琦琦旅游表格。格式：序号 | 出发日期 (完整包含真实的日/月/年如DD/MM/YYYY) | 天数 | 行程亮点 | 航空 | 购物站栏(有字/绿标填具体内容，空白或横线填'-') | 团费RM"
                 payload = {
                     "contents": [{"parts": [{"text": prompt}, {"inline_data": {"mime_type": "image/jpeg", "data": base64_data}}]}],
                     "generationConfig": {"temperature": 0.0, "maxOutputTokens": 16384}
                 }
                 
-                # 💎 琦琦旅游全面接入多 Key 轮询与重试
                 for _ in range(len(API_KEYS)):
                     cur_key = get_next_api_key()
                     headers = {"Content-Type": "application/json", "x-goog-api-key": cur_key}
