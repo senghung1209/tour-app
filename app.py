@@ -48,7 +48,7 @@ else:
         st.session_state.private_tour_data = []
     active_data = st.session_state.private_tour_data
 
-st.title("✈️ 旅游团智能比价助手 (购物属性绝对精准鉴别版)")
+st.title("✈️ 旅游团智能比价助手 (多 Key 智能轮询抗压版)")
 
 @st.cache_resource
 def get_loud_wav_base64():
@@ -123,10 +123,29 @@ OFFICIAL_HOLIDAYS = [
     (datetime.date(2027, 1, 23), datetime.date(2027, 2, 16), "2027 农历新年与跨年假期")
 ]
 
-RAW_KEY = st.secrets.get("GEMINI_API_KEY", "")
-GEMINI_API_KEY = str(RAW_KEY).strip() if RAW_KEY else ""
+# 💎 动态从 Streamlit Secrets 安全加载所有以 GEMINI_API_KEY 开头的密钥
+API_KEYS = []
+try:
+    for k, v in st.secrets.items():
+        if k.startswith("GEMINI_API_KEY") and v:
+            clean_v = str(v).strip()
+            if clean_v and clean_v not in API_KEYS:
+                API_KEYS.append(clean_v)
+except Exception:
+    pass
+
 PRIMARY_MODEL = "gemini-3.5-flash"
 BACKUP_MODEL = "gemini-3.1-flash-lite"
+
+if "key_index_counter" not in st.session_state:
+    st.session_state.key_index_counter = 0
+
+def get_next_api_key():
+    if not API_KEYS:
+        return ""
+    idx = st.session_state.key_index_counter % len(API_KEYS)
+    st.session_state.key_index_counter += 1
+    return API_KEYS[idx]
 
 def extract_tour_days(title_str):
     m = re.search(r'(\d+)\s*(?:天|D|d)', str(title_str))
@@ -239,7 +258,7 @@ def split_and_explode_dates(raw_agency, raw_dest, raw_code, raw_title, raw_loc, 
         })
     return exploded
 
-def parse_qiqi_lines(raw_text):
+def parse_qiqi_lines(raw_text, poster_is_pure_non_shopping=False):
     items = []
     lines = raw_text.strip().splitlines()
     for line in lines:
@@ -259,9 +278,10 @@ def parse_qiqi_lines(raw_text):
 
                 title = parts[3] if len(parts) > 3 else "超值优惠团"
                 
-                # 💎 严谨判定：只检查专属列（parts[5]）。有字且含无购物则为纯玩；如果空白或只有“-”，则为含购物团
                 col_shop = parts[5] if len(parts) > 5 else ""
-                if "无购物" in col_shop or "纯玩" in col_shop:
+                if poster_is_pure_non_shopping:
+                    shopping_stat = "纯玩无购物团"
+                elif "无购物" in col_shop or "纯玩" in col_shop:
                     shopping_stat = "纯玩无购物团"
                 elif col_shop == "" or col_shop == "-" or len(col_shop) < 2:
                     shopping_stat = "含购物团"
@@ -334,7 +354,7 @@ def parse_json_response(raw_text, default_agency="豪吉旅游"):
     return items
 
 def call_gemini_cluster_agent(img_chunk, cluster_name):
-    if not GEMINI_API_KEY:
+    if not API_KEYS:
         return []
 
     enhancer = ImageEnhance.Contrast(img_chunk)
@@ -362,23 +382,24 @@ def call_gemini_cluster_agent(img_chunk, cluster_name):
         "generationConfig": {"temperature": 0.0, "maxOutputTokens": 16384}
     }
 
-    headers = {"Content-Type": "application/json", "x-goog-api-key": GEMINI_API_KEY}
-
-    for model_name in [PRIMARY_MODEL, BACKUP_MODEL]:
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={GEMINI_API_KEY}"
-        for attempt in range(3):
-            try:
-                res = requests.post(url, headers=headers, json=payload, timeout=90)
-                if res.status_code == 200:
-                    raw_text = res.json()["candidates"][0]["content"]["parts"][0]["text"]
-                    items = parse_json_response(raw_text, default_agency="豪吉旅游")
-                    if items:
-                        return items
-                if res.status_code == 503:
-                    time.sleep(3)
-                    continue
-            except Exception:
-                time.sleep(3)
+    for _ in range(len(API_KEYS)):
+        current_key = get_next_api_key()
+        headers = {"Content-Type": "application/json", "x-goog-api-key": current_key}
+        for model_name in [PRIMARY_MODEL, BACKUP_MODEL]:
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={current_key}"
+            for attempt in range(2):
+                try:
+                    res = requests.post(url, headers=headers, json=payload, timeout=90)
+                    if res.status_code == 200:
+                        raw_text = res.json()["candidates"][0]["content"]["parts"][0]["text"]
+                        items = parse_json_response(raw_text, default_agency="豪吉旅游")
+                        if items:
+                            return items
+                    if res.status_code in [429, 503]:
+                        time.sleep(1.5)
+                        break
+                except Exception:
+                    time.sleep(1.5)
     return []
 
 @st.cache_resource
@@ -468,7 +489,7 @@ if uploaded_files:
 
         total_files = len(uploaded_files)
         for f_idx, uploaded_file in enumerate(uploaded_files):
-            status_box.markdown(f"📦 正在处理第 **{f_idx + 1} / {total_files}** 张海报 ({uploaded_file.name})...")
+            status_box.markdown(f"📦 正在通过多 Key 轮询引擎处理第 **{f_idx + 1} / {total_files}** 张海报 ({uploaded_file.name})...")
             progress_bar.progress((f_idx) / total_files)
 
             img = Image.open(BytesIO(uploaded_file.getvalue()))
@@ -480,20 +501,44 @@ if uploaded_files:
                 buf = BytesIO()
                 img.save(buf, format="JPEG", quality=95)
                 base64_data = base64.b64encode(buf.getvalue()).decode('utf-8')
+                
+                check_prompt = "请用一句话回答：这张海报标题、底部或角落是否写着‘全程无购物站’或‘无购物’？只回答‘是’或‘否’。"
+                check_payload = {
+                    "contents": [{"parts": [{"text": check_prompt}, {"inline_data": {"mime_type": "image/jpeg", "data": base64_data}}]}],
+                    "generationConfig": {"temperature": 0.0, "maxOutputTokens": 50}
+                }
+                poster_is_pure = False
+                for _ in range(len(API_KEYS)):
+                    cur_key = get_next_api_key()
+                    headers = {"Content-Type": "application/json", "x-goog-api-key": cur_key}
+                    try:
+                        chk_res = requests.post(f"https://generativelanguage.googleapis.com/v1beta/models/{PRIMARY_MODEL}:generateContent?key={cur_key}", headers=headers, json=check_payload, timeout=20)
+                        if chk_res.status_code == 200:
+                            ans = chk_res.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
+                            if "是" in ans:
+                                poster_is_pure = True
+                            break
+                    except Exception:
+                        time.sleep(1)
+
                 prompt = "请提取琦琦旅游表格。格式：序号 | 出发日期 (完整包含真实的日/月/年如DD/MM/YYYY) | 天数 | 行程亮点 | 航空 | 无购物站 | 团费RM"
                 payload = {
                     "contents": [{"parts": [{"text": prompt}, {"inline_data": {"mime_type": "image/jpeg", "data": base64_data}}]}],
                     "generationConfig": {"temperature": 0.0, "maxOutputTokens": 16384}
                 }
-                headers = {"Content-Type": "application/json", "x-goog-api-key": GEMINI_API_KEY}
                 raw_items = []
-                for model_name in [PRIMARY_MODEL, BACKUP_MODEL]:
-                    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={GEMINI_API_KEY}"
-                    res = requests.post(url, headers=headers, json=payload, timeout=90)
-                    if res.status_code == 200:
-                        raw_items = parse_qiqi_lines(res.json()["candidates"][0]["content"]["parts"][0]["text"])
-                        if raw_items:
-                            break
+                for _ in range(len(API_KEYS)):
+                    cur_key = get_next_api_key()
+                    headers = {"Content-Type": "application/json", "x-goog-api-key": cur_key}
+                    url = f"https://generativelanguage.googleapis.com/v1beta/models/{PRIMARY_MODEL}:generateContent?key={cur_key}"
+                    try:
+                        res = requests.post(url, headers=headers, json=payload, timeout=90)
+                        if res.status_code == 200:
+                            raw_items = parse_qiqi_lines(res.json()["candidates"][0]["content"]["parts"][0]["text"], poster_is_pure_non_shopping=poster_is_pure)
+                            if raw_items:
+                                break
+                    except Exception:
+                        time.sleep(1)
             else:
                 clusters = [
                     ("左上聚落", (0, 0, int(w * 0.42), int(h * 0.55))),
@@ -523,6 +568,8 @@ if uploaded_files:
                     forced_agency=agency_choice
                 )
                 newly_extracted.extend(rows)
+
+            time.sleep(1.0)
 
         progress_bar.progress(1.0)
         status_box.markdown("✨ 正在进行全局去重与【绝对价格从低到高】严格升序排序...")
