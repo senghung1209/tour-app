@@ -1,0 +1,16 @@
+name: Keep Streamlit Alive
+
+on:
+  schedule:
+    # 每天每隔 6 小时自动运行一次（UTC 时间，你可以根据需要调整）
+    - cron: '0 */6 * * *'
+  workflow_dispatch: # 支持手动点击触发
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Send HTTP request to keep app awake
+        run: |
+          curl -I https://seunghung-tour.streamlit.app/
+          echo "App pinged successfully to prevent sleep!"
