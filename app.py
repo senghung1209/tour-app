@@ -36,38 +36,50 @@ def save_persisted_data(data):
     except Exception as e:
         st.error(f"本地保存失败: {e}")
 
+# 💎 专属私有代号文件加载与保存
+def get_private_db_file(passcode):
+    clean_code = re.sub(r'[^\w]', '', str(passcode).strip())
+    if not clean_code:
+        clean_code = "default_user"
+    return os.path.join(BASE_DIR, f"tour_database_private_{clean_code}.json")
+
+def load_private_data(passcode):
+    p_file = get_private_db_file(passcode)
+    if os.path.exists(p_file):
+        try:
+            with open(p_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                if isinstance(data, list):
+                    return data
+        except Exception:
+            return []
+    return []
+
+def save_private_data(passcode, data):
+    p_file = get_private_db_file(passcode)
+    try:
+        with open(p_file, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        st.error(f"私人数据保存失败: {e}")
+
 st.sidebar.header("📌 系统工作模式")
 work_mode = st.sidebar.radio("请选择空间类型", ["🌐 公共共享模式 (多人实时同步)", "👤 独立个人模式 (私有独立沙盒)"])
-
-# 💎 独立个人模式：利用浏览器 LocalStorage 实现永久本地持久化，永不丢失
-if work_mode == "👤 独立个人模式 (私有独立沙盒)":
-    local_storage_component = """
-    <script>
-    const STORAGE_KEY = "tour_app_private_data_v1";
-    
-    // 从 localStorage 读取私有数据
-    function getPrivateData() {
-        try {
-            const data = localStorage.getItem(STORAGE_KEY);
-            return data ? JSON.parse(data) : [];
-        } catch(e) { return []; }
-    }
-    
-    // 向 Streamlit 传递私有数据的机制可以通过 query参数或组件回传，
-    // 这里我们采用更稳妥的页面内 JS 状态桥接
-    </script>
-    """
-    # 注入轻量级本地持久化同步脚本
-    components.html(local_storage_component, height=0)
 
 if work_mode == "🌐 公共共享模式 (多人实时同步)":
     if "shared_tour_data" not in st.session_state:
         st.session_state.shared_tour_data = load_persisted_data()
     active_data = st.session_state.shared_tour_data
 else:
-    if "private_tour_data" not in st.session_state:
-        # 尝试从后端获取或初始化私有沙盒
-        st.session_state.private_tour_data = []
+    st.sidebar.markdown("---")
+    st.sidebar.markdown("### 🔐 私人专属代号设置")
+    private_passcode = st.sidebar.text_input("输入你的专属代号/密码", value="my_secret_space", type="default")
+    
+    # 根据代号加载对应的私密数据
+    private_key_state = f"private_data_{private_passcode}"
+    if private_key_state not in st.session_state:
+        st.session_state[private_key_state] = load_private_data(private_passcode)
+    active_data = st.session_state[private_key_state]
 
 st.title("✈️ 旅游团智能比价助手 (多 Key 智能轮询抗压版)")
 
@@ -606,36 +618,28 @@ if uploaded_files:
         if newly_extracted:
             if work_mode == "🌐 公共共享模式 (多人实时同步)":
                 combined = st.session_state.shared_tour_data + newly_extracted
-                st.session_state.shared_tour_data = combined
-                save_persisted_data(combined)
-            else:
-                combined = st.session_state.private_tour_data + newly_extracted
-                st.session_state.private_tour_data = combined
-                # 同步写入浏览器 LocalStorage
-                js_save = f"""
-                <script>
-                try {{
-                    localStorage.setItem("tour_app_private_data_v1", {json.dumps(combined, ensure_ascii=False)});
-                }} catch(e) {{}}
-                </script>
-                """
-                components.html(js_save, height=0)
-
-            unique_combined = []
-            seen = set()
-            for item in (st.session_state.shared_tour_data if work_mode == "🌐 公共共享模式 (多人实时同步)" else st.session_state.private_tour_data):
-                key = (item["agency"], item["tour_code"], item["departure_dates"], item["price_numeric"])
-                if key not in seen:
-                    seen.add(key)
-                    unique_combined.append(item)
-
-            unique_combined = sorted(unique_combined, key=lambda x: (x['destination'], x['price_numeric'], x['departure_dates']))
-
-            if work_mode == "🌐 公共共享模式 (多人实时同步)":
+                unique_combined = []
+                seen = set()
+                for item in combined:
+                    key = (item["agency"], item["tour_code"], item["departure_dates"], item["price_numeric"])
+                    if key not in seen:
+                        seen.add(key)
+                        unique_combined.append(item)
+                unique_combined = sorted(unique_combined, key=lambda x: (x['destination'], x['price_numeric'], x['departure_dates']))
                 st.session_state.shared_tour_data = unique_combined
                 save_persisted_data(unique_combined)
             else:
-                st.session_state.private_tour_data = unique_combined
+                combined = st.session_state[private_key_state] + newly_extracted
+                unique_combined = []
+                seen = set()
+                for item in combined:
+                    key = (item["agency"], item["tour_code"], item["departure_dates"], item["price_numeric"])
+                    if key not in seen:
+                        seen.add(key)
+                        unique_combined.append(item)
+                unique_combined = sorted(unique_combined, key=lambda x: (x['destination'], x['price_numeric'], x['departure_dates']))
+                st.session_state[private_key_state] = unique_combined
+                save_private_data(private_passcode, unique_combined)
 
             trigger_play_on_done(len(unique_combined))
             st.success(f"🎉 批量提取完成！当前【{work_mode}】共有 **{len(unique_combined)}** 个精准团期（已按价格从低到高排好）。")
@@ -644,7 +648,7 @@ if uploaded_files:
         else:
             st.warning("⚠️ 未能从上传的图片中解析出有效团期，请检查图片或分批重新上传。")
 
-current_display_data = st.session_state.shared_tour_data if work_mode == "🌐 公共共享模式 (多人实时同步)" else st.session_state.private_tour_data
+current_display_data = st.session_state.shared_tour_data if work_mode == "🌐 公共共享模式 (多人实时同步)" else st.session_state[private_key_state]
 
 if current_display_data:
     if st.button(f"🗑️ 清空当前【{work_mode}】的数据库记录", use_container_width=True):
@@ -652,13 +656,8 @@ if current_display_data:
             save_persisted_data([])
             st.session_state.shared_tour_data = []
         else:
-            st.session_state.private_tour_data = []
-            js_clear = """
-            <script>
-            try { localStorage.removeItem("tour_app_private_data_v1"); } catch(e) {}
-            </script>
-            """
-            components.html(js_clear, height=0)
+            save_private_data(private_passcode, [])
+            st.session_state[private_key_state] = []
         st.rerun()
 
     st.markdown("---")
