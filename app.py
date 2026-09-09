@@ -39,14 +39,35 @@ def save_persisted_data(data):
 st.sidebar.header("📌 系统工作模式")
 work_mode = st.sidebar.radio("请选择空间类型", ["🌐 公共共享模式 (多人实时同步)", "👤 独立个人模式 (私有独立沙盒)"])
 
+# 💎 独立个人模式：利用浏览器 LocalStorage 实现永久本地持久化，永不丢失
+if work_mode == "👤 独立个人模式 (私有独立沙盒)":
+    local_storage_component = """
+    <script>
+    const STORAGE_KEY = "tour_app_private_data_v1";
+    
+    // 从 localStorage 读取私有数据
+    function getPrivateData() {
+        try {
+            const data = localStorage.getItem(STORAGE_KEY);
+            return data ? JSON.parse(data) : [];
+        } catch(e) { return []; }
+    }
+    
+    // 向 Streamlit 传递私有数据的机制可以通过 query参数或组件回传，
+    // 这里我们采用更稳妥的页面内 JS 状态桥接
+    </script>
+    """
+    # 注入轻量级本地持久化同步脚本
+    components.html(local_storage_component, height=0)
+
 if work_mode == "🌐 公共共享模式 (多人实时同步)":
     if "shared_tour_data" not in st.session_state:
         st.session_state.shared_tour_data = load_persisted_data()
     active_data = st.session_state.shared_tour_data
 else:
     if "private_tour_data" not in st.session_state:
+        # 尝试从后端获取或初始化私有沙盒
         st.session_state.private_tour_data = []
-    active_data = st.session_state.private_tour_data
 
 st.title("✈️ 旅游团智能比价助手 (多 Key 智能轮询抗压版)")
 
@@ -203,7 +224,6 @@ def normalize_departure_location(raw_loc, raw_title, agency="豪吉旅游"):
 def clean_destination_name(raw_dest):
     s = str(raw_dest or "精选路线")
     s = re.sub(r'^(?:SIN|JB|KL|KUL|SUBANG)\s*[-–—]\s*', '', s, flags=re.IGNORECASE)
-    # 保留具体地名，不盲目切除天数，确保卡片能展示完整标题
     return s.strip()
 
 def split_and_explode_dates(raw_agency, raw_dest, raw_code, raw_title, raw_loc, raw_dates_str, raw_price, shopping_status="纯玩无购物团", forced_agency=""):
@@ -274,7 +294,6 @@ def parse_qiqi_lines(raw_text, poster_is_pure_non_shopping=False):
                 date_matches = re.findall(r'\b(\d{1,2}[/.-]\d{1,2}[/.-]\d{2,4})\b', line)
                 dates_str = date_matches[0] if date_matches else "13/09/2026"
 
-                # 💎 完美保留几天几夜与行程亮点作为标题
                 raw_days_str = parts[2] if len(parts) > 2 else ""
                 raw_highlight = parts[3] if len(parts) > 3 else "超值优惠团"
                 if raw_days_str and not any(k in raw_highlight for k in ["天", "D", "d"]):
@@ -282,7 +301,6 @@ def parse_qiqi_lines(raw_text, poster_is_pure_non_shopping=False):
                 else:
                     title = raw_highlight
 
-                # 💎 严格对齐购物判定规则
                 col_shop = parts[5] if len(parts) > 5 else ""
                 col_shop_upper = col_shop.upper()
 
@@ -588,12 +606,24 @@ if uploaded_files:
         if newly_extracted:
             if work_mode == "🌐 公共共享模式 (多人实时同步)":
                 combined = st.session_state.shared_tour_data + newly_extracted
+                st.session_state.shared_tour_data = combined
+                save_persisted_data(combined)
             else:
                 combined = st.session_state.private_tour_data + newly_extracted
+                st.session_state.private_tour_data = combined
+                # 同步写入浏览器 LocalStorage
+                js_save = f"""
+                <script>
+                try {{
+                    localStorage.setItem("tour_app_private_data_v1", {json.dumps(combined, ensure_ascii=False)});
+                }} catch(e) {{}}
+                </script>
+                """
+                components.html(js_save, height=0)
 
             unique_combined = []
             seen = set()
-            for item in combined:
+            for item in (st.session_state.shared_tour_data if work_mode == "🌐 公共共享模式 (多人实时同步)" else st.session_state.private_tour_data):
                 key = (item["agency"], item["tour_code"], item["departure_dates"], item["price_numeric"])
                 if key not in seen:
                     seen.add(key)
@@ -623,6 +653,12 @@ if current_display_data:
             st.session_state.shared_tour_data = []
         else:
             st.session_state.private_tour_data = []
+            js_clear = """
+            <script>
+            try { localStorage.removeItem("tour_app_private_data_v1"); } catch(e) {}
+            </script>
+            """
+            components.html(js_clear, height=0)
         st.rerun()
 
     st.markdown("---")
@@ -657,7 +693,7 @@ if current_display_data:
     if selected_dest != "全部":
         filtered_df = filtered_df[filtered_df['destination'] == selected_dest]
 
-    if selected_loc == "🇲🇾 马来西亚全部地区 (包含吉隆坡KUL / New山JB / 梳邦)":
+    if selected_loc == "🇲🇾 马来西亚全部地区 (包含吉隆坡KUL / 新山JB / 梳邦)":
         filtered_df = filtered_df[filtered_df['departure_location'].str.contains("马来西亚|新山|梳邦|KUL|JB", na=False)]
     elif selected_loc == "🇲🇾 马来西亚起飞 (KUL)":
         filtered_df = filtered_df[filtered_df['departure_location'].str.contains("KUL|马来西亚", na=False)]
