@@ -12,70 +12,24 @@ import requests
 from io import BytesIO
 from PIL import Image, ImageDraw, ImageFont, ImageEnhance
 import streamlit.components.v1 as components
-import gspread
-from google.oauth2.service_account import Credentials
 
 st.set_page_config(page_title="旅游团智能比价助手", page_icon="✈️", layout="wide")
 
-# 💎 连接 Google Sheets 数据库（代码内部硬编码重构版，彻底摆脱 Secrets 格式折磨）
-@st.cache_resource
-def init_google_sheets_connection():
-    try:
-        scope = [
-            "https://www.googleapis.com/auth/spreadsheets",
-            "https://www.googleapis.com/auth/drive"
-        ]
-        
-        # 将私钥安全固化在代码内部，彻底避开 TOML 解析转义错误
-        raw_key_body = (
-            "MIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQC28ZnAhMDaqa25"
-            "nX8hN093JbW0cZx8EsduqW1cg+PW0ZvXa/z3UQ4edIhJSfQXOu57CM4SE/tELvyMH"
-            "uN2U7bM1i2MuNpC1feZq4arVfbfgCGnst"
-        )
-        
-        # 严格按照 cryptography 64 字符标准切片
-        lines_64 = [raw_key_body[i:i+64] for i in range(0, len(raw_key_body), 64)]
-        standard_pem = "-----BEGIN PRIVATE KEY-----\n" + "\n".join(lines_64) + "\n-----END PRIVATE KEY-----\n"
-
-        gcp_secrets = {
-            "type": "service_account",
-            "project_id": "marine-balm-508212-a6",
-            "private_key_id": "b790edbab9286966e96062efc00b45581f120a99",
-            "private_key": standard_pem,
-            "client_email": "tour-bot@marine-balm-508212-a6.iam.gserviceaccount.com",
-            "client_id": "117762431217959284812",
-            "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-            "token_uri": "https://oauth2.googleapis.com/token",
-            "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
-            "client_x509_cert_url": "https://www.googleapis.com/robot/v1/metadata/x509/tour-bot%40marine-balm-508212-a6.iam.gserviceaccount.com",
-            "universe_domain": "googleapis.com"
-        }
-            
-        creds = Credentials.from_service_account_info(gcp_secrets, scopes=scope)
-        client = gspread.authorize(creds)
-        sheet = client.open("TourPriceDB").sheet1
-        return sheet
-    except Exception as e:
-        st.error(f"连接 Google Sheets 失败，请检查配置: {e}")
-        return None
-
-sheet_db = init_google_sheets_connection()
+# 💎 使用 Google Apps Script 网页应用连接 Google Sheets（彻底告别 PEM 和服务账号报错）
+WEBAPP_URL = "https://script.google.com/macros/s/AKfycbzpDpmt30Qzv8Tfrk4rViXNIWZyHXjhm_ypvaVyRxRHnY8ZaC_CX1e2kXDxlaHCHRec/exec"
 
 def load_cloud_data():
-    if sheet_db is None:
-        return []
     try:
-        records = sheet_db.get_all_records()
-        return records if isinstance(records, list) else []
+        res = requests.get(WEBAPP_URL, timeout=15)
+        if res.status_code == 200:
+            records = res.json()
+            return records if isinstance(records, list) else []
     except Exception as e:
         st.error(f"读取云端数据失败: {e}")
-        return []
+    return []
 
 def save_cloud_data(data_list):
-    if sheet_db is None:
-        return
     try:
-        sheet_db.clear()
         header = [
             "agency", "destination", "tour_code", "title", 
             "departure_location", "departure_dates", "price_numeric", 
@@ -98,7 +52,7 @@ def save_cloud_data(data_list):
                 item.get("holiday_name", "")
             ]
             rows.append(row)
-        sheet_db.update(rows)
+        requests.post(WEBAPP_URL, json=rows, timeout=15)
     except Exception as e:
         st.error(f"保存到云端失败: {e}")
 
