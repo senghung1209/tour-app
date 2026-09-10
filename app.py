@@ -12,76 +12,89 @@ import requests
 from io import BytesIO
 from PIL import Image, ImageDraw, ImageFont, ImageEnhance
 import streamlit.components.v1 as components
+import gspread
+from google.oauth2.service_account import Credentials
 
 st.set_page_config(page_title="旅游团智能比价助手", page_icon="✈️", layout="wide")
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DB_FILE = os.path.join(BASE_DIR, "tour_database.json")
-
-def load_persisted_data():
-    if os.path.exists(DB_FILE):
-        try:
-            with open(DB_FILE, "r", encoding="utf-8") as f:
-                data = json.load(f)
-                if isinstance(data, list):
-                    return data
-        except Exception:
-            return []
-    return []
-
-def save_persisted_data(data):
+# 💎 连接 Google Sheets 数据库
+@st.cache_resource
+def init_google_sheets_connection():
     try:
-        with open(DB_FILE, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
+        scope = [
+            "https://www.googleapis.com/auth/spreadsheets",
+            "https://www.googleapis.com/auth/drive"
+        ]
+        gcp_secrets = dict(st.secrets["gcp_service_account"])
+        creds = Credentials.from_service_account_info(gcp_secrets, scopes=scope)
+        client = gspread.authorize(creds)
+        # 打开你的谷歌表格名字
+        sheet = client.open("TourPriceDB").sheet1
+        return sheet
     except Exception as e:
-        st.error(f"本地保存失败: {e}")
+        st.error(f"连接 Google Sheets 失败，请检查 Secrets 配置: {e}")
+        return None
 
-# 💎 专属私有代号文件加载与保存
-def get_private_db_file(passcode):
-    clean_code = re.sub(r'[^\w]', '', str(passcode).strip())
-    if not clean_code:
-        clean_code = "default_user"
-    return os.path.join(BASE_DIR, f"tour_database_private_{clean_code}.json")
+sheet_db = init_google_sheets_connection()
 
-def load_private_data(passcode):
-    p_file = get_private_db_file(passcode)
-    if os.path.exists(p_file):
-        try:
-            with open(p_file, "r", encoding="utf-8") as f:
-                data = json.load(f)
-                if isinstance(data, list):
-                    return data
-        except Exception:
-            return []
-    return []
-
-def save_private_data(passcode, data):
-    p_file = get_private_db_file(passcode)
+def load_cloud_data():
+    if sheet_db is None:
+        return []
     try:
-        with open(p_file, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
+        records = sheet_db.get_all_records()
+        return records if isinstance(records, list) else []
     except Exception as e:
-        st.error(f"私人数据保存失败: {e}")
+        st.error(f"读取云端数据失败: {e}")
+        return []
+
+def save_cloud_data(data_list):
+    if sheet_db is None:
+        return
+    try:
+        sheet_db.clear()
+        header = [
+            "agency", "destination", "tour_code", "title", 
+            "departure_location", "departure_dates", "price_numeric", 
+            "price_text", "shopping_status", "holiday_status", "over_days", "holiday_name"
+        ]
+        rows = [header]
+        for item in data_list:
+            row = [
+                item.get("agency", ""),
+                item.get("destination", ""),
+                item.get("tour_code", ""),
+                item.get("title", ""),
+                item.get("departure_location", ""),
+                item.get("departure_dates", ""),
+                item.get("price_numeric", 0),
+                item.get("price_text", ""),
+                item.get("shopping_status", ""),
+                item.get("holiday_status", ""),
+                item.get("over_days", 0),
+                item.get("holiday_name", "")
+            ]
+            rows.append(row)
+        sheet_db.update(rows)
+    except Exception as e:
+        st.error(f"保存到云端失败: {e}")
 
 st.sidebar.header("📌 系统工作模式")
 work_mode = st.sidebar.radio("请选择空间类型", ["🌐 公共共享模式 (多人实时同步)", "👤 独立个人模式 (私有独立沙盒)"])
 
 if work_mode == "🌐 公共共享模式 (多人实时同步)":
     if "shared_tour_data" not in st.session_state:
-        st.session_state.shared_tour_data = load_persisted_data()
+        st.session_state.shared_tour_data = load_cloud_data()
     active_data = st.session_state.shared_tour_data
 else:
     st.sidebar.markdown("---")
     st.sidebar.markdown("### 🔐 私人专属代号设置")
     private_passcode = st.sidebar.text_input("输入你的专属代号/密码", value="my_secret_space", type="default")
-    
-    # 根据代号加载对应的私密数据
     private_key_state = f"private_data_{private_passcode}"
     if private_key_state not in st.session_state:
-        st.session_state[private_key_state] = load_private_data(private_passcode)
+        st.session_state[private_key_state] = load_cloud_data()
     active_data = st.session_state[private_key_state]
 
-st.title("✈️ 旅游团智能比价助手 (多 Key 智能轮询抗压版)")
+st.title("✈️ 旅游团智能比价助手 (Google Sheets 云端永久存储版)")
 
 @st.cache_resource
 def get_loud_wav_base64():
@@ -613,7 +626,7 @@ if uploaded_files:
             time.sleep(1.2)
 
         progress_bar.progress(1.0)
-        status_box.markdown("✨ 正在进行全局去重与【绝对价格从低到高】严格升序排序...")
+        status_box.markdown("✨ 正在进行全局去重、云端同步与价格升序排序...")
 
         if newly_extracted:
             if work_mode == "🌐 公共共享模式 (多人实时同步)":
@@ -621,28 +634,28 @@ if uploaded_files:
                 unique_combined = []
                 seen = set()
                 for item in combined:
-                    key = (item["agency"], item["tour_code"], item["departure_dates"], item["price_numeric"])
+                    key = (item["agency"], item["tour_code"], item["departure_dates"], int(item.get("price_numeric", 0)))
                     if key not in seen:
                         seen.add(key)
                         unique_combined.append(item)
-                unique_combined = sorted(unique_combined, key=lambda x: (x['destination'], x['price_numeric'], x['departure_dates']))
+                unique_combined = sorted(unique_combined, key=lambda x: (x['destination'], int(x['price_numeric']), x['departure_dates']))
                 st.session_state.shared_tour_data = unique_combined
-                save_persisted_data(unique_combined)
+                save_cloud_data(unique_combined)
             else:
                 combined = st.session_state[private_key_state] + newly_extracted
                 unique_combined = []
                 seen = set()
                 for item in combined:
-                    key = (item["agency"], item["tour_code"], item["departure_dates"], item["price_numeric"])
+                    key = (item["agency"], item["tour_code"], item["departure_dates"], int(item.get("price_numeric", 0)))
                     if key not in seen:
                         seen.add(key)
                         unique_combined.append(item)
-                unique_combined = sorted(unique_combined, key=lambda x: (x['destination'], x['price_numeric'], x['departure_dates']))
+                unique_combined = sorted(unique_combined, key=lambda x: (x['destination'], int(x['price_numeric']), x['departure_dates']))
                 st.session_state[private_key_state] = unique_combined
-                save_private_data(private_passcode, unique_combined)
+                save_cloud_data(unique_combined)
 
             trigger_play_on_done(len(unique_combined))
-            st.success(f"🎉 批量提取完成！当前【{work_mode}】共有 **{len(unique_combined)}** 个精准团期（已按价格从低到高排好）。")
+            st.success(f"🎉 批量提取并已永久写入 Google Sheets！当前共有 **{len(unique_combined)}** 个精准团期。")
             time.sleep(1.0)
             st.rerun()
         else:
@@ -651,12 +664,12 @@ if uploaded_files:
 current_display_data = st.session_state.shared_tour_data if work_mode == "🌐 公共共享模式 (多人实时同步)" else st.session_state[private_key_state]
 
 if current_display_data:
-    if st.button(f"🗑️ 清空当前【{work_mode}】的数据库记录", use_container_width=True):
+    if st.button(f"🗑️ 清空当前云端数据库记录", use_container_width=True):
         if work_mode == "🌐 公共共享模式 (多人实时同步)":
-            save_persisted_data([])
+            save_cloud_data([])
             st.session_state.shared_tour_data = []
         else:
-            save_private_data(private_passcode, [])
+            save_cloud_data([])
             st.session_state[private_key_state] = []
         st.rerun()
 
