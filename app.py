@@ -17,7 +17,7 @@ from google.oauth2.service_account import Credentials
 
 st.set_page_config(page_title="旅游团智能比价助手", page_icon="✈️", layout="wide")
 
-# 💎 连接 Google Sheets 数据库（绝对强力清洗版）
+# 💎 连接 Google Sheets 数据库（标准 TOML 原生结构版）
 @st.cache_resource
 def init_google_sheets_connection():
     try:
@@ -25,14 +25,7 @@ def init_google_sheets_connection():
             "https://www.googleapis.com/auth/spreadsheets",
             "https://www.googleapis.com/auth/drive"
         ]
-        raw_json_str = st.secrets["GOOGLE_CREDENTIALS_JSON"]
-        gcp_secrets = json.loads(raw_json_str)
-        
-        # 强制将所有可能的转义换行符还原为真实的换行符，并过滤多余空格
-        if "private_key" in gcp_secrets:
-            pk = gcp_secrets["private_key"]
-            pk = pk.replace("\\\\n", "\n").replace("\\n", "\n")
-            gcp_secrets["private_key"] = pk
+        gcp_secrets = dict(st.secrets["gcp_service_account"])
         
         creds = Credentials.from_service_account_info(gcp_secrets, scopes=scope)
         client = gspread.authorize(creds)
