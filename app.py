@@ -17,7 +17,7 @@ from google.oauth2.service_account import Credentials
 
 st.set_page_config(page_title="旅游团智能比价助手", page_icon="✈️", layout="wide")
 
-# 💎 连接 Google Sheets 数据库
+# 💎 连接 Google Sheets 数据库（自带私钥自动修复，彻底杜绝格式报错）
 @st.cache_resource
 def init_google_sheets_connection():
     try:
@@ -26,9 +26,11 @@ def init_google_sheets_connection():
             "https://www.googleapis.com/auth/drive"
         ]
         gcp_secrets = dict(st.secrets["gcp_service_account"])
+        if "private_key" in gcp_secrets:
+            gcp_secrets["private_key"] = gcp_secrets["private_key"].replace("\\n", "\n")
+            
         creds = Credentials.from_service_account_info(gcp_secrets, scopes=scope)
         client = gspread.authorize(creds)
-        # 打开你的谷歌表格名字
         sheet = client.open("TourPriceDB").sheet1
         return sheet
     except Exception as e:
