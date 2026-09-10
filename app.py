@@ -17,7 +17,7 @@ from google.oauth2.service_account import Credentials
 
 st.set_page_config(page_title="旅游团智能比价助手", page_icon="✈️", layout="wide")
 
-# 💎 连接 Google Sheets 数据库（完美终极防错版）
+# 💎 连接 Google Sheets 数据库（绝对强力清洗版）
 @st.cache_resource
 def init_google_sheets_connection():
     try:
@@ -28,9 +28,11 @@ def init_google_sheets_connection():
         raw_json_str = st.secrets["GOOGLE_CREDENTIALS_JSON"]
         gcp_secrets = json.loads(raw_json_str)
         
-        # 强制将私钥中的转义字符转换为真正的换行符
+        # 强制将所有可能的转义换行符还原为真实的换行符，并过滤多余空格
         if "private_key" in gcp_secrets:
-            gcp_secrets["private_key"] = gcp_secrets["private_key"].replace("\\n", "\n")
+            pk = gcp_secrets["private_key"]
+            pk = pk.replace("\\\\n", "\n").replace("\\n", "\n")
+            gcp_secrets["private_key"] = pk
         
         creds = Credentials.from_service_account_info(gcp_secrets, scopes=scope)
         client = gspread.authorize(creds)
@@ -556,7 +558,7 @@ if uploaded_files:
                 img.save(buf, format="JPEG", quality=95)
                 base64_data = base64.b64encode(buf.getvalue()).decode('utf-8')
                 
-                check_prompt = "请用一句话回答：这张海报标题, 底部或角落是否写着‘全程无购物’、‘无购物站’或整张海报都是无购物？只回答‘是’或‘否’。"
+                check_prompt = "请用一句话回答：这张海报标题、底部或角落是否写着‘全程无购物’、‘无购物站’或整张海报都是无购物？只回答‘是’或‘否’。"
                 check_payload = {
                     "contents": [{"parts": [{"text": check_prompt}, {"inline_data": {"mime_type": "image/jpeg", "data": base64_data}}]}],
                     "generationConfig": {"temperature": 0.0, "maxOutputTokens": 50}
