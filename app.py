@@ -17,7 +17,7 @@ from google.oauth2.service_account import Credentials
 
 st.set_page_config(page_title="旅游团智能比价助手", page_icon="✈️", layout="wide")
 
-# 💎 连接 Google Sheets 数据库（三引号多行安全解析 + 强制清洗版）
+# 💎 连接 Google Sheets 数据库（双重转义解码防错版）
 @st.cache_resource
 def init_google_sheets_connection():
     try:
@@ -27,8 +27,9 @@ def init_google_sheets_connection():
         ]
         gcp_secrets = dict(st.secrets["gcp_service_account"])
         if "private_key" in gcp_secrets:
-            pk = str(gcp_secrets["private_key"]).strip()
-            pk = pk.replace("\\n", "\n")
+            # 强制解码字符串里的双反斜杠换行
+            pk = str(gcp_secrets["private_key"])
+            pk = pk.encode().decode('unicode-escape')
             gcp_secrets["private_key"] = pk
             
         creds = Credentials.from_service_account_info(gcp_secrets, scopes=scope)
