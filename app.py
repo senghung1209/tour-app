@@ -17,7 +17,7 @@ from google.oauth2.service_account import Credentials
 
 st.set_page_config(page_title="旅游团智能比价助手", page_icon="✈️", layout="wide")
 
-# 💎 直接从本地上传的 JSON 文件连接 Google Sheets（100% 成功率）
+# 💎 连接 Google Sheets 数据库（原生安全加载版）
 @st.cache_resource
 def init_google_sheets_connection():
     try:
@@ -25,24 +25,16 @@ def init_google_sheets_connection():
             "https://www.googleapis.com/auth/spreadsheets",
             "https://www.googleapis.com/auth/drive"
         ]
-        
-        # 自动在当前目录下寻找以 .json 结尾的服务账号凭证文件
-        json_files = [f for f in os.listdir('.') if f.endswith('.json') and 'marine-balm' in f]
-        if not json_files:
-            # 如果没找到特定的，就找目录下的任意 json 文件
-            json_files = [f for f in os.listdir('.') if f.endswith('.json') and f != 'package.json']
+        gcp_secrets = dict(st.secrets["gcp_service_account"])
+        if "private_key" in gcp_secrets:
+            gcp_secrets["private_key"] = gcp_secrets["private_key"].replace("\\n", "\n")
             
-        if not json_files:
-            st.error("未在 GitHub 仓库中找到 GCP 服务账号 JSON 凭证文件，请上传！")
-            return None
-            
-        cred_filename = json_files[0]
-        creds = Credentials.from_service_account_file(cred_filename, scopes=scope)
+        creds = Credentials.from_service_account_info(gcp_secrets, scopes=scope)
         client = gspread.authorize(creds)
         sheet = client.open("TourPriceDB").sheet1
         return sheet
     except Exception as e:
-        st.error(f"连接 Google Sheets 失败: {e}")
+        st.error(f"连接 Google Sheets 失败，请检查配置: {e}")
         return None
 
 sheet_db = init_google_sheets_connection()
