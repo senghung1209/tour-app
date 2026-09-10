@@ -17,7 +17,7 @@ from google.oauth2.service_account import Credentials
 
 st.set_page_config(page_title="旅游团智能比价助手", page_icon="✈️", layout="wide")
 
-# 💎 连接 Google Sheets 数据库（双重转义解码防错版）
+# 💎 连接 Google Sheets 数据库（严格符合 cryptography 64字符标准切片版）
 @st.cache_resource
 def init_google_sheets_connection():
     try:
@@ -26,11 +26,16 @@ def init_google_sheets_connection():
             "https://www.googleapis.com/auth/drive"
         ]
         gcp_secrets = dict(st.secrets["gcp_service_account"])
+        
         if "private_key" in gcp_secrets:
-            # 强制解码字符串里的双反斜杠换行
             pk = str(gcp_secrets["private_key"])
-            pk = pk.encode().decode('unicode-escape')
-            gcp_secrets["private_key"] = pk
+            # 清除所有旧标签和空白，严格按官方 64 字符规则重新切片
+            pk_clean = pk.replace("-----BEGIN PRIVATE KEY-----", "").replace("-----END PRIVATE KEY-----", "")
+            pk_clean = "".join(pk_clean.split())
+            
+            lines_64 = [pk_clean[i:i+64] for i in range(0, len(pk_clean), 64)]
+            standard_pem = "-----BEGIN PRIVATE KEY-----\n" + "\n".join(lines_64) + "\n-----END PRIVATE KEY-----\n"
+            gcp_secrets["private_key"] = standard_pem
             
         creds = Credentials.from_service_account_info(gcp_secrets, scopes=scope)
         client = gspread.authorize(creds)
